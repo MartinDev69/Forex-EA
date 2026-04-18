@@ -37,7 +37,11 @@ app.add_middleware(
 
 class _BotState:
     running: bool = False
-    strategies: dict[str, bool] = {"ma_crossover": True}
+    strategies: dict[str, bool] = {
+        "ma_crossover": True,
+        "rsi_mean_reversion": False,
+        "donchian_breakout": False,
+    }
     last_heartbeat: datetime | None = None
     balance: float = 10_000.0
     equity: float = 10_000.0
