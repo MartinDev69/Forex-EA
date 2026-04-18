@@ -1,11 +1,15 @@
-"""FastAPI backend — what the Flutter mobile app talks to.
+"""FastAPI backend — what the AntiGreed mobile app talks to.
 
-Endpoints (stubbed for now; wire to real bot state in Week 11):
+The bot writes trade events into data/trades.db; this server reads from
+that same SQLite file so the mobile UI reflects reality without needing
+IPC with the bot process.
+
+Endpoints:
   GET  /health
-  GET  /status          bot running? connected to MT5? last heartbeat?
-  GET  /account         balance/equity/open positions
-  GET  /trades          recent trade history
-  GET  /strategies      list + enabled flag
+  GET  /status          bot running? last heartbeat?
+  GET  /account         balance/equity/open positions/daily P&L
+  GET  /trades          recent trade history (from SQLite journal)
+  GET  /strategies      list enabled flags
   POST /strategies/{name}/toggle
   POST /bot/start
   POST /bot/stop
@@ -16,24 +20,25 @@ Run locally:
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="Forex-EA Control API", version="0.1.0")
+from src.execution.journal import TradeJournal
+
+app = FastAPI(title="Forex-EA Control API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-# ---- In-memory state (swap for real bot bus in Week 11) ----
 
 class _BotState:
     running: bool = False
@@ -44,14 +49,11 @@ class _BotState:
     }
     last_heartbeat: datetime | None = None
     balance: float = 10_000.0
-    equity: float = 10_000.0
-    open_positions: int = 0
 
 
 state = _BotState()
+journal = TradeJournal(Path("data/trades.db"))
 
-
-# ---- Schemas ----
 
 class StatusResponse(BaseModel):
     running: bool
@@ -72,7 +74,7 @@ class StrategyResponse(BaseModel):
     enabled: bool
 
 
-class Trade(BaseModel):
+class TradeResponse(BaseModel):
     id: int
     symbol: str
     side: Literal["BUY", "SELL"]
@@ -83,7 +85,10 @@ class Trade(BaseModel):
     closed_at: datetime | None
 
 
-# ---- Endpoints ----
+def _open_positions() -> int:
+    rows = journal.recent(limit=200)
+    return sum(1 for r in rows if r.get("status") == "OPEN")
+
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -94,18 +99,20 @@ def health() -> dict[str, str]:
 def status() -> StatusResponse:
     return StatusResponse(
         running=state.running,
-        mt5_connected=False,  # real check in Week 11
+        mt5_connected=False,
         last_heartbeat=state.last_heartbeat,
-        open_positions=state.open_positions,
+        open_positions=_open_positions(),
     )
 
 
 @app.get("/account", response_model=AccountResponse)
 def account() -> AccountResponse:
+    today = journal.summary_today()
     return AccountResponse(
         balance=state.balance,
-        equity=state.equity,
-        open_positions=state.open_positions,
+        equity=state.balance + today["pnl"],
+        open_positions=_open_positions(),
+        daily_pnl=today["pnl"],
     )
 
 
@@ -122,10 +129,22 @@ def toggle_strategy(name: str) -> StrategyResponse:
     return StrategyResponse(name=name, enabled=state.strategies[name])
 
 
-@app.get("/trades", response_model=list[Trade])
-def trades(limit: int = 20) -> list[Trade]:
-    # Placeholder — plug into SQLite journal in Week 6
-    return []
+@app.get("/trades", response_model=list[TradeResponse])
+def trades(limit: int = 20) -> list[TradeResponse]:
+    rows = journal.recent(limit=limit)
+    out: list[TradeResponse] = []
+    for r in rows:
+        out.append(TradeResponse(
+            id=r["id"],
+            symbol=r["symbol"],
+            side=r["side"],
+            entry_price=r["entry_price"],
+            exit_price=r["exit_price"],
+            pnl=r["pnl"] or 0.0,
+            opened_at=datetime.fromisoformat(r["opened_at"]),
+            closed_at=datetime.fromisoformat(r["closed_at"]) if r["closed_at"] else None,
+        ))
+    return out
 
 
 @app.post("/bot/start")
