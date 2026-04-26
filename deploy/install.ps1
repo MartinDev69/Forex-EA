@@ -68,6 +68,20 @@ if (-not (Test-Path $envPath)) {
     Write-Host ".env already exists — leaving it alone."
 }
 
+# --- AUTH_SECRET auto-fill ------------------------------------------------
+# The API refuses to start without one. Generate if the slot is empty so the
+# operator can't accidentally boot a service with no signing key.
+$envContent = Get-Content $envPath -Raw
+if ($envContent -match "(?m)^AUTH_SECRET=\s*$") {
+    Write-Host "AUTH_SECRET is empty — generating one"
+    $newSecret = & $venvPython -c "import secrets; print(secrets.token_urlsafe(48))"
+    $envContent = [regex]::Replace($envContent, "(?m)^AUTH_SECRET=\s*$", "AUTH_SECRET=$newSecret")
+    Set-Content -Path $envPath -Value $envContent -NoNewline
+    Write-Host "AUTH_SECRET written to .env"
+} elseif ($envContent -notmatch "(?m)^AUTH_SECRET=") {
+    Write-Warning "AUTH_SECRET line missing from .env entirely. Add one manually."
+}
+
 # --- quick sanity: can we import the bot? ----------------------------------
 Write-Host "Importing the bot package to verify the install"
 & $venvPython -c "import src.bot, src.execution.mt5_live, src.ml.signal_filter; print('imports OK')" | Out-Host
