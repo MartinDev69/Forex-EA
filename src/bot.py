@@ -148,6 +148,14 @@ class Bot:
             if self._should_close_order(order):
                 self._close_order(order, "stop/target")
 
+        # Propfirm bookkeeping — must happen before signal evaluation so a
+        # mid-tick DD breach kills new entries this same tick.
+        if self.risk.propfirm_guard is not None:
+            try:
+                self.risk.propfirm_guard.observe(self.executor.account_balance())
+            except Exception:
+                log.exception("propfirm observe failed")
+
         self._maybe_refresh_correlations()
         self._maybe_refresh_allocator()
 
@@ -375,6 +383,11 @@ class Bot:
         self.journal.record_open(order)
         self._record_explanation(order, signal, strategy, regime, role, weight)
         self.risk.register_trade_opened(self.risk.limits.risk_per_trade * weight)
+        if self.risk.propfirm_guard is not None:
+            try:
+                self.risk.propfirm_guard.note_trade_opened()
+            except Exception:
+                log.exception("propfirm note_trade_opened failed")
         self.notifier.trade_opened(
             symbol=order.symbol, side=order.side.value,
             lot_size=order.lot_size, price=order.entry_price,

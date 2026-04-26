@@ -41,6 +41,7 @@ from src.strategies import (
     MACrossoverStrategy,
     RSIMeanReversionStrategy,
 )
+from src.propfirm import PropFirmGuard, PropFirmStore, policy_from_env
 from src.utils import get_logger
 from src.watchdog import HeartbeatStore
 
@@ -148,6 +149,19 @@ def main() -> None:
             correlation_calculator.config.window_bars,
         )
 
+    propfirm_guard: PropFirmGuard | None = None
+    if os.getenv("PROPFIRM_ENABLED", "0").strip() not in ("0", "false", "False", ""):
+        pf_policy = policy_from_env()
+        pf_store = PropFirmStore(Path("data/trades.db"))
+        propfirm_guard = PropFirmGuard(pf_policy, pf_store)
+        log.info(
+            "PropFirm guard enabled (preset=%s, daily=%.1f%%, total=%.1f%%, target=%.1f%%)",
+            pf_policy.preset_name,
+            pf_policy.max_daily_loss_pct * 100,
+            pf_policy.max_total_drawdown_pct * 100,
+            pf_policy.profit_target_pct * 100,
+        )
+
     risk = RiskManager(
         RiskLimits(
             risk_per_trade=settings.risk_per_trade,
@@ -155,6 +169,7 @@ def main() -> None:
             max_daily_loss_pct=settings.max_daily_loss_pct,
         ),
         portfolio_throttle=portfolio_throttle,
+        propfirm_guard=propfirm_guard,
     )
     journal = TradeJournal(Path("data/trades.db"))
     toggle_store = StrategyToggleStore(Path("data/trades.db"))

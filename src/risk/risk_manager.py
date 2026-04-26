@@ -16,6 +16,7 @@ from typing import Callable, Optional, Sequence, TYPE_CHECKING
 if TYPE_CHECKING:
     from src.econ_calendar.blackout import BlackoutChecker
     from src.correlation.throttle import OpenPosition, PortfolioThrottle
+    from src.propfirm.guard import PropFirmGuard
 
 
 @dataclass
@@ -48,12 +49,17 @@ class RiskManager:
         limits: RiskLimits | None = None,
         blackout_checker: Optional["BlackoutChecker"] = None,
         portfolio_throttle: Optional["PortfolioThrottle"] = None,
+        propfirm_guard: Optional["PropFirmGuard"] = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.limits = limits or RiskLimits()
         self.state = RiskState()
         self.blackout_checker = blackout_checker
         self.portfolio_throttle = portfolio_throttle
+        # None = personal account, no challenge rules. When set, the guard
+        # vetoes any signal that would breach daily/total DD or other firm
+        # constraints, and observe() rolls the daily window each tick.
+        self.propfirm_guard = propfirm_guard
         # Clock is injectable so tests can pin "now" without patching datetime globally.
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
@@ -147,5 +153,14 @@ class RiskManager:
         )
         if lots <= 0:
             return RiskDecision(False, "computed lot size is zero")
+
+        if self.propfirm_guard is not None:
+            pf = self.propfirm_guard.check(
+                account_balance=account_balance,
+                signal_has_stop=stop_distance_pips > 0,
+                candidate_lot=lots,
+            )
+            if not pf.approved:
+                return RiskDecision(False, pf.reason)
 
         return RiskDecision(True, "approved", lot_size=lots)

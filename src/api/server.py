@@ -61,6 +61,7 @@ from src.econ_calendar.refresher import CalendarRefresher
 from src.execution.fills import FillStore
 from src.execution.journal import TradeJournal
 from src.execution.strategy_toggles import DEFAULT_STRATEGY_FLAGS, StrategyToggleStore
+from src.propfirm import PropFirmGuard, PropFirmStore, policy_from_env
 from src.regime import RegimeStore, empty_snapshot_dict
 from src.strategies import STRATEGY_REGISTRY
 from src.watchdog import HeartbeatStore
@@ -120,6 +121,7 @@ fill_store = FillStore(_DB)
 allocation_store = AllocationStore(_DB)
 explanation_store = TradeExplanationStore(_DB)
 heartbeat_store = HeartbeatStore(_DB)
+propfirm_store = PropFirmStore(_DB)
 # Refresher is created on startup so tests that import this module without a
 # running event loop don't need to deal with asyncio tasks.
 _calendar_refresher: CalendarRefresher | None = None
@@ -1080,6 +1082,52 @@ def watchdog_status(_user: dict = Depends(current_user)) -> WatchdogResponse:
         for a in wd.recent_actions(limit=20)
     ]
     return WatchdogResponse(heartbeats=heartbeats, recent_actions=actions)
+
+
+# ---------- PropFirm ----------
+
+class PropFirmResponse(BaseModel):
+    enabled: bool
+    initialized: bool
+    preset: str | None = None
+    initial_balance: float | None = None
+    current_equity: float | None = None
+    peak_equity: float | None = None
+    profit_amount: float | None = None
+    profit_target_amount: float | None = None
+    profit_target_pct: float | None = None
+    profit_remaining_amount: float | None = None
+    daily_start_equity: float | None = None
+    daily_loss_amount: float | None = None
+    daily_loss_limit_amount: float | None = None
+    daily_loss_pct: float | None = None
+    max_daily_loss_pct: float | None = None
+    total_drawdown_amount: float | None = None
+    total_drawdown_limit_amount: float | None = None
+    total_drawdown_pct: float | None = None
+    max_total_drawdown_pct: float | None = None
+    drawdown_from_peak: bool | None = None
+    trading_days_count: int | None = None
+    min_trading_days: int | None = None
+    killed_today: bool | None = None
+    killed_permanently: bool | None = None
+    killed_reason: str | None = None
+    max_lot_size: float | None = None
+    require_stop_loss: bool | None = None
+    updated_at: str | None = None
+
+
+@app.get("/propfirm", response_model=PropFirmResponse)
+def propfirm_status(_user: dict = Depends(current_user)) -> PropFirmResponse:
+    """Challenge progress for the dashboard. Off → enabled=false, no other fields."""
+    enabled = os.getenv("PROPFIRM_ENABLED", "0").strip() not in ("0", "false", "False", "")
+    if not enabled:
+        return PropFirmResponse(enabled=False, initialized=False)
+    today = journal.summary_today()
+    equity = state.balance + today["pnl"]
+    guard = PropFirmGuard(policy_from_env(), propfirm_store)
+    snap = guard.progress(equity)
+    return PropFirmResponse(enabled=True, **snap)
 
 
 _STATIC_DIR = Path(__file__).parent / "static"
