@@ -1,0 +1,966 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AntiGreed · Control</title>
+  <link rel="icon" type="image/png" href="/static/antigreed-logo.png" />
+  <!-- Restore theme before paint to avoid a flash of the wrong palette. -->
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('antigreed:theme');
+        if (saved === 'light') document.documentElement.classList.add('theme-light');
+      } catch (_) {}
+    })();
+  </script>
+  <!-- Vendored locally so the dashboard works even when jsdelivr/tailwind CDN
+       is blocked or slow — otherwise a CDN timeout leaves x-cloak'd nodes
+       hidden forever and the user sees a black page. -->
+  <script src="/static/vendor/tailwind.js"></script>
+  <script defer src="/static/vendor/alpine.min.js"></script>
+  <script src="/static/vendor/chart.umd.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg:      'var(--c-bg)',
+            panel:   'var(--c-panel)',
+            panel2:  'var(--c-panel2)',
+            edge:    'var(--c-edge)',
+            accent:  'var(--c-accent)',
+            win:     'var(--c-win)',
+            loss:    'var(--c-loss)',
+            warn:    'var(--c-warn)',
+          },
+          fontFamily: {
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+          },
+          boxShadow: {
+            glow: '0 0 0 1px rgb(34 211 238 / 0.35), 0 0 24px rgb(34 211 238 / 0.15)',
+          },
+          keyframes: {
+            pulseDot: {
+              '0%, 100%': { transform: 'scale(1)', opacity: 1 },
+              '50%':      { transform: 'scale(1.6)', opacity: 0.35 },
+            },
+            slideIn: {
+              '0%':   { transform: 'translateY(8px)', opacity: 0 },
+              '100%': { transform: 'translateY(0)',   opacity: 1 },
+            },
+          },
+          animation: {
+            pulseDot: 'pulseDot 1.4s ease-in-out infinite',
+            slideIn:  'slideIn .28s ease-out both',
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    /* Hide x-cloak'd nodes until Alpine boots — otherwise login and dashboard
+       both flash visible on load, then one is hidden a beat later. */
+    [x-cloak] { display: none !important; }
+
+    /* Palette: dark is the default, .theme-light flips the variables.
+       Tailwind's custom color utilities (bg-panel, border-edge, …) read these,
+       so most of the UI re-themes automatically. */
+    :root {
+      --c-bg:      #0b0f1a;
+      --c-panel:   #111827;
+      --c-panel2: #0f1523;
+      --c-edge:    #1e293b;
+      --c-accent:  #22d3ee;
+      --c-win:     #10b981;
+      --c-loss:    #ef4444;
+      --c-warn:    #f59e0b;
+      --c-text:    #e2e8f0;  /* body default */
+      --c-grid-a:  rgba(148,163,184,0.08);
+      --c-grid-b:  rgba(148,163,184,0.05);
+    }
+    html.theme-light {
+      --c-bg:      #f4f6fb;
+      --c-panel:   #ffffff;
+      --c-panel2: #f1f5f9;
+      --c-edge:    #d8dee9;
+      --c-accent:  #0891b2;
+      --c-win:     #059669;
+      --c-loss:    #dc2626;
+      --c-warn:    #b45309;
+      --c-text:    #0f172a;
+      --c-grid-a:  rgba(30,41,59,0.06);
+      --c-grid-b:  rgba(30,41,59,0.04);
+    }
+
+    html, body { background: var(--c-bg); color: var(--c-text); }
+    body { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace; }
+    .grid-bg {
+      background-image:
+        radial-gradient(var(--c-grid-a) 1px, transparent 1px),
+        radial-gradient(var(--c-grid-b) 1px, transparent 1px);
+      background-size: 32px 32px, 96px 96px;
+      background-position: 0 0, 16px 16px;
+    }
+
+    /* Light-mode overrides for direct slate-* utilities still in the markup.
+       Higher specificity than Tailwind's generated rules, so these win. */
+    html.theme-light .bg-slate-950   { background-color: #f4f6fb; }
+    html.theme-light .bg-slate-700   { background-color: #cbd5e1; }
+    html.theme-light .bg-slate-600   { background-color: #cbd5e1; }
+    html.theme-light .bg-slate-500   { background-color: #94a3b8; }
+    html.theme-light .text-slate-100 { color: #0f172a; }
+    html.theme-light .text-slate-200 { color: #1e293b; }
+    html.theme-light .text-slate-300 { color: #334155; }
+    html.theme-light .text-slate-400 { color: #475569; }
+    html.theme-light .text-slate-500 { color: #64748b; }
+    html.theme-light .text-slate-600 { color: #64748b; }
+    html.theme-light .text-slate-950 { color: #0f172a; }
+    html.theme-light .border-slate-600 { border-color: #cbd5e1; }
+    /* The button-on-accent text on login reads dark-on-cyan in dark mode;
+       in light mode keep it white-on-teal for contrast. */
+    html.theme-light .bg-accent.text-slate-950 { color: #ffffff; }
+
+    /* Confetti piece — animated via Web Animations API. */
+    .confetti-piece {
+      position: fixed; top: -20px; width: 8px; height: 14px;
+      pointer-events: none; z-index: 9999; border-radius: 1px;
+    }
+  </style>
+</head>
+<body class="h-full grid-bg">
+
+<!-- LOGIN -->
+<div x-data="auth" x-show="!token" x-cloak
+     class="min-h-screen flex items-center justify-center px-4 relative">
+  <button type="button" @click="$store.theme.toggle()"
+          :title="$store.theme.isLight ? 'Switch to dark' : 'Switch to light'"
+          class="absolute top-4 right-4 w-9 h-9 grid place-items-center rounded-md
+                 border border-edge text-slate-400 hover:text-slate-200 hover:border-accent/40 transition">
+    <svg x-show="$store.theme.isLight" xmlns="http://www.w3.org/2000/svg"
+         width="15" height="15" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+    </svg>
+    <svg x-show="!$store.theme.isLight" xmlns="http://www.w3.org/2000/svg"
+         width="15" height="15" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="4"/>
+      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+    </svg>
+  </button>
+  <form @submit.prevent="login"
+        class="w-full max-w-sm bg-panel border border-edge rounded-2xl p-8 shadow-2xl animate-slideIn">
+    <div class="flex flex-col items-center text-center mb-8">
+      <img src="/static/antigreed-logo.png" alt="AntiGreed"
+           class="w-32 h-32 object-contain drop-shadow-[0_0_18px_rgba(34,211,238,0.15)]"/>
+      <div class="text-xs text-slate-400 tracking-widest uppercase mt-1">Control plane</div>
+    </div>
+
+    <label class="block text-xs uppercase tracking-widest text-slate-400 mb-2">AD-ID</label>
+    <input x-model="username" autocomplete="username" required
+           class="w-full bg-panel2 border border-edge rounded-lg px-3 py-2 mb-4 tracking-wider
+                  focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"/>
+
+    <label class="block text-xs uppercase tracking-widest text-slate-400 mb-2">Password</label>
+    <input x-model="password" type="password" autocomplete="current-password" required
+           class="w-full bg-panel2 border border-edge rounded-lg px-3 py-2 mb-6
+                  focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"/>
+
+    <button type="submit"
+            class="w-full bg-accent text-slate-950 font-semibold rounded-lg py-2.5
+                   hover:bg-cyan-300 active:translate-y-px transition disabled:opacity-50"
+            :disabled="busy">
+      <span x-show="!busy">Sign in</span>
+      <span x-show="busy">Verifying…</span>
+    </button>
+
+    <div x-show="error" x-text="error"
+         class="mt-4 text-xs text-loss bg-loss/10 border border-loss/30 rounded-md px-3 py-2"></div>
+    <div class="mt-6 text-[10px] text-slate-500 leading-relaxed">
+      Sign in with the AD-ID assigned to you by the admin and the password you set from the email link.
+    </div>
+  </form>
+</div>
+
+<!-- DASHBOARD -->
+<div x-data="dashboard" x-show="token" x-cloak x-init="boot()" class="min-h-screen">
+  <!-- Top bar -->
+  <header class="sticky top-0 z-20 backdrop-blur bg-bg/70 border-b border-edge">
+    <div class="max-w-7xl mx-auto px-6 h-14 flex items-center gap-4">
+      <div class="flex items-center gap-2 font-semibold">
+        <img src="/static/antigreed-logo.png" alt="AntiGreed" class="h-8 w-8 object-contain"/>
+        <span class="relative flex h-2 w-2 ml-1">
+          <span class="absolute inline-flex h-full w-full rounded-full opacity-75 animate-pulseDot"
+                :class="status?.running ? 'bg-win' : 'bg-slate-600'"></span>
+          <span class="relative inline-flex rounded-full h-2 w-2"
+                :class="status?.running ? 'bg-win' : 'bg-slate-500'"></span>
+        </span>
+        <span>AntiGreed</span>
+        <span class="text-slate-500 text-sm" x-text="status?.running ? 'live' : 'idle'"></span>
+      </div>
+
+      <div class="ml-auto flex items-center gap-3 text-sm">
+        <!-- Economic-calendar blackout pill. Polls /calendar/blackout/<symbol> each tick. -->
+        <div x-show="blackout !== null"
+             :title="'Calendar status for ' + blackoutSymbol"
+             class="hidden md:inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-[11px]"
+             :class="{
+               'border-edge text-slate-400': blackoutPill.tone === 'muted',
+               'border-win/40 bg-win/5 text-win': blackoutPill.tone === 'ok',
+               'border-warn/40 bg-warn/10 text-warn': blackoutPill.tone === 'warn',
+               'border-loss/40 bg-loss/10 text-loss': blackoutPill.tone === 'danger',
+             }">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2"/>
+            <path d="M16 2v4M8 2v4M3 10h18"/>
+          </svg>
+          <span x-text="blackoutPill.text"></span>
+        </div>
+        <!-- Market-regime pill. Polls /regime/<symbol> each tick. -->
+        <div x-show="regime !== null"
+             :title="regimePill.title"
+             class="hidden md:inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-[11px]"
+             :class="{
+               'border-edge text-slate-400': regimePill.tone === 'muted',
+               'border-win/40 bg-win/5 text-win': regimePill.tone === 'ok',
+               'border-warn/40 bg-warn/10 text-warn': regimePill.tone === 'warn',
+               'border-loss/40 bg-loss/10 text-loss': regimePill.tone === 'danger',
+             }">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 3v18h18"/>
+            <path d="M7 15l4-6 4 3 5-8"/>
+          </svg>
+          <span x-text="regimePill.text"></span>
+        </div>
+        <kbd class="hidden sm:inline-block text-[10px] px-1.5 py-0.5 border border-edge rounded
+                    text-slate-400">⌘K</kbd>
+        <button @click="$store.theme.toggle()"
+                :title="$store.theme.isLight ? 'Switch to dark' : 'Switch to light'"
+                class="w-8 h-8 grid place-items-center rounded-md border border-edge
+                       text-slate-400 hover:text-slate-200 hover:border-accent/40 transition">
+          <!-- Moon in light mode (click → dark), sun in dark mode (click → light). -->
+          <svg x-show="$store.theme.isLight" xmlns="http://www.w3.org/2000/svg"
+               width="14" height="14" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+          <svg x-show="!$store.theme.isLight" xmlns="http://www.w3.org/2000/svg"
+               width="14" height="14" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+          </svg>
+        </button>
+        <button @click="toggleBot"
+                class="px-3 py-1.5 rounded-md text-xs font-semibold border transition"
+                :class="status?.running
+                  ? 'bg-loss/10 border-loss/40 text-loss hover:bg-loss/20'
+                  : 'bg-win/10 border-win/40 text-win hover:bg-win/20'">
+          <span x-text="status?.running ? 'Stop bot' : 'Start bot'"></span>
+        </button>
+        <div class="hidden md:flex items-center gap-2 text-xs">
+          <span class="text-slate-400" x-text="me"></span>
+          <span class="px-1.5 py-0.5 rounded border text-[10px] uppercase tracking-widest"
+                :class="isAdmin
+                  ? 'bg-accent/10 border-accent/40 text-accent'
+                  : 'bg-slate-700/30 border-slate-600/60 text-slate-300'"
+                x-text="role"></span>
+        </div>
+        <button @click="logout" class="text-xs text-slate-500 hover:text-slate-300">Sign out</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 py-8 space-y-8">
+
+    <!-- KPI row -->
+    <section class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <template x-for="k in kpis()" :key="k.label">
+        <div class="bg-panel border border-edge rounded-xl p-5 relative overflow-hidden
+                    hover:border-accent/40 transition animate-slideIn">
+          <div class="text-[10px] uppercase tracking-widest text-slate-400" x-text="k.label"></div>
+          <div class="text-2xl font-semibold mt-2 tabular-nums"
+               :class="k.tone"
+               x-text="k.value"></div>
+          <div class="text-xs text-slate-500 mt-1" x-text="k.sub"></div>
+          <div class="absolute -right-6 -bottom-6 w-24 h-24 rounded-full"
+               :class="k.halo"></div>
+        </div>
+      </template>
+    </section>
+
+    <!-- Broker panel -->
+    <section class="bg-panel border border-edge rounded-xl p-5" x-data="broker" x-init="load()">
+      <div class="flex items-start justify-between mb-4 gap-4 flex-wrap">
+        <div>
+          <div class="text-sm text-slate-300 font-semibold">MT5 broker</div>
+          <div class="text-xs text-slate-500">Credentials are AES-encrypted at rest with a key derived from <code>AUTH_SECRET</code>.</div>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <span class="relative flex h-2 w-2">
+            <span class="absolute inline-flex h-full w-full rounded-full opacity-75 animate-pulseDot"
+                  :class="status?.connected ? 'bg-win' : 'bg-slate-600'"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2"
+                  :class="status?.connected ? 'bg-win' : 'bg-loss'"></span>
+          </span>
+          <span x-text="statusLabel" class="uppercase tracking-widest"></span>
+          <span x-show="status?.updated_at" class="text-slate-500" x-text="staleLabel"></span>
+        </div>
+      </div>
+
+      <!-- Account info (when connected) -->
+      <div x-show="status?.connected && status?.account_info" x-cloak
+           class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        <template x-for="field in accountFields()" :key="field.label">
+          <div class="bg-panel2 border border-edge rounded-lg px-3 py-2">
+            <div class="text-[9px] uppercase tracking-widest text-slate-500" x-text="field.label"></div>
+            <div class="text-sm font-semibold tabular-nums mt-1" x-text="field.value"></div>
+          </div>
+        </template>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-4">
+        <!-- Broker picker -->
+        <div>
+          <label class="block text-[10px] uppercase tracking-widest text-slate-400 mb-2">Broker</label>
+          <select x-model="form.broker" @change="onBrokerChange()"
+                  class="w-full bg-panel2 border border-edge rounded-lg px-3 py-2
+                         focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/30">
+            <template x-for="p in presets" :key="p.id">
+              <option :value="p.id" x-text="p.display_name"></option>
+            </template>
+          </select>
+          <div x-show="activePreset()?.notes" x-cloak
+               class="text-[11px] text-slate-500 mt-2" x-text="activePreset()?.notes"></div>
+        </div>
+
+        <!-- Login -->
+        <div>
+          <label class="block text-[10px] uppercase tracking-widest text-slate-400 mb-2">Account login</label>
+          <input x-model.number="form.login" type="number" placeholder="12345678"
+                 class="w-full bg-panel2 border border-edge rounded-lg px-3 py-2
+                        focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"/>
+        </div>
+
+        <!-- Server -->
+        <div>
+          <label class="block text-[10px] uppercase tracking-widest text-slate-400 mb-2">Server</label>
+          <input x-model="form.server" list="broker-servers" placeholder="Exness-MT5Real5"
+                 class="w-full bg-panel2 border border-edge rounded-lg px-3 py-2
+                        focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"/>
+          <datalist id="broker-servers">
+            <template x-for="s in activePreset()?.servers || []" :key="s">
+              <option :value="s"></option>
+            </template>
+          </datalist>
+        </div>
+
+        <!-- Password -->
+        <div>
+          <label class="block text-[10px] uppercase tracking-widest text-slate-400 mb-2 flex items-center justify-between">
+            <span>Password</span>
+            <span x-show="savedConfig?.password_set" x-cloak class="text-slate-500 normal-case tracking-normal">
+              saved · <span x-text="savedConfig?.password_fingerprint"></span>
+            </span>
+          </label>
+          <input x-model="form.password" type="password"
+                 :placeholder="savedConfig?.password_set ? '••••••••  (leave blank to keep)' : 'MT5 password'"
+                 class="w-full bg-panel2 border border-edge rounded-lg px-3 py-2
+                        focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"/>
+        </div>
+
+        <!-- MT5 path -->
+        <div class="md:col-span-2">
+          <label class="block text-[10px] uppercase tracking-widest text-slate-400 mb-2">MT5 terminal path <span class="text-slate-600">(Windows, optional)</span></label>
+          <input x-model="form.mt5_path"
+                 :placeholder="activePreset()?.mt5_path_hint || 'C:\\Program Files\\MetaTrader 5\\terminal64.exe'"
+                 class="w-full bg-panel2 border border-edge rounded-lg px-3 py-2
+                        focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 font-mono text-xs"/>
+        </div>
+      </div>
+
+      <!-- Action row -->
+      <div class="flex items-center gap-2 mt-5 flex-wrap">
+        <button @click="test()" :disabled="disableSubmit()"
+                x-text="testing ? 'Testing…' : 'Test connection'"
+                class="px-4 py-2 rounded-md text-xs font-semibold
+                       bg-panel2 border border-edge hover:border-accent/60 transition
+                       disabled:opacity-40 disabled:cursor-not-allowed"></button>
+        <button @click="save()" :disabled="disableSubmit()"
+                x-text="saving ? 'Saving…' : 'Connect & save'"
+                class="px-4 py-2 rounded-md text-xs font-semibold
+                       bg-accent text-slate-950 hover:bg-cyan-300 transition
+                       disabled:opacity-40 disabled:cursor-not-allowed"></button>
+        <button @click="clear()" x-show="savedConfig" x-cloak
+                :disabled="busy()"
+                class="px-4 py-2 rounded-md text-xs font-semibold
+                       bg-loss/10 border border-loss/40 text-loss hover:bg-loss/20 transition">
+          Remove
+        </button>
+        <div class="text-xs ml-auto" :class="messageTone" x-text="message"></div>
+      </div>
+
+      <!-- Test result card -->
+      <div x-show="testResult" x-cloak
+           class="mt-4 rounded-lg border px-4 py-3 text-xs animate-slideIn"
+           :class="testResult?.ok
+             ? 'bg-win/5 border-win/40 text-win'
+             : 'bg-loss/5 border-loss/40 text-loss'">
+        <div class="font-semibold mb-1" x-text="testResult?.ok ? 'Connection succeeded' : 'Connection failed'"></div>
+        <div x-show="testResult?.error" class="font-mono text-[11px] opacity-90" x-text="testResult?.error"></div>
+        <template x-if="testResult?.ok && testResult?.account">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2 text-slate-300">
+            <div>Login: <span class="font-mono" x-text="testResult.account.login"></span></div>
+            <div>Server: <span class="font-mono" x-text="testResult.account.server"></span></div>
+            <div>Balance: <span class="font-mono" x-text="testResult.account.balance + ' ' + testResult.account.currency"></span></div>
+            <div>Leverage: <span class="font-mono" x-text="'1:' + testResult.account.leverage"></span></div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <!-- Chart + Strategies -->
+    <section class="grid lg:grid-cols-3 gap-6">
+      <div class="lg:col-span-2 bg-panel border border-edge rounded-xl p-5">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <div class="text-sm text-slate-300 font-semibold">Equity curve</div>
+            <div class="text-xs text-slate-500">last 50 closed trades · updates every 4s</div>
+          </div>
+          <div class="text-xs text-slate-400">
+            <span x-text="heartbeat"></span>
+          </div>
+        </div>
+        <div class="relative h-64">
+          <canvas id="equity-chart"></canvas>
+        </div>
+      </div>
+
+      <div class="bg-panel border border-edge rounded-xl p-5">
+        <div class="text-sm text-slate-300 font-semibold mb-1">Strategies</div>
+        <div class="text-xs text-slate-500 mb-4">Tap to arm / disarm.</div>
+        <div class="space-y-2">
+          <template x-for="s in strategies" :key="s.name">
+            <button @click="toggleStrategy(s.name)"
+                    class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg
+                           border transition text-left"
+                    :class="s.enabled
+                      ? 'bg-accent/5 border-accent/40 hover:bg-accent/10'
+                      : 'bg-panel2 border-edge hover:border-slate-600'">
+              <div>
+                <div class="text-sm font-medium" x-text="s.name"></div>
+                <div class="text-[11px] text-slate-500"
+                     x-text="s.enabled ? 'armed' : 'disarmed'"></div>
+              </div>
+              <div class="w-9 h-5 rounded-full relative transition"
+                   :class="s.enabled ? 'bg-accent' : 'bg-slate-700'">
+                <div class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
+                     :class="s.enabled ? 'left-[18px]' : 'left-0.5'"></div>
+              </div>
+            </button>
+          </template>
+          <div x-show="strategies.length === 0" class="text-xs text-slate-500 py-4 text-center">
+            No strategies registered.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Correlation matrix — top pairs by absolute correlation, color-coded. -->
+    <section class="bg-panel border border-edge rounded-xl p-5"
+             x-show="correlation && correlation.pairs.length > 0">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <div class="text-sm text-slate-300 font-semibold">Portfolio correlations</div>
+          <div class="text-xs text-slate-500">
+            Pairs with |ρ| ≥ 0.30 throttle new signals on the same side.
+          </div>
+        </div>
+        <div class="text-[11px] text-slate-500"
+             x-text="'updated ' + (correlation?.pairs?.[0]?.computed_at?.slice(11, 16) || '—')"></div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <template x-for="p in correlation?.pairs?.slice(0, 12) ?? []"
+                  :key="p.symbol_a + p.symbol_b">
+          <div class="flex items-center justify-between px-3 py-2 rounded-md border text-sm"
+               :class="{
+                 'border-edge text-slate-400': Math.abs(p.value) < 0.30,
+                 'border-warn/40 bg-warn/10 text-warn': Math.abs(p.value) >= 0.30 && Math.abs(p.value) < 0.60,
+                 'border-loss/40 bg-loss/10 text-loss': Math.abs(p.value) >= 0.60 && p.value > 0,
+                 'border-win/40 bg-win/10 text-win':   Math.abs(p.value) >= 0.60 && p.value < 0,
+               }">
+            <span class="font-mono">
+              <span x-text="p.symbol_a"></span>
+              <span class="text-slate-500">·</span>
+              <span x-text="p.symbol_b"></span>
+            </span>
+            <span class="font-mono tabular-nums" x-text="(p.value >= 0 ? '+' : '') + p.value.toFixed(2)"></span>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <!-- Live-vs-backtest drift — alpha-decay alarm. -->
+    <section class="bg-panel border border-edge rounded-xl p-5"
+             x-show="drift && drift.reports && drift.reports.length > 0">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <div class="text-sm text-slate-300 font-semibold">Strategy drift</div>
+          <div class="text-xs text-slate-500">
+            Live performance compared to the backtested baseline. Run
+            <span class="font-mono text-slate-400">scripts/build_baseline.py</span>
+            to seed.
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <template x-for="r in drift?.reports ?? []" :key="r.strategy + r.symbol">
+          <div class="rounded-lg border p-3"
+               :class="{
+                 'border-edge': r.status === 'unknown',
+                 'border-win/40 bg-win/5': r.status === 'ok',
+                 'border-warn/40 bg-warn/5': r.status === 'warn',
+                 'border-loss/40 bg-loss/10': r.status === 'danger',
+               }">
+            <div class="flex items-center justify-between">
+              <div class="font-mono text-sm">
+                <span x-text="r.strategy"></span>
+                <span class="text-slate-500">·</span>
+                <span x-text="r.symbol"></span>
+              </div>
+              <span class="text-[10px] uppercase tracking-widest font-semibold"
+                    :class="{
+                      'text-slate-400': r.status === 'unknown',
+                      'text-win': r.status === 'ok',
+                      'text-warn': r.status === 'warn',
+                      'text-loss': r.status === 'danger',
+                    }"
+                    x-text="r.status"></span>
+            </div>
+            <div class="text-[11px] text-slate-500 mt-1" x-text="r.note"></div>
+            <div class="mt-2 grid grid-cols-3 gap-2 text-[11px]"
+                 x-show="r.metrics && r.metrics.length > 0">
+              <template x-for="m in r.metrics" :key="m.name">
+                <div class="bg-panel2/60 rounded px-2 py-1.5 border border-edge/60">
+                  <div class="text-slate-500" x-text="m.name.replace(/_/g, ' ')"></div>
+                  <div class="font-mono tabular-nums">
+                    <span x-text="m.live.toFixed(2)"></span>
+                    <span class="text-slate-600">/</span>
+                    <span class="text-slate-400" x-text="m.baseline.toFixed(2)"></span>
+                  </div>
+                </div>
+              </template>
+            </div>
+            <div class="text-[10px] text-slate-500 mt-2"
+                 x-text="r.live_trade_count + ' live · ' + (r.baseline?.trade_count ?? 0) + ' baseline'"></div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <!-- Execution quality — slippage + latency per symbol over the last 24h. -->
+    <section class="bg-panel border border-edge rounded-xl p-5"
+             x-show="fillStats && fillStats.symbols && fillStats.symbols.length > 0">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <div class="text-sm text-slate-300 font-semibold">Execution quality</div>
+          <div class="text-xs text-slate-500">
+            Last 24h · slippage in pips (positive = adverse to you) and order latency.
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <template x-for="s in fillStats?.symbols ?? []" :key="s.symbol">
+          <div class="rounded-lg border p-3"
+               :class="{
+                 'border-win/40 bg-win/5':     s.avg_slippage_pips < 0.5 && s.rejected_count === 0,
+                 'border-warn/40 bg-warn/5':   (s.avg_slippage_pips >= 0.5 && s.avg_slippage_pips < 1.5) || (s.rejected_count > 0 && s.rejected_count <= 2),
+                 'border-loss/40 bg-loss/10': s.avg_slippage_pips >= 1.5 || s.rejected_count > 2,
+               }">
+            <div class="flex items-center justify-between mb-2">
+              <div class="font-mono text-sm font-semibold" x-text="s.symbol"></div>
+              <div class="text-[11px] text-slate-500"
+                   x-text="s.fill_count + ' fills' + (s.rejected_count > 0 ? ' · ' + s.rejected_count + ' rejected' : '')"></div>
+            </div>
+            <div class="grid grid-cols-2 gap-2 text-[11px]">
+              <div class="bg-panel2/60 rounded px-2 py-1.5 border border-edge/60">
+                <div class="text-slate-500">avg slip</div>
+                <div class="font-mono tabular-nums text-sm"
+                     x-text="(s.avg_slippage_pips >= 0 ? '+' : '') + s.avg_slippage_pips.toFixed(2) + ' p'"></div>
+              </div>
+              <div class="bg-panel2/60 rounded px-2 py-1.5 border border-edge/60">
+                <div class="text-slate-500">max slip</div>
+                <div class="font-mono tabular-nums text-sm"
+                     x-text="(s.max_slippage_pips >= 0 ? '+' : '') + s.max_slippage_pips.toFixed(2) + ' p'"></div>
+              </div>
+              <div class="bg-panel2/60 rounded px-2 py-1.5 border border-edge/60">
+                <div class="text-slate-500">avg latency</div>
+                <div class="font-mono tabular-nums text-sm" x-text="s.avg_latency_ms.toFixed(0) + ' ms'"></div>
+              </div>
+              <div class="bg-panel2/60 rounded px-2 py-1.5 border border-edge/60">
+                <div class="text-slate-500">p95 latency</div>
+                <div class="font-mono tabular-nums text-sm" x-text="s.p95_latency_ms.toFixed(0) + ' ms'"></div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <!-- Champion-challenger allocator — per-(strategy, symbol) risk weights. -->
+    <section class="bg-panel border border-edge rounded-xl p-5"
+             x-show="allocator && allocator.allocations && allocator.allocations.length > 0">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <div class="text-sm text-slate-300 font-semibold">Auto-allocator</div>
+          <div class="text-xs text-slate-500">
+            Champions get full risk · challengers get half · probes a sliver · cold variants are paused.
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <template x-for="a in allocator?.allocations ?? []" :key="a.strategy + '|' + a.symbol">
+          <div class="rounded-lg border p-3"
+               :class="{
+                 'border-win/40 bg-win/5':       a.role === 'champion',
+                 'border-edge/60 bg-panel2/40':  a.role === 'challenger',
+                 'border-warn/40 bg-warn/5':     a.role === 'probe',
+                 'border-edge/40 bg-panel2/20 opacity-70': a.role === 'cold',
+               }">
+            <div class="flex items-center justify-between mb-2">
+              <div>
+                <div class="font-mono text-sm font-semibold" x-text="a.strategy"></div>
+                <div class="text-[11px] text-slate-500" x-text="a.symbol"></div>
+              </div>
+              <div class="text-right">
+                <div class="text-[10px] uppercase tracking-widest"
+                     :class="{
+                       'text-win':  a.role === 'champion',
+                       'text-slate-300': a.role === 'challenger',
+                       'text-warn': a.role === 'probe',
+                       'text-slate-500': a.role === 'cold',
+                     }"
+                     x-text="a.role"></div>
+                <div class="font-mono tabular-nums text-sm"
+                     x-text="(a.weight * 100).toFixed(0) + '%'"></div>
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-2 text-[11px]">
+              <div class="bg-panel2/60 rounded px-2 py-1.5 border border-edge/60">
+                <div class="text-slate-500">avg R</div>
+                <div class="font-mono tabular-nums text-sm"
+                     x-text="(a.avg_r >= 0 ? '+' : '') + a.avg_r.toFixed(2)"></div>
+              </div>
+              <div class="bg-panel2/60 rounded px-2 py-1.5 border border-edge/60">
+                <div class="text-slate-500">win</div>
+                <div class="font-mono tabular-nums text-sm"
+                     x-text="(a.win_rate * 100).toFixed(0) + '%'"></div>
+              </div>
+              <div class="bg-panel2/60 rounded px-2 py-1.5 border border-edge/60">
+                <div class="text-slate-500">trades</div>
+                <div class="font-mono tabular-nums text-sm" x-text="a.sample_size"></div>
+              </div>
+            </div>
+            <div class="text-[11px] text-slate-500 mt-2" x-text="a.note"></div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <!-- Trades -->
+    <section class="bg-panel border border-edge rounded-xl overflow-hidden">
+      <div class="px-5 py-4 border-b border-edge flex items-center justify-between">
+        <div>
+          <div class="text-sm text-slate-300 font-semibold">Recent trades</div>
+          <div class="text-xs text-slate-500" x-text="trades.length + ' rows'"></div>
+        </div>
+        <div class="text-xs text-slate-500">
+          Session PnL
+          <span class="ml-2 tabular-nums font-semibold"
+                :class="sessionPnl >= 0 ? 'text-win' : 'text-loss'"
+                x-text="fmtPnl(sessionPnl)"></span>
+        </div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-[10px] uppercase tracking-widest text-slate-500">
+            <tr>
+              <th class="text-left px-5 py-3 font-normal">Symbol</th>
+              <th class="text-left px-5 py-3 font-normal">Side</th>
+              <th class="text-right px-5 py-3 font-normal">Entry</th>
+              <th class="text-right px-5 py-3 font-normal">Exit</th>
+              <th class="text-right px-5 py-3 font-normal">PnL</th>
+              <th class="text-right px-5 py-3 font-normal">Opened</th>
+              <th class="text-left px-5 py-3 font-normal">Status</th>
+            </tr>
+          </thead>
+            <template x-for="t in trades" :key="t.id">
+              <tbody class="divide-y divide-edge/70">
+                <tr class="hover:bg-panel2/60 transition cursor-pointer"
+                    @click="toggleExplain(t.id)"
+                    :title="'Why this trade?'">
+                  <td class="px-5 py-3 font-semibold">
+                    <span class="text-slate-500 mr-1 inline-block w-3"
+                          x-text="explainOpenId === t.id ? '▾' : '▸'"></span>
+                    <span x-text="t.symbol"></span>
+                  </td>
+                  <td class="px-5 py-3">
+                    <span class="text-[10px] px-2 py-0.5 rounded-full font-semibold"
+                          :class="t.side === 'BUY'
+                            ? 'bg-win/10 text-win border border-win/30'
+                            : 'bg-loss/10 text-loss border border-loss/30'"
+                          x-text="t.side"></span>
+                  </td>
+                  <td class="px-5 py-3 text-right tabular-nums" x-text="t.entry_price?.toFixed(5)"></td>
+                  <td class="px-5 py-3 text-right tabular-nums text-slate-400"
+                      x-text="t.exit_price == null ? '—' : t.exit_price.toFixed(5)"></td>
+                  <td class="px-5 py-3 text-right tabular-nums font-semibold"
+                      :class="t.pnl >= 0 ? 'text-win' : 'text-loss'"
+                      x-text="fmtPnl(t.pnl)"></td>
+                  <td class="px-5 py-3 text-right text-slate-400 text-xs"
+                      x-text="fmtTime(t.opened_at)"></td>
+                  <td class="px-5 py-3">
+                    <span class="text-[10px] uppercase tracking-widest"
+                          :class="t.closed_at ? 'text-slate-500' : 'text-accent'"
+                          x-text="t.closed_at ? 'closed' : 'open'"></span>
+                  </td>
+                </tr>
+                <tr x-show="explainOpenId === t.id" x-cloak class="bg-panel2/40">
+                  <td colspan="7" class="px-5 py-4">
+                    <template x-if="explainStatus[t.id] === 'loading'">
+                      <div class="text-xs text-slate-500">Loading explanation…</div>
+                    </template>
+                    <template x-if="explainStatus[t.id] === 'missing'">
+                      <div class="text-xs text-slate-500">
+                        No explanation logged for this trade — it pre-dates the explain feature, or was opened with explanations disabled.
+                      </div>
+                    </template>
+                    <template x-if="explainStatus[t.id] === 'error'">
+                      <div class="text-xs text-loss">Couldn't load explanation. Try again later.</div>
+                    </template>
+                    <template x-if="explanations[t.id]">
+                      <div class="space-y-3">
+                        <div class="flex items-center gap-3 flex-wrap">
+                          <div class="text-[11px] text-slate-300 font-semibold"
+                               x-text="explanations[t.id].strategy + ' · ' + explanations[t.id].symbol + ' · ' + explanations[t.id].side"></div>
+                          <template x-if="explanations[t.id].allocator_role">
+                            <span class="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full"
+                                  :class="{
+                                    'bg-win/10 text-win border border-win/30':       explanations[t.id].allocator_role === 'champion',
+                                    'bg-accent/10 text-accent border border-accent/30': explanations[t.id].allocator_role === 'challenger',
+                                    'bg-warn/10 text-warn border border-warn/30':    explanations[t.id].allocator_role === 'probe',
+                                    'bg-edge/30 text-slate-400 border border-edge': explanations[t.id].allocator_role === 'cold',
+                                  }"
+                                  x-text="explanations[t.id].allocator_role + ' · ' + Math.round((explanations[t.id].allocator_weight || 0) * 100) + '%'"></span>
+                          </template>
+                          <template x-if="explanations[t.id].regime_label">
+                            <span class="text-[10px] text-slate-400 border border-edge rounded-full px-2 py-0.5"
+                                  x-text="'regime: ' + explanations[t.id].regime_label"></span>
+                          </template>
+                        </div>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
+                          <div class="bg-panel rounded px-2 py-1.5 border border-edge/60">
+                            <div class="text-slate-500">signal price</div>
+                            <div class="font-mono tabular-nums" x-text="explanations[t.id].signal_price.toFixed(5)"></div>
+                          </div>
+                          <div class="bg-panel rounded px-2 py-1.5 border border-edge/60">
+                            <div class="text-slate-500">stop / target</div>
+                            <div class="font-mono tabular-nums" x-text="explanations[t.id].signal_stop.toFixed(5) + ' / ' + explanations[t.id].signal_target.toFixed(5)"></div>
+                          </div>
+                          <div class="bg-panel rounded px-2 py-1.5 border border-edge/60">
+                            <div class="text-slate-500">R:R · stop dist</div>
+                            <div class="font-mono tabular-nums" x-text="explanations[t.id].risk_reward.toFixed(2) + ' · ' + explanations[t.id].stop_distance_pips.toFixed(1) + 'p'"></div>
+                          </div>
+                          <div class="bg-panel rounded px-2 py-1.5 border border-edge/60">
+                            <div class="text-slate-500">lot · balance</div>
+                            <div class="font-mono tabular-nums" x-text="explanations[t.id].lot_size.toFixed(2) + ' · ' + explanations[t.id].account_balance.toFixed(0)"></div>
+                          </div>
+                        </div>
+                        <template x-if="explanations[t.id].regime_adx != null || explanations[t.id].regime_atr_pct != null">
+                          <div class="text-[11px] text-slate-500"
+                               x-text="
+                                 (explanations[t.id].regime_adx != null ? 'ADX ' + explanations[t.id].regime_adx.toFixed(1) : '')
+                                 + (explanations[t.id].regime_adx != null && explanations[t.id].regime_atr_pct != null ? ' · ' : '')
+                                 + (explanations[t.id].regime_atr_pct != null ? 'ATR pct ' + (explanations[t.id].regime_atr_pct * 100).toFixed(0) + '%' : '')
+                               "></div>
+                        </template>
+                        <template x-if="explanations[t.id].notes">
+                          <div class="text-[11px] text-slate-300 italic"
+                               x-text="'“' + explanations[t.id].notes + '”'"></div>
+                        </template>
+                      </div>
+                    </template>
+                  </td>
+                </tr>
+              </tbody>
+            </template>
+            <tbody x-show="trades.length === 0">
+              <tr>
+                <td colspan="7" class="text-center text-slate-500 py-8 text-xs">
+                  No trades yet. Start the bot and wait for a signal.
+                </td>
+              </tr>
+            </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Users (admin only) -->
+    <section x-show="isAdmin" x-cloak x-data="users" x-init="load()"
+             class="bg-panel border border-edge rounded-xl overflow-hidden">
+      <div class="px-5 py-4 border-b border-edge flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <div class="text-sm text-slate-300 font-semibold">Operators</div>
+          <div class="text-xs text-slate-500">
+            Assign an AD-ID to a teammate by email · they pick their own password from the setup link.
+          </div>
+        </div>
+        <div class="text-xs" :class="messageTone" x-text="message"></div>
+      </div>
+
+      <!-- Assign form + pool status -->
+      <div class="px-5 py-4 border-b border-edge space-y-3">
+        <div class="flex items-center justify-between text-[11px]">
+          <div class="text-slate-400">
+            Unclaimed pool: <span class="text-slate-200 font-semibold tabular-nums" x-text="pool.size"></span> of 100
+          </div>
+          <button @click="refillPool()" :disabled="busy"
+                  class="text-xs text-accent hover:text-cyan-300 disabled:opacity-40">Refill pool</button>
+        </div>
+        <div class="grid md:grid-cols-[1fr_1.5fr_auto] gap-3">
+          <select x-model="form.ad_id"
+                  class="bg-panel2 border border-edge rounded-lg px-3 py-2 tracking-wider
+                         focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/30">
+            <option value="">AD-ID</option>
+            <template x-for="id in pool.unclaimed" :key="id">
+              <option :value="id" x-text="id"></option>
+            </template>
+          </select>
+          <input x-model="form.email" type="email" autocomplete="off"
+                 aria-label="Recipient email"
+                 class="bg-panel2 border border-edge rounded-lg px-3 py-2
+                        focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"/>
+          <button @click="assign()" :disabled="busy || !form.ad_id || !form.email"
+                  class="px-4 py-2 rounded-md text-xs font-semibold
+                         bg-accent text-slate-950 hover:bg-cyan-300 transition
+                         disabled:opacity-40 disabled:cursor-not-allowed">
+            <span x-show="!busy">Assign &amp; email link</span>
+            <span x-show="busy">Working…</span>
+          </button>
+        </div>
+        <div x-show="lastSetupUrl" x-cloak
+             class="text-[11px] bg-warn/10 border border-warn/30 text-warn rounded-md px-3 py-2 break-all">
+          SMTP isn't configured — copy this link to the recipient:
+          <div class="font-mono text-[10px] mt-1" x-text="lastSetupUrl"></div>
+        </div>
+      </div>
+
+      <!-- Users table -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-[10px] uppercase tracking-widest text-slate-500">
+            <tr>
+              <th class="text-left px-5 py-3 font-normal">AD-ID</th>
+              <th class="text-left px-5 py-3 font-normal">Email</th>
+              <th class="text-left px-5 py-3 font-normal">Status</th>
+              <th class="text-left px-5 py-3 font-normal">Created</th>
+              <th class="text-right px-5 py-3 font-normal">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-edge/70">
+            <template x-for="u in list" :key="u.username">
+              <tr class="hover:bg-panel2/60 transition">
+                <td class="px-5 py-3 font-semibold tracking-wider">
+                  <span x-text="u.username"></span>
+                  <span x-show="u.username === me" class="ml-2 text-[10px] text-slate-500">(you)</span>
+                </td>
+                <td class="px-5 py-3 text-slate-300 text-xs" x-text="u.email || '—'"></td>
+                <td class="px-5 py-3">
+                  <span class="text-[10px] px-2 py-0.5 rounded-full border uppercase tracking-widest font-semibold"
+                        :class="u.role === 'admin'
+                          ? 'bg-accent/10 border-accent/40 text-accent'
+                          : u.password_set
+                            ? 'bg-win/10 border-win/40 text-win'
+                            : 'bg-warn/10 border-warn/40 text-warn'"
+                        x-text="u.role === 'admin' ? 'admin' : (u.password_set ? 'active' : 'pending')"></span>
+                </td>
+                <td class="px-5 py-3 text-slate-400 text-xs tabular-nums" x-text="u.created_at"></td>
+                <td class="px-5 py-3 text-right whitespace-nowrap">
+                  <button x-show="!u.password_set && u.role !== 'admin'"
+                          @click="resend(u)" :disabled="busy"
+                          class="text-xs text-accent hover:text-cyan-300 mr-3">Resend link</button>
+                  <button x-show="u.password_set"
+                          @click="reset.username = u.username; reset.password = ''"
+                          class="text-xs text-accent hover:text-cyan-300 mr-3">Reset password</button>
+                  <button @click="remove(u)"
+                          :disabled="u.username === me || u.role === 'admin'"
+                          class="text-xs text-loss hover:text-red-400 disabled:opacity-30 disabled:cursor-not-allowed">
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="list.length === 0">
+              <td colspan="5" class="text-center text-slate-500 py-8 text-xs">No operators yet.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Reset password drawer -->
+      <div x-show="reset.username" x-cloak
+           class="px-5 py-4 border-t border-edge bg-panel2/40 flex items-center gap-3 flex-wrap animate-slideIn">
+        <div class="text-xs text-slate-400">
+          Reset password for <span class="text-slate-200 font-semibold" x-text="reset.username"></span>
+        </div>
+        <input x-model="reset.password" type="password" placeholder="New password (12+ chars)"
+               autocomplete="new-password"
+               class="flex-1 min-w-[200px] bg-panel border border-edge rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"/>
+        <button @click="resetPassword()" :disabled="busy || reset.password.length < 12"
+                class="px-4 py-2 rounded-md text-xs font-semibold
+                       bg-accent text-slate-950 hover:bg-cyan-300 transition
+                       disabled:opacity-40 disabled:cursor-not-allowed">Save</button>
+        <button @click="reset.username = ''; reset.password = ''"
+                class="text-xs text-slate-500 hover:text-slate-300">Cancel</button>
+      </div>
+    </section>
+
+    <footer class="text-[10px] text-slate-600 pt-4 pb-10 text-center">
+      AntiGreed · <span x-text="version"></span> · polling every <span x-text="pollMs/1000"></span>s
+    </footer>
+  </main>
+
+  <!-- Command palette (⌘K) -->
+  <div x-show="paletteOpen" x-cloak
+       @keydown.escape.window="paletteOpen = false"
+       @click.self="paletteOpen = false"
+       class="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 flex items-start justify-center pt-32">
+    <div class="w-full max-w-md bg-panel border border-edge rounded-xl shadow-2xl overflow-hidden animate-slideIn">
+      <div class="px-4 py-3 text-xs text-slate-400 border-b border-edge">Command palette</div>
+      <button @click="runCmd('start')"
+              class="w-full text-left px-4 py-3 hover:bg-panel2 flex items-center justify-between">
+        <span>Start bot</span><kbd class="text-[10px] text-slate-500">S</kbd>
+      </button>
+      <button @click="runCmd('stop')"
+              class="w-full text-left px-4 py-3 hover:bg-panel2 flex items-center justify-between">
+        <span>Stop bot</span><kbd class="text-[10px] text-slate-500">X</kbd>
+      </button>
+      <button @click="runCmd('refresh')"
+              class="w-full text-left px-4 py-3 hover:bg-panel2 flex items-center justify-between">
+        <span>Refresh now</span><kbd class="text-[10px] text-slate-500">R</kbd>
+      </button>
+      <button @click="logout"
+              class="w-full text-left px-4 py-3 hover:bg-panel2 flex items-center justify-between text-loss">
+        <span>Sign out</span><kbd class="text-[10px] text-slate-500">⇧Q</kbd>
+      </button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

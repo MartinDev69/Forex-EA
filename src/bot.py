@@ -16,9 +16,22 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+from src.allocator.allocator import ChampionChallengerAllocator
+from src.allocator.score import score_pairs
+from src.allocator.store import AllocationStore
+from src.correlation.calculator import CorrelationCalculator
+from src.correlation.store import CorrelationStore
+from src.correlation.throttle import OpenPosition
 from src.execution.base import DataFeed, Executor, Order, OrderStatus
+from src.execution.fills import Fill, FillStore, signed_slippage_pips
 from src.execution.journal import TradeJournal
+from src.execution.stops import StopManager
+from src.execution.strategy_toggles import StrategyToggleStore
+from src.explanations.store import TradeExplanation, TradeExplanationStore
+from src.ml.signal_filter import SignalFilter
 from src.monitoring.telegram_notifier import NoOpNotifier
+from src.regime.classifier import RegimeClassifier, RegimeSnapshot
+from src.regime.store import RegimeStore
 from src.risk.position_sizing import lot_size_from_risk
 from src.risk.risk_manager import RiskManager
 from src.strategies.base import Signal, SignalType, Strategy
@@ -39,6 +52,15 @@ class BotState:
     running: bool = False
     last_bar_ts: dict[tuple[str, str], pd.Timestamp] = field(default_factory=dict)
     last_heartbeat: datetime | None = None
+    # Most recent regime snapshot per symbol — surfaced via the API so the
+    # dashboard can show it without recomputing.
+    last_regime: dict[str, RegimeSnapshot] = field(default_factory=dict)
+    tick_count: int = 0
+    last_correlation_refresh_tick: int = -1
+    last_allocator_refresh_tick: int = -1
+    # (strategy_name, symbol) -> (role, weight). Populated by the allocator.
+    # Empty dict => allocator hasn't run yet, everything trades at 1.0.
+    allocations: dict[tuple[str, str], tuple[str, float]] = field(default_factory=dict)
 
 
 class Bot:
@@ -51,6 +73,21 @@ class Bot:
         risk_manager: RiskManager,
         journal: TradeJournal,
         notifier=None,
+        toggle_store: StrategyToggleStore | None = None,
+        signal_filter: SignalFilter | None = None,
+        stop_manager: StopManager | None = None,
+        regime_classifier: RegimeClassifier | None = None,
+        regime_store: RegimeStore | None = None,
+        correlation_calculator: CorrelationCalculator | None = None,
+        correlation_store: CorrelationStore | None = None,
+        correlation_refresh_ticks: int = 60,
+        fill_store: FillStore | None = None,
+        allocator: ChampionChallengerAllocator | None = None,
+        allocation_store: AllocationStore | None = None,
+        allocator_refresh_ticks: int = 60,
+        allocator_score_window: int = 30,
+        db_path: str = "data/trades.db",
+        explanation_store: TradeExplanationStore | None = None,
     ) -> None:
         self.config = config
         self.strategies = strategies
@@ -59,6 +96,34 @@ class Bot:
         self.risk = risk_manager
         self.journal = journal
         self.notifier = notifier or NoOpNotifier()
+        self.toggle_store = toggle_store
+        self.signal_filter = signal_filter
+        self.stop_manager = stop_manager
+        # None = regime gating disabled; strategies fire regardless of regime.
+        self.regime_classifier = regime_classifier
+        # None = regime not persisted; the API /regime endpoint will report
+        # "unknown" since it reads from the store, not from in-process state.
+        self.regime_store = regime_store
+        # Correlation calc + store work as a pair: we recompute the matrix
+        # every `correlation_refresh_ticks` ticks and write it. The
+        # PortfolioThrottle (held by RiskManager) reads from the same store.
+        self.correlation_calculator = correlation_calculator
+        self.correlation_store = correlation_store
+        self.correlation_refresh_ticks = max(1, correlation_refresh_ticks)
+        # None = no execution-quality logging. The hot path skips the write
+        # entirely when this is unset, so the feature is zero-cost off.
+        self.fill_store = fill_store
+        # None = no allocator. Every (strategy, symbol) trades at full risk.
+        # When set, the allocator scores variants from the journal and
+        # publishes a per-pair weight that scales risk_per_trade per signal.
+        self.allocator = allocator
+        self.allocation_store = allocation_store
+        self.allocator_refresh_ticks = max(1, allocator_refresh_ticks)
+        self.allocator_score_window = max(5, allocator_score_window)
+        self.db_path = db_path
+        # None = "why this trade" panel won't have anything to show. Hot
+        # path skips the INSERT entirely when off — zero cost when disabled.
+        self.explanation_store = explanation_store
         self.state = BotState()
 
     # ------------------------------------------------------------------ core
@@ -66,11 +131,17 @@ class Bot:
     def tick(self) -> int:
         """Run one pass across all symbols. Returns number of signals acted on."""
         self.state.last_heartbeat = datetime.now(timezone.utc)
+        self.state.tick_count += 1
         acted = 0
 
         for order in list(self.executor.open_orders()):
+            if self.stop_manager is not None:
+                self._apply_trailing(order)
             if self._should_close_order(order):
                 self._close_order(order, "stop/target")
+
+        self._maybe_refresh_correlations()
+        self._maybe_refresh_allocator()
 
         for symbol, strategies in self.strategies.items():
             if not strategies:
@@ -85,11 +156,35 @@ class Bot:
                 continue
             self.state.last_bar_ts[bar_key] = current_bar_ts
 
+            regime: RegimeSnapshot | None = None
+            if self.regime_classifier is not None:
+                regime = self.regime_classifier.classify(bars)
+                self.state.last_regime[symbol] = regime
+                if self.regime_store is not None:
+                    try:
+                        self.regime_store.upsert(symbol, regime)
+                    except Exception:
+                        log.exception("regime store upsert failed for %s", symbol)
+
             for strategy in strategies:
+                if self.toggle_store is not None and not self.toggle_store.is_enabled(strategy.name):
+                    continue
+                if regime is not None and not self._regime_allows(strategy, regime):
+                    log.info(
+                        "regime gate rejected %s %s: trend=%s (prefers %s)",
+                        strategy.name, symbol, regime.trend.value,
+                        sorted(strategy.preferred_regimes),
+                    )
+                    continue
                 signal = strategy.generate_signal(bars)
                 if signal.type not in (SignalType.BUY, SignalType.SELL):
                     continue
-                if self._handle_signal(signal, strategy):
+                if self.signal_filter is not None and not self.signal_filter.should_take(
+                    signal, bars, strategy.name
+                ):
+                    log.info("ML filter rejected %s %s", strategy.name, signal.symbol)
+                    continue
+                if self._handle_signal(signal, strategy, regime):
                     acted += 1
 
         return acted
@@ -111,17 +206,116 @@ class Bot:
 
     # --------------------------------------------------------------- helpers
 
-    def _handle_signal(self, signal: Signal, strategy: Strategy) -> bool:
+    def _maybe_refresh_correlations(self) -> None:
+        if self.correlation_calculator is None or self.correlation_store is None:
+            return
+        last = self.state.last_correlation_refresh_tick
+        # Refresh on tick #1 too, so the first signal gets a populated store.
+        if last >= 0 and (self.state.tick_count - last) < self.correlation_refresh_ticks:
+            return
+
+        cfg = self.correlation_calculator.config
+        closes: dict[str, pd.Series] = {}
+        for symbol in self.strategies.keys():
+            try:
+                bars = self.feed.latest_bars(symbol, self.config.timeframe, cfg.window_bars + 5)
+            except Exception:
+                log.exception("correlation refresh: feed failed for %s", symbol)
+                continue
+            if len(bars) >= cfg.min_observations + 1:
+                closes[symbol] = bars["close"]
+
+        if len(closes) < 2:
+            self.state.last_correlation_refresh_tick = self.state.tick_count
+            return
+
+        try:
+            matrix = self.correlation_calculator.matrix(closes)
+            wrote = self.correlation_store.upsert_matrix(matrix, cfg.window_bars)
+            log.info("correlation refresh: wrote %d pairs across %d symbols",
+                     wrote, len(closes))
+        except Exception:
+            log.exception("correlation refresh failed — will retry next cycle")
+        finally:
+            self.state.last_correlation_refresh_tick = self.state.tick_count
+
+    def _maybe_refresh_allocator(self) -> None:
+        """Recompute per-(strategy, symbol) risk weights from recent trades.
+
+        Runs on tick cadence (default every 60 ticks). One indexed query per
+        active pair — bounded and cheap. If the allocator isn't wired, this
+        is a no-op and the bot trades every variant at full risk.
+        """
+        if self.allocator is None:
+            return
+        last = self.state.last_allocator_refresh_tick
+        if last >= 0 and (self.state.tick_count - last) < self.allocator_refresh_ticks:
+            return
+
+        pairs: list[tuple[str, str]] = []
+        for symbol, strategies in self.strategies.items():
+            for strategy in strategies:
+                pairs.append((strategy.name, symbol))
+        if not pairs:
+            self.state.last_allocator_refresh_tick = self.state.tick_count
+            return
+
+        try:
+            scores = score_pairs(self.db_path, pairs, window=self.allocator_score_window)
+            allocations = self.allocator.allocate(scores)
+            self.state.allocations = {
+                (a.strategy, a.symbol): (a.role, a.weight) for a in allocations
+            }
+            if self.allocation_store is not None:
+                self.allocation_store.upsert_many(allocations)
+            log.info("allocator refresh: %d pairs scored, %d at full weight",
+                     len(allocations),
+                     sum(1 for a in allocations if a.weight >= 1.0))
+        except Exception:
+            log.exception("allocator refresh failed — keeping previous weights")
+        finally:
+            self.state.last_allocator_refresh_tick = self.state.tick_count
+
+    def _open_positions_snapshot(self) -> list[OpenPosition]:
+        risk_pct = self.risk.limits.risk_per_trade
+        out: list[OpenPosition] = []
+        for o in self.executor.open_orders():
+            out.append(OpenPosition(symbol=o.symbol, side=o.side.value, risk_pct=risk_pct))
+        return out
+
+    @staticmethod
+    def _regime_allows(strategy: Strategy, regime: RegimeSnapshot) -> bool:
+        # Unknown regime (not enough bars yet) is permissive — otherwise the bot
+        # would never fire on a freshly-started feed.
+        prefs = strategy.preferred_regimes
+        if not prefs:
+            return True
+        if regime.trend.value == "unknown":
+            return True
+        return regime.trend.value in prefs
+
+    def _handle_signal(
+        self, signal: Signal, strategy: Strategy, regime: RegimeSnapshot | None = None,
+    ) -> bool:
         if signal.stop_loss is None or signal.take_profit is None:
             log.warning("signal from %s missing SL/TP — skipping", strategy.name)
             return False
 
         stop_distance_pips = abs(signal.price - signal.stop_loss) * 10_000
+        # Default to full weight when the allocator hasn't decided yet (cold
+        # start) or isn't wired at all — the system shouldn't go silent just
+        # because it has no opinion yet.
+        role, weight = self.state.allocations.get(
+            (strategy.name, signal.symbol), ("unmanaged", 1.0)
+        )
         decision = self.risk.evaluate(
             account_balance=self.executor.account_balance(),
             stop_distance_pips=stop_distance_pips,
             symbol=signal.symbol,
             lot_sizer=lot_size_from_risk,
+            side=signal.type.value,
+            open_positions=self._open_positions_snapshot(),
+            risk_multiplier=weight,
         )
         if not decision.approved:
             log.info("risk rejected %s %s: %s", strategy.name, signal.symbol, decision.reason)
@@ -138,13 +332,25 @@ class Bot:
             opened_at=datetime.now(timezone.utc),
             strategy=strategy.name,
         )
+        # Remember the original SL so trailing stops can compute R from it
+        # even after we move the active stop.
+        order.extra["initial_stop_loss"] = signal.stop_loss
+        # Stash the weight so the close path subtracts the same heat we
+        # added — otherwise probe trades would over- or under-credit the
+        # portfolio heat tracker.
+        order.extra["risk_weight"] = weight
+        requested_price = signal.price
+        send_started = time.perf_counter()
         order = self.executor.place(order)
+        latency_ms = (time.perf_counter() - send_started) * 1000.0
+        self._record_fill(order, "OPEN", requested_price, latency_ms)
         if order.status == OrderStatus.REJECTED:
             log.warning("executor rejected order for %s", signal.symbol)
             return False
 
         self.journal.record_open(order)
-        self.risk.register_trade_opened(self.risk.limits.risk_per_trade)
+        self._record_explanation(order, signal, strategy, regime, role, weight)
+        self.risk.register_trade_opened(self.risk.limits.risk_per_trade * weight)
         self.notifier.trade_opened(
             symbol=order.symbol, side=order.side.value,
             lot_size=order.lot_size, price=order.entry_price,
@@ -154,6 +360,109 @@ class Bot:
                  order.side.value, order.symbol, order.lot_size,
                  order.entry_price, order.stop_loss, order.take_profit, strategy.name)
         return True
+
+    def _record_fill(
+        self, order: Order, event: str, requested_price: float, latency_ms: float,
+    ) -> None:
+        """Persist a fill event for execution-quality tracking. No-op if
+        the fill_store wasn't injected — keeps the hot path free.
+        """
+        if self.fill_store is None:
+            return
+        is_filled = order.status == OrderStatus.OPEN if event == "OPEN" \
+            else order.status == OrderStatus.CLOSED
+        filled_price = (
+            order.entry_price if event == "OPEN" else order.exit_price
+        ) if is_filled else None
+        slip = (
+            signed_slippage_pips(order.symbol, order.side.value, requested_price, filled_price)
+            if (is_filled and filled_price is not None) else None
+        )
+        try:
+            self.fill_store.record(Fill(
+                trade_id=order.id or None,
+                symbol=order.symbol,
+                side=order.side.value,
+                event=event,  # type: ignore[arg-type]
+                requested_price=requested_price,
+                filled_price=filled_price,
+                slippage_pips=slip,
+                latency_ms=latency_ms,
+                broker_ticket=order.broker_ticket,
+                status="FILLED" if is_filled else "REJECTED",
+                reason=order.close_reason or None,
+                filled_at=datetime.now(timezone.utc),
+            ))
+        except Exception:
+            # Logging shouldn't ever block trading. Swallow + log so a bad
+            # disk write can't take down the bot loop.
+            log.exception("fill_store.record failed for %s %s", event, order.symbol)
+
+    def _record_explanation(
+        self,
+        order: Order,
+        signal: Signal,
+        strategy: Strategy,
+        regime: RegimeSnapshot | None,
+        allocator_role: str,
+        allocator_weight: float,
+    ) -> None:
+        """Persist the decision context for /trades/{id}/explain. No-op if
+        the explanation_store wasn't injected — zero cost when off.
+        """
+        if self.explanation_store is None:
+            return
+        if signal.stop_loss is None or signal.take_profit is None:
+            # Defensive: _handle_signal already filters this out, but if a
+            # caller invokes us directly we don't want to crash.
+            return
+        sl_dist = abs(signal.price - signal.stop_loss)
+        tp_dist = abs(signal.take_profit - signal.price)
+        rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
+        try:
+            self.explanation_store.record(TradeExplanation(
+                trade_id=order.id,
+                strategy=strategy.name,
+                symbol=order.symbol,
+                side=order.side.value,
+                signal_price=signal.price,
+                signal_stop=signal.stop_loss,
+                signal_target=signal.take_profit,
+                risk_reward=rr,
+                stop_distance_pips=abs(signal.price - signal.stop_loss) * 10_000,
+                lot_size=order.lot_size,
+                account_balance=self.executor.account_balance(),
+                opened_at=order.opened_at.isoformat(),
+                regime_trend=(regime.trend.value if regime is not None else None),
+                regime_volatility=(regime.volatility.value if regime is not None else None),
+                regime_label=(regime.label if regime is not None else None),
+                regime_adx=(regime.adx if regime is not None else None),
+                regime_atr_pct=(regime.atr_pct if regime is not None else None),
+                # 'unmanaged' = allocator off; we want None on the wire so
+                # the UI doesn't show a misleading role pill.
+                allocator_role=(allocator_role if allocator_role != "unmanaged" else None),
+                allocator_weight=(allocator_weight if allocator_role != "unmanaged" else None),
+                # If the filter were rejecting, we'd have short-circuited
+                # before this. None = no filter wired at all.
+                ml_filter_passed=(True if self.signal_filter is not None else None),
+                notes=signal.reason or "",
+            ))
+        except Exception:
+            log.exception("explanation_store.record failed for trade %s", order.id)
+
+    def _apply_trailing(self, order: Order) -> None:
+        bars = self.feed.latest_bars(order.symbol, self.config.timeframe, 2)
+        if bars.empty:
+            return
+        last = bars.iloc[-1]
+        self.stop_manager.update_peak(order, float(last["high"]), float(last["low"]))
+        new_sl = self.stop_manager.proposed_stop(order)
+        if new_sl is None:
+            return
+        prev = order.stop_loss
+        self.executor.modify(order, stop_loss=new_sl)
+        log.info("TRAIL %s %s SL %.5f → %.5f",
+                 order.side.value, order.symbol, prev, new_sl)
 
     def _should_close_order(self, order: Order) -> bool:
         bars = self.feed.latest_bars(order.symbol, self.config.timeframe, 2)
@@ -166,9 +475,19 @@ class Bot:
         return high >= order.stop_loss or low <= order.take_profit
 
     def _close_order(self, order: Order, reason: str) -> None:
+        # The "requested" close price is the level that triggered the exit:
+        # take-profit for a target hit, stop-loss for everything else (timed
+        # exit, trailing stop touch, manual). Slippage = filled vs that.
+        requested_close = order.take_profit if reason == "target" else order.stop_loss
+        send_started = time.perf_counter()
         closed = self.executor.close(order, reason)
+        latency_ms = (time.perf_counter() - send_started) * 1000.0
+        self._record_fill(closed, "CLOSE", requested_close, latency_ms)
         self.journal.record_close(closed)
-        self.risk.register_trade_closed(self.risk.limits.risk_per_trade, closed.pnl)
+        # Pull the per-trade weight off the order so we credit back the
+        # exact amount we charged on open (1.0 default if it wasn't set).
+        weight = float(order.extra.get("risk_weight", 1.0)) if order.extra else 1.0
+        self.risk.register_trade_closed(self.risk.limits.risk_per_trade * weight, closed.pnl)
         if hasattr(self.notifier, "trade_closed"):
             self.notifier.trade_closed(
                 symbol=closed.symbol, side=closed.side.value,

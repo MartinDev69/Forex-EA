@@ -1,11 +1,13 @@
-"""FastAPI backend — what the AntiGreed mobile app talks to.
+"""FastAPI backend — what the dashboard + AntiGreed mobile app talk to.
 
 The bot writes trade events into data/trades.db; this server reads from
-that same SQLite file so the mobile UI reflects reality without needing
-IPC with the bot process.
+that same SQLite file so the UI reflects reality without needing IPC with
+the bot process.
 
 Endpoints:
-  GET  /health
+  POST /auth/login      issue JWT
+  GET  /auth/me         who am I (requires token)
+  GET  /health          (unauthenticated — liveness probe)
   GET  /status          bot running? last heartbeat?
   GET  /account         balance/equity/open positions/daily P&L
   GET  /trades          recent trade history (from SQLite journal)
@@ -13,23 +15,74 @@ Endpoints:
   POST /strategies/{name}/toggle
   POST /bot/start
   POST /bot/stop
+  GET  /                dashboard SPA (static HTML)
 
 Run locally:
-  uvicorn src.api.server:app --reload --host 0.0.0.0 --port 8000
+  AUTH_SECRET=$(python -c 'import secrets;print(secrets.token_urlsafe(48))') \
+    uvicorn src.api.server:app --reload --host 0.0.0.0 --port 8000
 """
 from __future__ import annotations
 
-from datetime import datetime
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
+from src.api import brokers as broker_presets
+from src.api.auth import (
+    LoginRateLimiter,
+    _secret,
+    authenticate,
+    client_ip,
+    create_token,
+    current_user,
+    hash_password,
+    rate_limiter,
+    require_admin,
+)
+from src.api.ad_id import ADMIN_AD_ID, is_user_ad_id
+from src.api.broker_config import BrokerConfig, BrokerConfigStore
+from src.api.broker_status import BrokerStatusStore
+from src.api.mailer import send_setup_email
+from src.api.setup_tokens import SETUP_TTL_S, create_setup_token, decode_setup_token
+from src.api.users import LastAdminError, UserStore
+from src.allocator import AllocationStore
+from src.explanations import TradeExplanationStore
+from src.correlation import CorrelationStore
+from src.drift import BaselineStore, DriftConfig, DriftMonitor
+from src.econ_calendar import BlackoutChecker, BlackoutPolicy, EventStore, ForexFactoryProvider
+from src.econ_calendar.refresher import CalendarRefresher
+from src.execution.fills import FillStore
 from src.execution.journal import TradeJournal
+from src.execution.strategy_toggles import DEFAULT_STRATEGY_FLAGS, StrategyToggleStore
+from src.regime import RegimeStore, empty_snapshot_dict
+from src.strategies import STRATEGY_REGISTRY
 
-app = FastAPI(title="Forex-EA Control API", version="0.2.0")
+import jwt as _jwt  # noqa: E402  — for exception types in /auth/setup
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    global _calendar_refresher
+    interval = int(os.environ.get("CALENDAR_REFRESH_INTERVAL_S", "1800"))
+    _calendar_refresher = CalendarRefresher(
+        ForexFactoryProvider(), calendar_store, interval_s=interval,
+    )
+    _calendar_refresher.start()
+    try:
+        yield
+    finally:
+        if _calendar_refresher is not None:
+            await _calendar_refresher.stop()
+            _calendar_refresher = None
+
+
+app = FastAPI(title="Forex-EA Control API", version="0.3.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,17 +95,93 @@ app.add_middleware(
 
 class _BotState:
     running: bool = False
-    strategies: dict[str, bool] = {
-        "ma_crossover": True,
-        "rsi_mean_reversion": False,
-        "donchian_breakout": False,
-    }
     last_heartbeat: datetime | None = None
     balance: float = 10_000.0
 
 
 state = _BotState()
-journal = TradeJournal(Path("data/trades.db"))
+_DB = Path("data/trades.db")
+journal = TradeJournal(_DB)
+toggle_store = StrategyToggleStore(_DB)
+toggle_store.initialize_defaults({
+    name: DEFAULT_STRATEGY_FLAGS.get(name, False) for name in STRATEGY_REGISTRY
+})
+user_store = UserStore(_DB)
+broker_status_store = BrokerStatusStore(_DB)
+calendar_store = EventStore(_DB)
+calendar_policy = BlackoutPolicy.from_env()
+calendar_checker = BlackoutChecker(calendar_store, calendar_policy)
+regime_store = RegimeStore(_DB)
+correlation_store = CorrelationStore(_DB)
+drift_baseline_store = BaselineStore(_DB)
+drift_monitor = DriftMonitor(_DB, drift_baseline_store, DriftConfig.from_env())
+fill_store = FillStore(_DB)
+allocation_store = AllocationStore(_DB)
+explanation_store = TradeExplanationStore(_DB)
+# Refresher is created on startup so tests that import this module without a
+# running event loop don't need to deal with asyncio tasks.
+_calendar_refresher: CalendarRefresher | None = None
+# Lazy — needs AUTH_SECRET and that check belongs on first real use, not import.
+_broker_config_store: BrokerConfigStore | None = None
+
+
+def _broker_store() -> BrokerConfigStore:
+    global _broker_config_store
+    if _broker_config_store is None:
+        _broker_config_store = BrokerConfigStore(_DB, secret=_secret())
+    return _broker_config_store
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_at: int
+    username: str
+    role: Literal["admin", "user"]
+
+
+class UserResponse(BaseModel):
+    username: str
+    role: Literal["admin", "user"]
+    email: str | None = None
+    created_at: str
+    password_set: bool
+
+
+class AssignUserRequest(BaseModel):
+    ad_id: str = Field(min_length=1, max_length=32)
+    email: str = Field(min_length=3, max_length=254)
+
+
+class AssignUserResponse(BaseModel):
+    ad_id: str
+    email: str
+    setup_expires_at: int
+    setup_url: str | None = None  # populated in dev mode so admin can copy the link
+
+
+class SetupPasswordRequest(BaseModel):
+    password: str = Field(min_length=12, max_length=72)
+
+
+class SetupClaimsResponse(BaseModel):
+    ad_id: str
+    email: str
+    expires_at: int
+
+
+class PoolResponse(BaseModel):
+    unclaimed: list[str]
+    size: int
+
+
+class ResetPasswordRequest(BaseModel):
+    password: str = Field(min_length=12, max_length=72)
 
 
 class StatusResponse(BaseModel):
@@ -74,6 +203,48 @@ class StrategyResponse(BaseModel):
     enabled: bool
 
 
+class BrokerConfigRequest(BaseModel):
+    broker: str = Field(min_length=1, max_length=32)
+    login: int = Field(gt=0)
+    # Empty password means "reuse the one already stored for this broker" —
+    # lets the dashboard re-test after save without forcing the user to
+    # retype the password every time.
+    password: str = Field(default="", max_length=256)
+    server: str = Field(min_length=1, max_length=128)
+    mt5_path: str = Field(default="", max_length=512)
+
+
+class BrokerConfigResponse(BaseModel):
+    broker: str
+    login: int
+    server: str
+    mt5_path: str
+    password_set: bool
+    password_fingerprint: str
+    updated_at: str
+
+
+class BrokerTestRequest(BrokerConfigRequest):
+    """Same fields as save, but doesn't persist — just attempts a connection."""
+
+
+class BrokerTestResponse(BaseModel):
+    ok: bool
+    error: str | None = None
+    account: dict | None = None
+
+
+class BrokerStatusResponse(BaseModel):
+    connected: bool
+    broker: str | None = None
+    server: str | None = None
+    login: int | None = None
+    account_info: dict | None = None
+    last_error: str | None = None
+    updated_at: datetime | None = None
+    stale_s: float | None = None
+
+
 class TradeResponse(BaseModel):
     id: int
     symbol: str
@@ -90,13 +261,53 @@ def _open_positions() -> int:
     return sum(1 for r in rows if r.get("status") == "OPEN")
 
 
+def _resolve_password(body: BrokerConfigRequest, username: str) -> str:
+    """Return the password to use: the one in the request, or the user's saved one.
+
+    After the UI saves creds the password input is cleared, so a subsequent
+    Test / Save click arrives with password="". In that case we fall back to
+    the stored password for this specific user. If nothing is saved yet, refuse —
+    first save must include the password.
+    """
+    if body.password:
+        return body.password
+    existing = _broker_store().get_decrypted(username)
+    if existing is None:
+        raise HTTPException(400, "password required")
+    return existing.password
+
+
+@app.post("/auth/login", response_model=LoginResponse)
+def login(
+    body: LoginRequest,
+    request: Request,
+    limiter: LoginRateLimiter = Depends(rate_limiter),
+) -> LoginResponse:
+    ip = client_ip(request)
+    limiter.check(ip)
+    role = authenticate(user_store, body.username, body.password)
+    if role is None:
+        limiter.record(ip)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+    limiter.reset(ip)
+    token, exp = create_token(body.username, role=role)
+    return LoginResponse(
+        access_token=token, expires_at=exp, username=body.username, role=role,
+    )
+
+
+@app.get("/auth/me")
+def me(user: dict[str, str] = Depends(current_user)) -> dict[str, str]:
+    return {"username": user["username"], "role": user["role"]}
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @app.get("/status", response_model=StatusResponse)
-def status() -> StatusResponse:
+def get_status(_user: dict = Depends(current_user)) -> StatusResponse:
     return StatusResponse(
         running=state.running,
         mt5_connected=False,
@@ -106,7 +317,7 @@ def status() -> StatusResponse:
 
 
 @app.get("/account", response_model=AccountResponse)
-def account() -> AccountResponse:
+def account(_user: dict = Depends(current_user)) -> AccountResponse:
     today = journal.summary_today()
     return AccountResponse(
         balance=state.balance,
@@ -117,20 +328,21 @@ def account() -> AccountResponse:
 
 
 @app.get("/strategies", response_model=list[StrategyResponse])
-def list_strategies() -> list[StrategyResponse]:
-    return [StrategyResponse(name=n, enabled=e) for n, e in state.strategies.items()]
+def list_strategies(_user: dict = Depends(current_user)) -> list[StrategyResponse]:
+    return [StrategyResponse(name=n, enabled=e) for n, e in toggle_store.list().items()]
 
 
 @app.post("/strategies/{name}/toggle", response_model=StrategyResponse)
-def toggle_strategy(name: str) -> StrategyResponse:
-    if name not in state.strategies:
-        raise HTTPException(404, f"strategy '{name}' not found")
-    state.strategies[name] = not state.strategies[name]
-    return StrategyResponse(name=name, enabled=state.strategies[name])
+def toggle_strategy(name: str, _user: dict = Depends(current_user)) -> StrategyResponse:
+    try:
+        enabled = toggle_store.toggle(name)
+    except KeyError:
+        raise HTTPException(404, f"strategy '{name}' not found") from None
+    return StrategyResponse(name=name, enabled=enabled)
 
 
 @app.get("/trades", response_model=list[TradeResponse])
-def trades(limit: int = 20) -> list[TradeResponse]:
+def trades(limit: int = 20, _user: dict = Depends(current_user)) -> list[TradeResponse]:
     rows = journal.recent(limit=limit)
     out: list[TradeResponse] = []
     for r in rows:
@@ -148,13 +360,689 @@ def trades(limit: int = 20) -> list[TradeResponse]:
 
 
 @app.post("/bot/start")
-def start_bot() -> dict[str, str]:
+def start_bot(_user: dict = Depends(current_user)) -> dict[str, str]:
     state.running = True
     state.last_heartbeat = datetime.utcnow()
     return {"status": "started"}
 
 
 @app.post("/bot/stop")
-def stop_bot() -> dict[str, str]:
+def stop_bot(_user: dict = Depends(current_user)) -> dict[str, str]:
     state.running = False
     return {"status": "stopped"}
+
+
+# ---------- Broker management ----------
+
+@app.get("/brokers")
+def list_broker_presets(_user: dict = Depends(current_user)) -> list[dict]:
+    return broker_presets.as_dicts()
+
+
+@app.get("/broker/config", response_model=BrokerConfigResponse | None)
+def get_broker_config(user: dict = Depends(current_user)) -> BrokerConfigResponse | None:
+    masked = _broker_store().get_masked(user["username"])
+    if masked is None:
+        return None
+    return BrokerConfigResponse(**masked)
+
+
+@app.put("/broker/config", response_model=BrokerConfigResponse)
+def save_broker_config(
+    body: BrokerConfigRequest,
+    user: dict = Depends(current_user),
+) -> BrokerConfigResponse:
+    if body.broker not in broker_presets.PRESET_BY_ID:
+        raise HTTPException(400, f"unknown broker '{body.broker}'")
+    username = user["username"]
+    password = _resolve_password(body, username)
+    store = _broker_store()
+    store.save(username, BrokerConfig(
+        broker=body.broker,
+        login=body.login,
+        password=password,
+        server=body.server,
+        mt5_path=body.mt5_path,
+    ))
+    return BrokerConfigResponse(**store.get_masked(username))
+
+
+@app.delete("/broker/config")
+def clear_broker_config(user: dict = Depends(current_user)) -> dict[str, bool]:
+    removed = _broker_store().clear(user["username"])
+    return {"removed": removed}
+
+
+@app.post("/broker/test", response_model=BrokerTestResponse)
+def test_broker(
+    body: BrokerTestRequest,
+    user: dict = Depends(current_user),
+) -> BrokerTestResponse:
+    """Open a temporary MT5 connection with these creds, fetch account_info, disconnect.
+
+    Returns ok=False on any failure (MT5 not installed, bad creds, wrong server,
+    terminal not running). Never raises — callers expect a structured response.
+    """
+    try:
+        from src.connection.mt5_client import MT5Client
+    except Exception as e:
+        return BrokerTestResponse(ok=False, error=f"MT5 client unavailable: {e}")
+    password = _resolve_password(body, user["username"])
+    try:
+        client = MT5Client(
+            login=body.login, password=password,
+            server=body.server, path=body.mt5_path or None,
+        )
+    except RuntimeError as e:
+        # MetaTrader5 package not installed (macOS / Linux). The UI treats this
+        # as "can't test here — save and test on the Windows VPS".
+        return BrokerTestResponse(ok=False, error=str(e))
+    try:
+        client.connect()
+        info = client.account_info()
+        return BrokerTestResponse(ok=True, account={
+            "login": info.login,
+            "server": info.server,
+            "balance": info.balance,
+            "equity": info.equity,
+            "currency": info.currency,
+            "leverage": info.leverage,
+        })
+    except Exception as e:
+        return BrokerTestResponse(ok=False, error=str(e))
+    finally:
+        try:
+            client.disconnect()
+        except Exception:
+            pass
+
+
+@app.get("/broker/status", response_model=BrokerStatusResponse)
+def get_broker_status(_user: dict = Depends(current_user)) -> BrokerStatusResponse:
+    s = broker_status_store.read()
+    if s is None:
+        return BrokerStatusResponse(connected=False)
+    age = (datetime.now(s.updated_at.tzinfo) - s.updated_at).total_seconds()
+    return BrokerStatusResponse(
+        connected=s.connected,
+        broker=s.broker,
+        server=s.server,
+        login=s.login,
+        account_info=s.account_info,
+        last_error=s.last_error,
+        updated_at=s.updated_at,
+        stale_s=age,
+    )
+
+
+# ---------- User management (admin only) ----------
+
+def _to_response(u) -> UserResponse:
+    return UserResponse(
+        username=u.username, role=u.role, email=u.email,
+        created_at=u.created_at, password_set=u.password_set,
+    )
+
+
+@app.get("/users", response_model=list[UserResponse])
+def list_users(_admin: dict = Depends(require_admin)) -> list[UserResponse]:
+    return [_to_response(u) for u in user_store.list_users()]
+
+
+@app.get("/users/pool", response_model=PoolResponse)
+def user_pool(_admin: dict = Depends(require_admin)) -> PoolResponse:
+    ids = user_store.unclaimed_pool()
+    return PoolResponse(unclaimed=ids, size=len(ids))
+
+
+@app.post("/users/pool/refill", response_model=PoolResponse)
+def refill_pool(
+    target: int = 100,
+    _admin: dict = Depends(require_admin),
+) -> PoolResponse:
+    if target < 1 or target > 1000:
+        raise HTTPException(400, "target must be between 1 and 1000")
+    user_store.refill_pool(target)
+    ids = user_store.unclaimed_pool()
+    return PoolResponse(unclaimed=ids, size=len(ids))
+
+
+@app.post("/users/assign", response_model=AssignUserResponse, status_code=status.HTTP_201_CREATED)
+def assign_user(
+    body: AssignUserRequest,
+    _admin: dict = Depends(require_admin),
+) -> AssignUserResponse:
+    """Claim an AD-ID + email setup link. The recipient picks their own password."""
+    if body.ad_id == ADMIN_AD_ID or not is_user_ad_id(body.ad_id):
+        raise HTTPException(400, "invalid AD-ID")
+    if "@" not in body.email or "." not in body.email.split("@")[-1]:
+        raise HTTPException(400, "invalid email address")
+    try:
+        user_store.assign(body.ad_id, body.email)
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from None
+    return _issue_setup_link(body.ad_id, body.email)
+
+
+@app.post("/users/{username}/resend", response_model=AssignUserResponse)
+def resend_setup_link(
+    username: str,
+    _admin: dict = Depends(require_admin),
+) -> AssignUserResponse:
+    """Email a fresh setup link to a pending operator who lost the first one."""
+    if not user_store.exists(username):
+        raise HTTPException(404, "user not found")
+    email = user_store.get_email(username)
+    if not email:
+        raise HTTPException(400, "no email on file for this user")
+    if user_store.get_hash(username):
+        raise HTTPException(409, "user already has a password set — use reset-password instead")
+    return _issue_setup_link(username, email)
+
+
+def _issue_setup_link(ad_id: str, email: str) -> AssignUserResponse:
+    """Mint a fresh setup JWT, try to email it, surface the URL in dev mode."""
+    from src.api.mailer import smtp_configured
+
+    token, exp, url = create_setup_token(ad_id, email)
+    hours = SETUP_TTL_S // 3600
+    try:
+        send_setup_email(to=email, ad_id=ad_id, setup_url=url, expires_hours=hours)
+    except Exception as e:
+        # The AD-ID is already assigned — surface the failure so the admin
+        # knows to fix SMTP or send the link manually.
+        raise HTTPException(502, f"email delivery failed: {e}") from None
+    return AssignUserResponse(
+        ad_id=ad_id, email=email, setup_expires_at=exp,
+        # In dev (no SMTP) the email wasn't really sent — hand back the URL
+        # so the admin can copy it to the recipient.
+        setup_url=None if smtp_configured() else url,
+    )
+
+
+@app.delete("/users/{username}")
+def delete_user(
+    username: str,
+    admin: dict = Depends(require_admin),
+) -> dict[str, bool]:
+    if username == admin["username"]:
+        raise HTTPException(400, "cannot delete your own account")
+    try:
+        removed = user_store.delete(username)
+    except LastAdminError as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from None
+    if not removed:
+        raise HTTPException(404, "user not found")
+    return {"removed": True}
+
+
+@app.post("/users/{username}/reset-password")
+def reset_user_password(
+    username: str,
+    body: ResetPasswordRequest,
+    _admin: dict = Depends(require_admin),
+) -> dict[str, bool]:
+    if not user_store.exists(username):
+        raise HTTPException(404, "user not found")
+    try:
+        pw_hash = hash_password(body.password)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    user_store.set_password(username, pw_hash)
+    return {"updated": True}
+
+
+# ---------- Public setup flow (no auth: the JWT is the auth) ----------
+
+@app.get("/auth/setup/{token}", response_model=SetupClaimsResponse)
+def preview_setup(token: str) -> SetupClaimsResponse:
+    try:
+        claims = decode_setup_token(token)
+    except _jwt.ExpiredSignatureError:
+        raise HTTPException(400, "setup link expired — ask an admin to resend") from None
+    except _jwt.InvalidTokenError:
+        raise HTTPException(400, "invalid setup link") from None
+    if user_store.token_was_used(claims["jti"]):
+        raise HTTPException(409, "this setup link has already been used")
+    if user_store.get_hash(claims["ad_id"]):
+        raise HTTPException(409, "password already set for this AD-ID")
+    if not user_store.exists(claims["ad_id"]):
+        raise HTTPException(404, "AD-ID not recognized")
+    return SetupClaimsResponse(
+        ad_id=claims["ad_id"], email=claims["email"], expires_at=claims["exp"],
+    )
+
+
+@app.post("/auth/setup/{token}")
+def complete_setup(token: str, body: SetupPasswordRequest) -> dict[str, bool]:
+    try:
+        claims = decode_setup_token(token)
+    except _jwt.ExpiredSignatureError:
+        raise HTTPException(400, "setup link expired — ask an admin to resend") from None
+    except _jwt.InvalidTokenError:
+        raise HTTPException(400, "invalid setup link") from None
+    if not user_store.mark_token_used(claims["jti"]):
+        raise HTTPException(409, "this setup link has already been used")
+    if user_store.get_hash(claims["ad_id"]):
+        raise HTTPException(409, "password already set for this AD-ID")
+    try:
+        pw_hash = hash_password(body.password)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    user_store.set_password(claims["ad_id"], pw_hash)
+    return {"activated": True}
+
+
+class CalendarEventResponse(BaseModel):
+    event_time: str
+    currency: str
+    impact: str
+    title: str
+    actual: str | None = None
+    forecast: str | None = None
+    previous: str | None = None
+    source: str
+
+
+class BlackoutStatusResponse(BaseModel):
+    symbol: str
+    blackout: bool
+    enabled: bool
+    before_min: int
+    after_min: int
+    current_event: CalendarEventResponse | None = None
+    next_event: CalendarEventResponse | None = None
+    minutes_until_next: float | None = None
+
+
+@app.get("/calendar/events", response_model=list[CalendarEventResponse])
+def calendar_events(
+    hours_ahead: int = 24,
+    symbol: str | None = None,
+    _user: dict = Depends(current_user),
+) -> list[CalendarEventResponse]:
+    """Upcoming high/medium/low events in the next `hours_ahead` hours.
+
+    If `symbol` is passed, filter to events whose currency affects that symbol
+    (and honor the configured impact filter); otherwise return everything in
+    the window regardless of impact, so the dashboard can show a full agenda.
+    """
+    from datetime import datetime, timedelta, timezone
+    from src.econ_calendar.symbols import currencies_for_symbol
+
+    hours_ahead = max(1, min(hours_ahead, 7 * 24))
+    now = datetime.now(timezone.utc)
+    end = now + timedelta(hours=hours_ahead)
+    if symbol:
+        ccys = currencies_for_symbol(symbol)
+        if not ccys:
+            return []
+        events = calendar_store.events_in_window(
+            currencies=ccys, start=now, end=end, impacts=calendar_policy.impacts
+        )
+    else:
+        events = calendar_store.events_in_window(
+            currencies=("USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD"),
+            start=now, end=end,
+            impacts=("high", "medium", "low"),
+        )
+    return [CalendarEventResponse(**e.to_dict()) for e in events]
+
+
+@app.get("/calendar/blackout/{symbol}", response_model=BlackoutStatusResponse)
+def calendar_blackout(
+    symbol: str,
+    _user: dict = Depends(current_user),
+) -> BlackoutStatusResponse:
+    status_dict = calendar_checker.status(symbol)
+    return BlackoutStatusResponse(**status_dict)
+
+
+class RegimeResponse(BaseModel):
+    symbol: str
+    trend: str
+    volatility: str
+    label: str
+    adx: float | None = None
+    plus_di: float | None = None
+    minus_di: float | None = None
+    atr: float | None = None
+    atr_pct: float | None = None
+    timestamp: str | None = None
+    stored_at: str | None = None
+
+
+@app.get("/regime/{symbol}", response_model=RegimeResponse)
+def regime_for_symbol(
+    symbol: str,
+    _user: dict = Depends(current_user),
+) -> RegimeResponse:
+    """Latest regime snapshot for `symbol`.
+
+    Written by the bot on every tick. Returns an 'unknown' shell if the bot
+    has never classified this symbol (e.g. the bot isn't running yet).
+    """
+    data = regime_store.get(symbol) or empty_snapshot_dict(symbol)
+    data["symbol"] = symbol
+    return RegimeResponse(**{k: v for k, v in data.items() if k in RegimeResponse.model_fields})
+
+
+class CorrelationPair(BaseModel):
+    symbol_a: str
+    symbol_b: str
+    value: float
+    window_bars: int
+    computed_at: str
+
+
+class CorrelationResponse(BaseModel):
+    pairs: list[CorrelationPair]
+    count: int
+
+
+@app.get("/correlation", response_model=CorrelationResponse)
+def correlation_pairs(_user: dict = Depends(current_user)) -> CorrelationResponse:
+    """All known pairwise correlations, sorted by absolute value.
+
+    Bot writes these on a refresh cycle. Empty list means the bot hasn't
+    populated the store yet (or is running with a single symbol).
+    """
+    pairs = correlation_store.all_pairs()
+    return CorrelationResponse(
+        pairs=[CorrelationPair(**p) for p in pairs],
+        count=len(pairs),
+    )
+
+
+class DriftMetric(BaseModel):
+    name: str
+    baseline: float
+    live: float
+    delta: float
+    delta_pct: float
+
+
+class DriftBaselinePayload(BaseModel):
+    strategy: str
+    symbol: str
+    trade_count: int
+    win_rate: float
+    avg_r: float
+    avg_trades_per_day: float
+    source: str
+    computed_at: str
+
+
+class DriftReportModel(BaseModel):
+    strategy: str
+    symbol: str
+    status: Literal["ok", "warn", "danger", "unknown"]
+    live_trade_count: int
+    baseline: DriftBaselinePayload | None
+    metrics: list[DriftMetric]
+    note: str
+
+
+class DriftResponse(BaseModel):
+    reports: list[DriftReportModel]
+    count: int
+    cached_at: str
+
+
+# Memoize the drift report for a short window — the dashboard polls every
+# few seconds and recomputing means N small SQLite scans per pair. The
+# default TTL is short enough that operators see fresh numbers within the
+# next refresh cycle.
+_drift_cache: dict[str, object] = {"value": None, "expires_at": 0.0}
+
+
+def _drift_cache_ttl() -> float:
+    try:
+        return float(os.getenv("DRIFT_CACHE_TTL_S", "60"))
+    except ValueError:
+        return 60.0
+
+
+@app.get("/drift", response_model=DriftResponse)
+def drift_reports(_user: dict = Depends(current_user)) -> DriftResponse:
+    """Live-vs-backtest drift status per known baseline."""
+    import time
+    now = time.monotonic()
+    if _drift_cache["value"] is not None and now < _drift_cache["expires_at"]:
+        return _drift_cache["value"]  # type: ignore[return-value]
+
+    reports = drift_monitor.report()
+    payload = DriftResponse(
+        reports=[DriftReportModel(**r.to_dict()) for r in reports],
+        count=len(reports),
+        cached_at=datetime.now(timezone.utc).isoformat(),
+    )
+    _drift_cache["value"] = payload
+    _drift_cache["expires_at"] = now + _drift_cache_ttl()
+    return payload
+
+
+class FillSymbolStats(BaseModel):
+    symbol: str
+    fill_count: int
+    rejected_count: int
+    avg_slippage_pips: float
+    max_slippage_pips: float
+    avg_latency_ms: float
+    p95_latency_ms: float
+
+
+class FillStatsResponse(BaseModel):
+    symbols: list[FillSymbolStats]
+    window_hours: int
+    cached_at: str
+
+
+class FillRow(BaseModel):
+    id: int
+    trade_id: int | None = None
+    symbol: str
+    side: str
+    event: str
+    requested_price: float
+    filled_price: float | None = None
+    slippage_pips: float | None = None
+    latency_ms: float
+    broker_ticket: int | None = None
+    status: str
+    reason: str | None = None
+    filled_at: str
+
+
+class FillsResponse(BaseModel):
+    fills: list[FillRow]
+    count: int
+
+
+_fill_stats_cache: dict[str, object] = {"value": None, "expires_at": 0.0, "window": None}
+
+
+def _fill_stats_ttl() -> float:
+    try:
+        return float(os.getenv("EXEC_QUALITY_CACHE_TTL_S", "30"))
+    except ValueError:
+        return 30.0
+
+
+@app.get("/fills/stats", response_model=FillStatsResponse)
+def fill_stats(
+    window_hours: int = 24,
+    _user: dict = Depends(current_user),
+) -> FillStatsResponse:
+    """Per-symbol slippage and latency aggregates over the last `window_hours`.
+
+    Cached briefly so dashboard polling (every few seconds) doesn't run the
+    GROUP-BY scan repeatedly.
+    """
+    import time
+    now = time.monotonic()
+    cached = _fill_stats_cache.get("value")
+    if (
+        cached is not None
+        and now < float(_fill_stats_cache["expires_at"])  # type: ignore[arg-type]
+        and _fill_stats_cache.get("window") == window_hours
+    ):
+        return cached  # type: ignore[return-value]
+
+    rows = fill_store.stats(since_hours=window_hours)
+    payload = FillStatsResponse(
+        symbols=[
+            FillSymbolStats(
+                symbol=r.symbol,
+                fill_count=r.fill_count,
+                rejected_count=r.rejected_count,
+                avg_slippage_pips=r.avg_slippage_pips,
+                max_slippage_pips=r.max_slippage_pips,
+                avg_latency_ms=r.avg_latency_ms,
+                p95_latency_ms=r.p95_latency_ms,
+            )
+            for r in rows
+        ],
+        window_hours=window_hours,
+        cached_at=datetime.now(timezone.utc).isoformat(),
+    )
+    _fill_stats_cache["value"] = payload
+    _fill_stats_cache["expires_at"] = now + _fill_stats_ttl()
+    _fill_stats_cache["window"] = window_hours
+    return payload
+
+
+@app.get("/fills", response_model=FillsResponse)
+def recent_fills(
+    limit: int = 50,
+    _user: dict = Depends(current_user),
+) -> FillsResponse:
+    rows = fill_store.recent(limit=max(1, min(limit, 500)))
+    return FillsResponse(
+        fills=[FillRow(**{k: r.get(k) for k in FillRow.model_fields}) for r in rows],
+        count=len(rows),
+    )
+
+
+# ---------- Allocator ----------
+
+class AllocationModel(BaseModel):
+    strategy: str
+    symbol: str
+    role: Literal["champion", "challenger", "probe", "cold"]
+    weight: float
+    sample_size: int
+    avg_r: float
+    win_rate: float
+    note: str
+    updated_at: str
+
+
+class AllocatorResponse(BaseModel):
+    allocations: list[AllocationModel]
+    count: int
+    cached_at: str
+
+
+# Cached because the dashboard polls every few seconds; rereading the same
+# small table that often is wasteful when the bot only refreshes weights
+# every ~60 ticks anyway.
+_allocator_cache: dict[str, object] = {"value": None, "expires_at": 0.0}
+
+
+def _allocator_cache_ttl() -> float:
+    try:
+        return float(os.getenv("ALLOCATOR_CACHE_TTL_S", "30"))
+    except ValueError:
+        return 30.0
+
+
+@app.get("/allocator", response_model=AllocatorResponse)
+def allocator_state(_user: dict = Depends(current_user)) -> AllocatorResponse:
+    """Most recent champion-challenger allocations published by the bot."""
+    import time
+    now = time.monotonic()
+    if _allocator_cache["value"] is not None and now < _allocator_cache["expires_at"]:
+        return _allocator_cache["value"]  # type: ignore[return-value]
+
+    allocations = allocation_store.all()
+    payload = AllocatorResponse(
+        allocations=[AllocationModel(**a.to_dict()) for a in allocations],
+        count=len(allocations),
+        cached_at=datetime.now(timezone.utc).isoformat(),
+    )
+    _allocator_cache["value"] = payload
+    _allocator_cache["expires_at"] = now + _allocator_cache_ttl()
+    return payload
+
+
+# ---------- Explain this trade ----------
+
+class TradeExplanationModel(BaseModel):
+    trade_id: int
+    strategy: str
+    symbol: str
+    side: str
+    signal_price: float
+    signal_stop: float
+    signal_target: float
+    risk_reward: float
+    stop_distance_pips: float
+    lot_size: float
+    account_balance: float
+    opened_at: str
+    regime_trend: str | None = None
+    regime_volatility: str | None = None
+    regime_label: str | None = None
+    regime_adx: float | None = None
+    regime_atr_pct: float | None = None
+    allocator_role: str | None = None
+    allocator_weight: float | None = None
+    ml_filter_passed: bool | None = None
+    notes: str = ""
+
+
+@app.get("/trades/{trade_id}/explain", response_model=TradeExplanationModel)
+def explain_trade(
+    trade_id: int, _user: dict = Depends(current_user)
+) -> TradeExplanationModel:
+    """Return the captured decision context for one trade.
+
+    Returns 404 for trades that pre-date the explanation feature, or for
+    trade IDs that don't exist. The UI surfaces this as 'no explanation
+    logged' so operators understand why some trades are blank.
+    """
+    exp = explanation_store.get(trade_id)
+    if exp is None:
+        raise HTTPException(404, f"no explanation for trade {trade_id}")
+    return TradeExplanationModel(**exp.to_dict())
+
+
+_STATIC_DIR = Path(__file__).parent / "static"
+if _STATIC_DIR.exists():
+    # Serve static files ourselves so we can attach no-store headers. Using
+    # StaticFiles caches aggressively by default, which means edits to app.js
+    # don't reach the browser until a hard reload.
+    @app.get("/static/{path:path}", include_in_schema=False)
+    def static_file(path: str) -> FileResponse:
+        # Keep within the static dir — reject any path that escapes it.
+        candidate = (_STATIC_DIR / path).resolve()
+        if not str(candidate).startswith(str(_STATIC_DIR.resolve())) or not candidate.is_file():
+            raise HTTPException(404, "not found")
+        return FileResponse(candidate, headers={"Cache-Control": "no-store, must-revalidate"})
+
+    @app.get("/", include_in_schema=False)
+    def root() -> FileResponse:
+        # no-store on the SPA shell so the browser always fetches the latest
+        # Alpine wiring — otherwise a stale cached index.html hides new UI.
+        return FileResponse(
+            _STATIC_DIR / "index.html",
+            headers={"Cache-Control": "no-store, must-revalidate"},
+        )
+
+    @app.get("/setup", include_in_schema=False)
+    def setup_page() -> FileResponse:
+        return FileResponse(
+            _STATIC_DIR / "setup.html",
+            headers={"Cache-Control": "no-store, must-revalidate"},
+        )
