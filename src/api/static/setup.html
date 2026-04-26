@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AntiGreed · Set password</title>
+  <link rel="icon" type="image/png" href="/static/antigreed-logo.png" />
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('antigreed:theme');
+        if (saved === 'light') document.documentElement.classList.add('theme-light');
+      } catch (_) {}
+    })();
+  </script>
+  <script src="/static/vendor/tailwind.js"></script>
+  <style>
+    :root {
+      --c-bg: #0b0f1a; --c-panel: #111827; --c-panel2: #0f1523;
+      --c-edge: #1e293b; --c-text: #e2e8f0; --c-accent: #22d3ee;
+    }
+    html.theme-light {
+      --c-bg: #f4f6fb; --c-panel: #ffffff; --c-panel2: #f1f5f9;
+      --c-edge: #d8dee9; --c-text: #0f172a; --c-accent: #0891b2;
+    }
+    html, body { background: var(--c-bg); color: var(--c-text); }
+    body { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace; }
+    #root { background: var(--c-panel); border-color: var(--c-edge); }
+    #pw1, #pw2 { background: var(--c-panel2); border-color: var(--c-edge); color: var(--c-text); }
+    html.theme-light .text-slate-100 { color: #0f172a; }
+    html.theme-light .text-slate-200 { color: #1e293b; }
+    html.theme-light .text-slate-400 { color: #475569; }
+    html.theme-light .text-slate-500 { color: #64748b; }
+    html.theme-light .text-cyan-300  { color: #0e7490; }
+    html.theme-light .text-cyan-400  { color: #0891b2; }
+    html.theme-light .bg-cyan-400    { background-color: #0891b2; }
+    html.theme-light .bg-cyan-400.text-slate-950 { color: #ffffff; }
+  </style>
+</head>
+<body class="h-full min-h-screen flex items-center justify-center px-4 relative">
+
+<button type="button" id="theme_toggle"
+        class="absolute top-4 right-4 w-9 h-9 grid place-items-center rounded-md
+               border text-slate-400 hover:text-slate-200 transition"
+        style="border-color: var(--c-edge);">
+  <svg id="icon_moon" width="15" height="15" viewBox="0 0 24 24" fill="none"
+       stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+  </svg>
+  <svg id="icon_sun" class="hidden" width="15" height="15" viewBox="0 0 24 24" fill="none"
+       stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="4"/>
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+  </svg>
+</button>
+<script>
+  (function () {
+    var btn = document.getElementById('theme_toggle');
+    var moon = document.getElementById('icon_moon');
+    var sun  = document.getElementById('icon_sun');
+    function sync() {
+      var light = document.documentElement.classList.contains('theme-light');
+      moon.classList.toggle('hidden', !light);
+      sun.classList.toggle('hidden', light);
+      btn.title = light ? 'Switch to dark' : 'Switch to light';
+    }
+    sync();
+    btn.addEventListener('click', function () {
+      var light = !document.documentElement.classList.contains('theme-light');
+      document.documentElement.classList.toggle('theme-light', light);
+      try { localStorage.setItem('antigreed:theme', light ? 'light' : 'dark'); } catch (_) {}
+      sync();
+    });
+  })();
+</script>
+
+<div id="root" class="w-full max-w-sm bg-[#111827] border border-[#1e293b] rounded-2xl p-8 shadow-2xl">
+  <div class="flex flex-col items-center text-center mb-6">
+    <img src="/static/antigreed-logo.png" alt="AntiGreed" class="w-28 h-28 object-contain"/>
+    <div class="text-xs text-slate-400 tracking-widest uppercase mt-1">Choose your password</div>
+  </div>
+
+  <div id="loading" class="text-center text-slate-400 text-sm py-4">Verifying link…</div>
+
+  <div id="error" class="hidden text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-3"></div>
+
+  <form id="form" class="hidden">
+    <div class="text-xs text-slate-400 mb-1">AD-ID</div>
+    <div id="ad_id" class="font-semibold text-cyan-300 mb-4 tracking-wider"></div>
+
+    <div class="text-xs text-slate-400 mb-1">Email</div>
+    <div id="email" class="text-slate-200 text-sm mb-5 truncate"></div>
+
+    <label class="block text-xs uppercase tracking-widest text-slate-400 mb-2">New password</label>
+    <input id="pw1" type="password" autocomplete="new-password" required minlength="12"
+           class="w-full bg-[#0f1523] border border-[#1e293b] rounded-lg px-3 py-2 mb-3
+                  focus:outline-none focus:border-cyan-400"/>
+
+    <label class="block text-xs uppercase tracking-widest text-slate-400 mb-2">Confirm password</label>
+    <input id="pw2" type="password" autocomplete="new-password" required minlength="12"
+           class="w-full bg-[#0f1523] border border-[#1e293b] rounded-lg px-3 py-2 mb-5
+                  focus:outline-none focus:border-cyan-400"/>
+
+    <div id="form_error" class="hidden text-xs text-red-300 mb-3"></div>
+
+    <button id="submit" type="submit"
+            class="w-full bg-cyan-400 text-slate-950 font-semibold rounded-lg py-2.5
+                   hover:bg-cyan-300 active:translate-y-px transition disabled:opacity-50">
+      Set password &amp; activate
+    </button>
+
+    <div class="mt-4 text-[10px] text-slate-500 leading-relaxed">
+      Password must be 12+ characters. The link is single-use and expires 24h after issue.
+    </div>
+  </form>
+
+  <div id="done" class="hidden text-center py-4">
+    <div class="text-green-300 text-sm mb-4">Password set. You can close this page and sign in.</div>
+    <a href="/" class="text-cyan-400 text-xs underline">Go to dashboard</a>
+  </div>
+</div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const token = params.get("token");
+  const loading = document.getElementById("loading");
+  const errorBox = document.getElementById("error");
+  const form = document.getElementById("form");
+  const done = document.getElementById("done");
+  const formError = document.getElementById("form_error");
+
+  function showError(msg) {
+    loading.classList.add("hidden");
+    form.classList.add("hidden");
+    errorBox.textContent = msg;
+    errorBox.classList.remove("hidden");
+  }
+
+  async function verify() {
+    if (!token) { showError("Missing setup token in link."); return; }
+    try {
+      const r = await fetch("/auth/setup/" + encodeURIComponent(token));
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        showError(body.detail || "This setup link is invalid or expired.");
+        return;
+      }
+      const claims = await r.json();
+      document.getElementById("ad_id").textContent = claims.ad_id;
+      document.getElementById("email").textContent = claims.email;
+      loading.classList.add("hidden");
+      form.classList.remove("hidden");
+    } catch (e) {
+      showError("Couldn't reach the server. Try again in a moment.");
+    }
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    formError.classList.add("hidden");
+    const p1 = document.getElementById("pw1").value;
+    const p2 = document.getElementById("pw2").value;
+    if (p1.length < 12) {
+      formError.textContent = "Password must be at least 12 characters.";
+      formError.classList.remove("hidden");
+      return;
+    }
+    if (p1 !== p2) {
+      formError.textContent = "Passwords don't match.";
+      formError.classList.remove("hidden");
+      return;
+    }
+    const submit = document.getElementById("submit");
+    submit.disabled = true; submit.textContent = "Saving…";
+    try {
+      const r = await fetch("/auth/setup/" + encodeURIComponent(token), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: p1 }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        formError.textContent = body.detail || "Couldn't set password.";
+        formError.classList.remove("hidden");
+        submit.disabled = false; submit.textContent = "Set password & activate";
+        return;
+      }
+      form.classList.add("hidden");
+      done.classList.remove("hidden");
+    } catch (_) {
+      formError.textContent = "Network error. Try again.";
+      formError.classList.remove("hidden");
+      submit.disabled = false; submit.textContent = "Set password & activate";
+    }
+  });
+
+  verify();
+</script>
+</body>
+</html>

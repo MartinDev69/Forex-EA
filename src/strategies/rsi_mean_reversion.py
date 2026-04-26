@@ -19,6 +19,9 @@ from .base import Signal, SignalType, Strategy
 
 class RSIMeanReversionStrategy(Strategy):
     name = "rsi_mean_reversion"
+    # Mean reversion only works when price actually reverts — in strong trends
+    # the "overbought" condition can persist for dozens of bars.
+    preferred_regimes = frozenset({"range"})
 
     def __init__(
         self,

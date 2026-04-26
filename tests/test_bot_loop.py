@@ -15,6 +15,8 @@ from src.bot import Bot, BotConfig
 from src.execution.base import Order, OrderStatus
 from src.execution.journal import TradeJournal
 from src.execution.mock import MockExecutor
+from src.execution.stops import StopManager, StopPolicy
+from src.execution.strategy_toggles import StrategyToggleStore
 from src.risk.risk_manager import RiskLimits, RiskManager
 from src.strategies.base import Signal, SignalType, Strategy
 
@@ -166,3 +168,117 @@ def test_close_on_target_hits_journal(tmp_path: Path):
     rows = journal.recent()
     assert rows[0]["status"] == "CLOSED"
     assert rows[0]["close_reason"]
+
+
+def test_disabled_strategy_is_skipped(tmp_path: Path):
+    """When the toggle store says a strategy is off, the bot must not fire it."""
+    ohlc = _sample_ohlc()
+    feed = _FixedFeed(ohlc)
+    executor = MockExecutor(starting_balance=10_000)
+    risk = RiskManager(RiskLimits(risk_per_trade=0.01, max_open_trades=5))
+    journal = TradeJournal(tmp_path / "trades.db")
+
+    toggles = StrategyToggleStore(tmp_path / "trades.db")
+    toggles.set("always_buy", False)
+
+    bot = Bot(
+        config=BotConfig(symbols=["EURUSD"]),
+        strategies={"EURUSD": [AlwaysBuyStrategy("EURUSD")]},
+        data_feed=feed,
+        executor=executor,
+        risk_manager=risk,
+        journal=journal,
+        toggle_store=toggles,
+    )
+
+    assert bot.tick() == 0
+    assert executor.open_orders() == []
+    assert journal.recent() == []
+
+    # Flip it on — next tick should fire. (Same bar-key was recorded on the prior
+    # tick, so we fast-forward the feed to a fresh bar by rebuilding with a
+    # different last timestamp.)
+    toggles.set("always_buy", True)
+    bot.state.last_bar_ts.clear()
+    assert bot.tick() == 1
+    assert len(executor.open_orders()) == 1
+
+
+class _MutableFeed:
+    """Feed whose last bar is mutable between ticks — lets us simulate price
+    movement over time in the same test."""
+
+    def __init__(self, ohlc: pd.DataFrame) -> None:
+        self._ohlc = ohlc
+
+    def latest_bars(self, symbol, timeframe, count):
+        return self._ohlc.tail(count).copy()
+
+    def append_bar(self, high: float, low: float, close: float) -> None:
+        last_ts = self._ohlc.index[-1]
+        new_ts = last_ts + (self._ohlc.index[-1] - self._ohlc.index[-2])
+        row = pd.DataFrame(
+            {"open": [close], "high": [high], "low": [low], "close": [close], "volume": [100]},
+            index=[new_ts],
+        )
+        self._ohlc = pd.concat([self._ohlc, row])
+
+
+def test_stop_manager_moves_sl_to_breakeven_after_one_r(tmp_path: Path):
+    ohlc = _sample_ohlc()
+    feed = _MutableFeed(ohlc)
+    executor = MockExecutor(starting_balance=10_000)
+    risk = RiskManager(RiskLimits(risk_per_trade=0.01, max_open_trades=5))
+    journal = TradeJournal(tmp_path / "trades.db")
+
+    bot = Bot(
+        config=BotConfig(symbols=["EURUSD"]),
+        strategies={"EURUSD": [AlwaysBuyStrategy("EURUSD")]},
+        data_feed=feed,
+        executor=executor,
+        risk_manager=risk,
+        journal=journal,
+        stop_manager=StopManager(StopPolicy(breakeven_trigger_r=1.0, trail_start_r=99)),
+    )
+
+    # Tick 1: opens a BUY with 50-pip stop (AlwaysBuyStrategy sets sl = price - 0.005).
+    bot.tick()
+    order = executor.open_orders()[0]
+    entry = order.entry_price
+    initial_sl = order.stop_loss
+    assert initial_sl == pytest.approx(entry - 0.0050)
+
+    # Tick 2: price pushes +1R above entry on a new bar — SL should move to entry.
+    feed.append_bar(high=entry + 0.0060, low=entry + 0.0030, close=entry + 0.0055)
+    bot.tick()
+    assert order.stop_loss == pytest.approx(entry, abs=1e-6)
+
+
+def test_stop_manager_trails_after_two_r(tmp_path: Path):
+    ohlc = _sample_ohlc()
+    feed = _MutableFeed(ohlc)
+    executor = MockExecutor(starting_balance=10_000)
+    risk = RiskManager(RiskLimits(risk_per_trade=0.01, max_open_trades=5))
+    journal = TradeJournal(tmp_path / "trades.db")
+
+    bot = Bot(
+        config=BotConfig(symbols=["EURUSD"]),
+        strategies={"EURUSD": [AlwaysBuyStrategy("EURUSD")]},
+        data_feed=feed,
+        executor=executor,
+        risk_manager=risk,
+        journal=journal,
+        stop_manager=StopManager(StopPolicy(
+            breakeven_trigger_r=1.0, trail_start_r=2.0, trail_distance_r=1.0,
+        )),
+    )
+
+    bot.tick()
+    order = executor.open_orders()[0]
+    entry = order.entry_price
+
+    # Push peak to +3R (0.015 above entry). Trail distance = 1R = 0.005.
+    # Expected SL = peak - 1R = entry + 0.010.
+    feed.append_bar(high=entry + 0.0150, low=entry + 0.0080, close=entry + 0.0120)
+    bot.tick()
+    assert order.stop_loss == pytest.approx(entry + 0.0100, abs=1e-6)

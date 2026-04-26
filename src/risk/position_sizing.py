@@ -2,6 +2,20 @@
 from __future__ import annotations
 
 
+def pip_size(symbol: str) -> float:
+    """Price delta corresponding to one pip for `symbol`.
+
+    JPY pairs quote to 0.01; metals to 0.1; everything else to 0.0001.
+    Matches what MT5 reports via `symbol_info.point * 10` for most brokers.
+    """
+    s = symbol.upper()
+    if s in {"XAUUSD", "GOLD", "XAGUSD", "SILVER"}:
+        return 0.1
+    if s.endswith("JPY"):
+        return 0.01
+    return 0.0001
+
+
 def pip_value(symbol: str, lot_size: float = 1.0) -> float:
     """Approximate USD pip value per lot for common pairs.
 

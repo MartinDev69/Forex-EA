@@ -30,6 +30,12 @@ class Signal:
 class Strategy(ABC):
     name: str = "base"
 
+    # Regimes (from src.regime.TrendRegime) in which this strategy should fire.
+    # Default is regime-agnostic — the bot's regime gate is a no-op unless a
+    # subclass narrows this. Use strings, not enums, so strategies don't take a
+    # dependency on the regime module.
+    preferred_regimes: frozenset[str] = frozenset({"trend_up", "trend_down", "range"})
+
     def __init__(self, symbol: str) -> None:
         self.symbol = symbol
 

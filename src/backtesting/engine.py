@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from src.risk.position_sizing import lot_size_from_risk, pip_size, pip_value
 from src.strategies.base import Signal, SignalType, Strategy
 
 
@@ -20,10 +21,12 @@ class Trade:
     entry_time: pd.Timestamp
     exit_time: pd.Timestamp | None
     side: SignalType
+    symbol: str
     entry_price: float
     exit_price: float | None
     stop_loss: float
     take_profit: float
+    lot_size: float
     pnl: float = 0.0
     reason: str = ""
 
@@ -54,8 +57,15 @@ def run_backtest(
     starting_equity: float = 10_000.0,
     risk_per_trade_pct: float = 0.01,
     lookback: int = 100,
+    symbol: str | None = None,
 ) -> BacktestResult:
-    """Walk the dataframe, one bar at a time, and simulate the strategy."""
+    """Walk the dataframe, one bar at a time, and simulate the strategy.
+
+    `symbol` defaults to `strategy.symbol` and drives per-pair pip size +
+    pip value used in PnL accounting. Pass it explicitly to override (e.g.
+    running a generic strategy on XAUUSD bars).
+    """
+    sym = symbol or strategy.symbol
     equity = starting_equity
     equity_curve: list[float] = []
     trades: list[Trade] = []
@@ -76,7 +86,7 @@ def run_backtest(
         if open_trade is None:
             signal = strategy.generate_signal(window)
             if signal.type in (SignalType.BUY, SignalType.SELL):
-                open_trade = _open_from_signal(signal, equity, risk_per_trade_pct)
+                open_trade = _open_from_signal(signal, equity, risk_per_trade_pct, sym)
 
         equity_curve.append(equity + (open_trade.pnl if open_trade else 0))
 
@@ -106,15 +116,31 @@ def run_backtest(
     )
 
 
-def _open_from_signal(signal: Signal, equity: float, risk_pct: float) -> Trade:
+def _open_from_signal(signal: Signal, equity: float, risk_pct: float, symbol: str) -> Trade:
+    stop = signal.stop_loss or 0.0
+    stop_distance = abs(signal.price - stop) if stop else 0.0
+    stop_pips = stop_distance / pip_size(symbol) if stop_distance > 0 else 0.0
+    if stop_pips > 0:
+        lots = lot_size_from_risk(
+            account_balance=equity,
+            risk_pct=risk_pct,
+            stop_distance_pips=stop_pips,
+            symbol=symbol,
+        )
+    else:
+        # Strategy didn't set a stop — fall back to min lot so PnL isn't zero
+        # but risk isn't runaway either. Strategies should always set stops.
+        lots = 0.01
     return Trade(
         entry_time=signal.timestamp,
         exit_time=None,
         side=signal.type,
+        symbol=symbol,
         entry_price=signal.price,
         exit_price=None,
-        stop_loss=signal.stop_loss or 0.0,
+        stop_loss=stop,
         take_profit=signal.take_profit or 0.0,
+        lot_size=lots,
     )
 
 
@@ -145,9 +171,8 @@ def _close(trade: Trade, price: float, ts: pd.Timestamp, reason: str) -> None:
 
 
 def _pnl(trade: Trade, exit_price: float) -> float:
-    # Simplified: per-pip PnL assumes 1 lot EURUSD-like ($10 / pip).
-    # Real backtests should pass symbol info; this is a placeholder.
     diff = exit_price - trade.entry_price
     if trade.side == SignalType.SELL:
         diff = -diff
-    return diff * 10_000  # ~pips × $10 equivalent for a 4-decimal pair
+    pips = diff / pip_size(trade.symbol)
+    return pips * pip_value(trade.symbol, trade.lot_size)

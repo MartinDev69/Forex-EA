@@ -18,6 +18,7 @@ from .base import Signal, SignalType, Strategy
 
 class MACrossoverStrategy(Strategy):
     name = "ma_crossover"
+    preferred_regimes = frozenset({"trend_up", "trend_down"})
 
     def __init__(
         self,

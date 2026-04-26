@@ -17,6 +17,9 @@ from .base import Signal, SignalType, Strategy
 
 class DonchianBreakoutStrategy(Strategy):
     name = "donchian_breakout"
+    # Breakouts need either a trend already forming or a volatility expansion.
+    # We gate by trend here; volatility is what the breakout itself proves.
+    preferred_regimes = frozenset({"trend_up", "trend_down", "range"})
 
     def __init__(
         self,

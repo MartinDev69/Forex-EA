@@ -78,6 +78,14 @@ class MockExecutor:
     def open_orders(self) -> list[Order]:
         return [o for o in self._orders if o.status == OrderStatus.OPEN]
 
+    def modify(self, order: Order, stop_loss: float | None = None,
+               take_profit: float | None = None) -> Order:
+        if stop_loss is not None:
+            order.stop_loss = stop_loss
+        if take_profit is not None:
+            order.take_profit = take_profit
+        return order
+
 
 def _pnl(order: Order) -> float:
     # Rough 4-decimal-pair approximation: $10 per pip per lot.

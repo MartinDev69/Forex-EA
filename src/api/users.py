@@ -1,0 +1,330 @@
+"""User + AD-ID storage for the control API.
+
+All identities are AD-IDs:
+- `Admi8X` is the singleton admin — protected from deletion, demotion, and duplication.
+- Regular operators receive random AD-IDs (`AD-XXXXXXXX`) drawn from a
+  pre-generated pool of 100 unclaimed IDs. The admin assigns an ID + email;
+  an emailed setup link lets the operator choose their own password.
+
+Storage layout (one SQLite file shared with trades + toggles):
+
+  auth_users (ad_id PK, password_hash NULLABLE, role, email, created_at)
+  ad_id_pool (ad_id PK, generated_at)            — unclaimed IDs only
+  used_setup_tokens (jti PK, used_at)            — single-use link tracking
+"""
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+
+from .ad_id import ADMIN_AD_ID, new_ad_id
+
+ROLES = ("admin", "user")
+DEFAULT_POOL_SIZE = 100
+
+SCHEMA_USERS = """
+CREATE TABLE IF NOT EXISTS auth_users (
+    username      TEXT PRIMARY KEY,
+    password_hash TEXT,
+    role          TEXT NOT NULL DEFAULT 'user',
+    email         TEXT,
+    created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+SCHEMA_POOL = """
+CREATE TABLE IF NOT EXISTS ad_id_pool (
+    ad_id        TEXT PRIMARY KEY,
+    generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+SCHEMA_USED_TOKENS = """
+CREATE TABLE IF NOT EXISTS used_setup_tokens (
+    jti     TEXT PRIMARY KEY,
+    used_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+
+@dataclass(frozen=True)
+class UserRecord:
+    username: str
+    role: str
+    email: str | None
+    created_at: str
+    # True when the user has chosen a password and can log in. Assigned-but-
+    # not-yet-set-up operators have password_set=False.
+    password_set: bool
+
+
+class LastAdminError(RuntimeError):
+    """Raised when an action would leave the system with zero admins."""
+
+
+class DuplicateAdminError(RuntimeError):
+    """Raised when trying to create or promote a second admin."""
+
+
+class UserStore:
+    def __init__(self, db_path: Path | str, *, pool_size: int = DEFAULT_POOL_SIZE) -> None:
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._conn() as c:
+            c.execute(SCHEMA_USERS)
+            c.execute(SCHEMA_POOL)
+            c.execute(SCHEMA_USED_TOKENS)
+            self._migrate(c)
+        # Keep the pool topped up. Safe to call on every boot — no-op if full.
+        self.refill_pool(pool_size)
+
+    def _migrate(self, c: sqlite3.Connection) -> None:
+        """Walk DBs built against older schemas forward to the current shape."""
+        cols = {r[1] for r in c.execute("PRAGMA table_info(auth_users)").fetchall()}
+        if "role" not in cols:
+            c.execute("ALTER TABLE auth_users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+        if "email" not in cols:
+            c.execute("ALTER TABLE auth_users ADD COLUMN email TEXT")
+        # password_hash was NOT NULL pre-setup-flow; make it nullable so we can
+        # pre-seed assigned users before they've chosen a password. SQLite
+        # can't ALTER constraints in place, so we migrate via table rebuild
+        # only if the current column is NOT NULL.
+        notnull = {r[1]: r[3] for r in c.execute("PRAGMA table_info(auth_users)").fetchall()}
+        if notnull.get("password_hash") == 1:
+            c.executescript("""
+                CREATE TABLE auth_users_new (
+                    username TEXT PRIMARY KEY,
+                    password_hash TEXT,
+                    role TEXT NOT NULL DEFAULT 'user',
+                    email TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                INSERT INTO auth_users_new (username, password_hash, role, email, created_at)
+                SELECT username, password_hash, role, email, created_at FROM auth_users;
+                DROP TABLE auth_users;
+                ALTER TABLE auth_users_new RENAME TO auth_users;
+            """)
+        # Role rename: legacy 'viewer' accounts become 'user'.
+        c.execute("UPDATE auth_users SET role = 'user' WHERE role = 'viewer'")
+        # Admin migration: if there's exactly one admin and they aren't Admi8X
+        # yet, rename them so they can keep logging in with their existing
+        # password under the new identity.
+        admins = c.execute(
+            "SELECT username FROM auth_users WHERE role = 'admin'"
+        ).fetchall()
+        names = [a[0] for a in admins]
+        if len(names) == 1 and names[0] != ADMIN_AD_ID:
+            # If the target name is somehow already taken by a non-admin row,
+            # leave things alone and surface via logs — human must intervene.
+            clash = c.execute(
+                "SELECT 1 FROM auth_users WHERE username = ?", (ADMIN_AD_ID,)
+            ).fetchone()
+            if clash is None:
+                c.execute(
+                    "UPDATE auth_users SET username = ? WHERE username = ?",
+                    (ADMIN_AD_ID, names[0]),
+                )
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
+    # ---------- Pool ----------
+
+    def refill_pool(self, target: int = DEFAULT_POOL_SIZE) -> int:
+        """Ensure the pool has at least `target` unclaimed IDs. Returns new count added."""
+        with self._conn() as c:
+            have = c.execute("SELECT COUNT(*) FROM ad_id_pool").fetchone()[0]
+            added = 0
+            while have + added < target:
+                candidate = new_ad_id()
+                # Skip if this ID is already in the pool or already a user.
+                exists_pool = c.execute(
+                    "SELECT 1 FROM ad_id_pool WHERE ad_id = ?", (candidate,)
+                ).fetchone()
+                exists_user = c.execute(
+                    "SELECT 1 FROM auth_users WHERE username = ?", (candidate,)
+                ).fetchone()
+                if exists_pool or exists_user:
+                    continue
+                c.execute("INSERT INTO ad_id_pool (ad_id) VALUES (?)", (candidate,))
+                added += 1
+            return added
+
+    def unclaimed_pool(self) -> list[str]:
+        with self._conn() as c:
+            rows = c.execute("SELECT ad_id FROM ad_id_pool ORDER BY generated_at").fetchall()
+        return [r["ad_id"] for r in rows]
+
+    def pool_size(self) -> int:
+        with self._conn() as c:
+            return int(c.execute("SELECT COUNT(*) FROM ad_id_pool").fetchone()[0])
+
+    def claim_ad_id(self, ad_id: str) -> bool:
+        """Remove an ID from the pool. Returns True if it was present."""
+        with self._conn() as c:
+            cur = c.execute("DELETE FROM ad_id_pool WHERE ad_id = ?", (ad_id,))
+        return cur.rowcount > 0
+
+    # ---------- Users ----------
+
+    @staticmethod
+    def _check_role(role: str) -> None:
+        if role not in ROLES:
+            raise ValueError(f"invalid role {role!r}, must be one of {ROLES}")
+
+    def _admin_count(self, c: sqlite3.Connection) -> int:
+        return int(c.execute(
+            "SELECT COUNT(*) FROM auth_users WHERE role = 'admin'"
+        ).fetchone()[0])
+
+    def assign(self, ad_id: str, email: str) -> None:
+        """Seed a user-role row with no password yet (pending setup).
+
+        Claims the AD-ID from the pool. Rejects the singleton admin ID — the
+        admin is seeded via scripts/create_user.py, not the assign flow.
+        """
+        if ad_id == ADMIN_AD_ID:
+            raise ValueError(f"{ADMIN_AD_ID} is reserved for the admin")
+        with self._conn() as c:
+            # The AD-ID must come from the pool so admin can't mint arbitrary IDs.
+            if not c.execute(
+                "SELECT 1 FROM ad_id_pool WHERE ad_id = ?", (ad_id,)
+            ).fetchone():
+                raise ValueError(f"{ad_id} is not in the unclaimed pool")
+            c.execute("DELETE FROM ad_id_pool WHERE ad_id = ?", (ad_id,))
+            # On re-assign (e.g. the admin wants to re-email the setup link),
+            # overwrite the email but only if the row has no password yet —
+            # otherwise we'd silently wipe a real user.
+            existing = c.execute(
+                "SELECT password_hash FROM auth_users WHERE username = ?", (ad_id,)
+            ).fetchone()
+            if existing is None:
+                c.execute(
+                    "INSERT INTO auth_users (username, password_hash, role, email) "
+                    "VALUES (?, NULL, 'user', ?)",
+                    (ad_id, email),
+                )
+            elif existing["password_hash"] is None:
+                c.execute(
+                    "UPDATE auth_users SET email = ? WHERE username = ?",
+                    (email, ad_id),
+                )
+            else:
+                raise ValueError(f"{ad_id} already has a password set")
+
+    def create_admin(self, password_hash: str) -> None:
+        """Seed the singleton admin. Idempotent only when the admin doesn't exist yet."""
+        with self._conn() as c:
+            if self._admin_count(c) >= 1:
+                raise DuplicateAdminError("an admin already exists")
+            c.execute(
+                "INSERT INTO auth_users (username, password_hash, role) VALUES (?, ?, 'admin')",
+                (ADMIN_AD_ID, password_hash),
+            )
+
+    def create(self, username: str, password_hash: str, role: str = "user") -> None:
+        """Low-level insert used by seed scripts and tests.
+
+        Enforces the singleton-admin invariant: admin role is only valid for
+        `ADMIN_AD_ID`, and only when no admin exists. The admin-facing flow uses
+        `assign()` + setup link rather than this method.
+        """
+        self._check_role(role)
+        with self._conn() as c:
+            if role == "admin":
+                if username != ADMIN_AD_ID:
+                    raise ValueError(f"admin username must be {ADMIN_AD_ID}")
+                if self._admin_count(c) >= 1:
+                    raise DuplicateAdminError("an admin already exists")
+            c.execute(
+                "INSERT INTO auth_users (username, password_hash, role) VALUES (?, ?, ?)",
+                (username, password_hash, role),
+            )
+
+    def update_password(self, username: str, new_hash: str) -> bool:
+        """Alias for set_password — kept so older callers read naturally."""
+        return self.set_password(username, new_hash)
+
+    def set_password(self, username: str, new_hash: str) -> bool:
+        with self._conn() as c:
+            cur = c.execute(
+                "UPDATE auth_users SET password_hash = ? WHERE username = ?",
+                (new_hash, username),
+            )
+        return cur.rowcount > 0
+
+    def get_hash(self, username: str) -> str | None:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT password_hash FROM auth_users WHERE username = ?",
+                (username,),
+            ).fetchone()
+        return row["password_hash"] if row and row["password_hash"] else None
+
+    def get_role(self, username: str) -> str | None:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT role FROM auth_users WHERE username = ?",
+                (username,),
+            ).fetchone()
+        return row["role"] if row else None
+
+    def get_email(self, username: str) -> str | None:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT email FROM auth_users WHERE username = ?",
+                (username,),
+            ).fetchone()
+        return row["email"] if row else None
+
+    def exists(self, username: str) -> bool:
+        with self._conn() as c:
+            return c.execute(
+                "SELECT 1 FROM auth_users WHERE username = ?", (username,)
+            ).fetchone() is not None
+
+    def list_users(self) -> list[UserRecord]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT username, role, email, created_at, password_hash "
+                "FROM auth_users ORDER BY role DESC, username"
+            ).fetchall()
+        return [
+            UserRecord(
+                username=r["username"], role=r["role"], email=r["email"],
+                created_at=r["created_at"],
+                password_set=bool(r["password_hash"]),
+            )
+            for r in rows
+        ]
+
+    def list_usernames(self) -> list[str]:
+        return [u.username for u in self.list_users()]
+
+    def delete(self, username: str) -> bool:
+        if username == ADMIN_AD_ID:
+            raise LastAdminError(f"{ADMIN_AD_ID} is protected and cannot be deleted")
+        with self._conn() as c:
+            cur = c.execute("DELETE FROM auth_users WHERE username = ?", (username,))
+        return cur.rowcount > 0
+
+    # ---------- Setup tokens (single-use tracking) ----------
+
+    def mark_token_used(self, jti: str) -> bool:
+        """Returns True if this was the first time; False if already burned."""
+        with self._conn() as c:
+            try:
+                c.execute("INSERT INTO used_setup_tokens (jti) VALUES (?)", (jti,))
+                return True
+            except sqlite3.IntegrityError:
+                return False
+
+    def token_was_used(self, jti: str) -> bool:
+        with self._conn() as c:
+            return c.execute(
+                "SELECT 1 FROM used_setup_tokens WHERE jti = ?", (jti,)
+            ).fetchone() is not None

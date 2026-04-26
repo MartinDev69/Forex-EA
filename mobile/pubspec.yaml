@@ -12,11 +12,29 @@ dependencies:
   cupertino_icons: ^1.0.8
   http: ^1.2.0
   intl: ^0.19.0
+  shared_preferences: ^2.2.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/antigreed-logo.png
+
+# Generates iOS + Android launcher icons from the AntiGreed logo.
+# Run once after editing:  dart run flutter_launcher_icons
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/antigreed-logo.png"
+  # iOS icons can't have transparency — flatten onto white.
+  remove_alpha_ios: true
+  background_color_ios: "#ffffff"
+  # Android adaptive icon: logo in the foreground layer, white plate behind.
+  adaptive_icon_background: "#ffffff"
+  adaptive_icon_foreground: "assets/antigreed-logo.png"
+  min_sdk_android: 21
