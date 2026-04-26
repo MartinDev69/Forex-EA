@@ -41,6 +41,7 @@ from src.strategies import (
     MACrossoverStrategy,
     RSIMeanReversionStrategy,
 )
+from src.narrator import NarrativeStore, NarratorComposer, build_provider
 from src.propfirm import PropFirmGuard, PropFirmStore, policy_from_env
 from src.utils import get_logger
 from src.watchdog import HeartbeatStore
@@ -251,6 +252,19 @@ def main() -> None:
         heartbeat_store=(
             HeartbeatStore(Path("data/trades.db"))
             if os.getenv("WATCHDOG_ENABLED", "1").strip() not in ("0", "false", "False", "")
+            else None
+        ),
+        # Off by default. When on, runs once per close to write a 2-3 sentence
+        # post-mortem to the narratives table. Network latency only hits the
+        # close path; the call is wrapped in try/except so failures never
+        # propagate. Provider falls back to stub when no API key is set.
+        narrator=(
+            NarratorComposer(
+                provider=build_provider(),
+                store=NarrativeStore(Path("data/trades.db")),
+                db_path="data/trades.db",
+            )
+            if os.getenv("NARRATOR_ENABLED", "0").strip() not in ("0", "false", "False", "")
             else None
         ),
     )

@@ -30,6 +30,7 @@ from src.execution.strategy_toggles import StrategyToggleStore
 from src.explanations.store import TradeExplanation, TradeExplanationStore
 from src.ml.signal_filter import SignalFilter
 from src.monitoring.telegram_notifier import NoOpNotifier
+from src.narrator.composer import NarratorComposer
 from src.regime.classifier import RegimeClassifier, RegimeSnapshot
 from src.regime.store import RegimeStore
 from src.risk.position_sizing import lot_size_from_risk
@@ -91,6 +92,7 @@ class Bot:
         explanation_store: TradeExplanationStore | None = None,
         heartbeat_store: HeartbeatStore | None = None,
         heartbeat_process_name: str = "bot",
+        narrator: NarratorComposer | None = None,
     ) -> None:
         self.config = config
         self.strategies = strategies
@@ -131,6 +133,9 @@ class Bot:
         # a wedged bot it can't see, but the bot itself runs the same.
         self.heartbeat_store = heartbeat_store
         self.heartbeat_process_name = heartbeat_process_name
+        # None = no LLM post-trade narration. When set, runs once per close
+        # in best-effort mode — failures log but never crash the close path.
+        self.narrator = narrator
         self.state = BotState()
 
     # ------------------------------------------------------------------ core
@@ -521,6 +526,11 @@ class Bot:
         latency_ms = (time.perf_counter() - send_started) * 1000.0
         self._record_fill(closed, "CLOSE", requested_close, latency_ms)
         self.journal.record_close(closed)
+        if self.narrator is not None:
+            try:
+                self.narrator.narrate(closed.id)
+            except Exception:
+                log.exception("narrator failed for trade %d", closed.id)
         # Pull the per-trade weight off the order so we credit back the
         # exact amount we charged on open (1.0 default if it wasn't set).
         weight = float(order.extra.get("risk_weight", 1.0)) if order.extra else 1.0

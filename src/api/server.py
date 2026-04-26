@@ -61,6 +61,7 @@ from src.econ_calendar.refresher import CalendarRefresher
 from src.execution.fills import FillStore
 from src.execution.journal import TradeJournal
 from src.execution.strategy_toggles import DEFAULT_STRATEGY_FLAGS, StrategyToggleStore
+from src.narrator import NarrativeStore
 from src.propfirm import PropFirmGuard, PropFirmStore, policy_from_env
 from src.regime import RegimeStore, empty_snapshot_dict
 from src.strategies import STRATEGY_REGISTRY
@@ -122,6 +123,7 @@ allocation_store = AllocationStore(_DB)
 explanation_store = TradeExplanationStore(_DB)
 heartbeat_store = HeartbeatStore(_DB)
 propfirm_store = PropFirmStore(_DB)
+narrative_store = NarrativeStore(_DB)
 # Refresher is created on startup so tests that import this module without a
 # running event loop don't need to deal with asyncio tasks.
 _calendar_refresher: CalendarRefresher | None = None
@@ -1020,6 +1022,35 @@ def explain_trade(
     if exp is None:
         raise HTTPException(404, f"no explanation for trade {trade_id}")
     return TradeExplanationModel(**exp.to_dict())
+
+
+# ---------- Post-trade narrator ----------
+
+class TradeNarrativeModel(BaseModel):
+    trade_id: int
+    narrative: str
+    provider: str
+    model: str | None = None
+    prompt_tokens: int | None = None
+    output_tokens: int | None = None
+    created_at: str
+
+
+@app.get("/trades/{trade_id}/narrative", response_model=TradeNarrativeModel)
+def trade_narrative(
+    trade_id: int, _user: dict = Depends(current_user)
+) -> TradeNarrativeModel:
+    """LLM-written 2-3 sentence post-mortem for one closed trade.
+
+    Returns 404 when narration is off, the trade is still open, or the
+    LLM call failed at close-time (errors don't crash the bot, so a stale
+    trade simply has no row). The dashboard surfaces this as 'no
+    narrative yet'.
+    """
+    n = narrative_store.get(trade_id)
+    if n is None:
+        raise HTTPException(404, f"no narrative for trade {trade_id}")
+    return TradeNarrativeModel(**n.to_dict())
 
 
 # ---------- Watchdog ----------
