@@ -63,6 +63,7 @@ from src.execution.journal import TradeJournal
 from src.execution.strategy_toggles import DEFAULT_STRATEGY_FLAGS, StrategyToggleStore
 from src.regime import RegimeStore, empty_snapshot_dict
 from src.strategies import STRATEGY_REGISTRY
+from src.watchdog import HeartbeatStore
 
 import jwt as _jwt  # noqa: E402  — for exception types in /auth/setup
 
@@ -118,6 +119,7 @@ drift_monitor = DriftMonitor(_DB, drift_baseline_store, DriftConfig.from_env())
 fill_store = FillStore(_DB)
 allocation_store = AllocationStore(_DB)
 explanation_store = TradeExplanationStore(_DB)
+heartbeat_store = HeartbeatStore(_DB)
 # Refresher is created on startup so tests that import this module without a
 # running event loop don't need to deal with asyncio tasks.
 _calendar_refresher: CalendarRefresher | None = None
@@ -1016,6 +1018,68 @@ def explain_trade(
     if exp is None:
         raise HTTPException(404, f"no explanation for trade {trade_id}")
     return TradeExplanationModel(**exp.to_dict())
+
+
+# ---------- Watchdog ----------
+
+class HeartbeatModel(BaseModel):
+    process_name: str
+    last_tick_at: str
+    age_seconds: float
+    tick_count: int
+    pid: int | None = None
+    last_error: str | None = None
+
+
+class WatchdogActionModel(BaseModel):
+    taken_at: str
+    action: str
+    reason: str
+    success: bool
+    detail: str | None = None
+
+
+class WatchdogResponse(BaseModel):
+    heartbeats: list[HeartbeatModel]
+    recent_actions: list[WatchdogActionModel]
+
+
+@app.get("/watchdog", response_model=WatchdogResponse)
+def watchdog_status(_user: dict = Depends(current_user)) -> WatchdogResponse:
+    """Surface heartbeat freshness and recent watchdog actions to the dashboard."""
+    from src.watchdog import Watchdog, WatchdogConfig
+    now = datetime.now(timezone.utc)
+    heartbeats = [
+        HeartbeatModel(
+            process_name=hb.process_name,
+            last_tick_at=hb.last_tick_at.isoformat(),
+            age_seconds=hb.age_seconds(now),
+            tick_count=hb.tick_count,
+            pid=hb.pid,
+            last_error=hb.last_error,
+        )
+        for hb in heartbeat_store.all()
+    ]
+    # Read recent actions directly — we don't need the decision logic here.
+    wd = Watchdog(
+        db_path=_DB,
+        heartbeat_store=heartbeat_store,
+        broker_status_store=broker_status_store,
+        restart_bot_cb=lambda: (False, "API process can't restart services"),
+        recycle_mt5_cb=lambda: (False, "API process can't recycle MT5"),
+        config=WatchdogConfig.from_env(),
+    )
+    actions = [
+        WatchdogActionModel(
+            taken_at=(a.taken_at.isoformat() if a.taken_at else ""),
+            action=a.action.value,
+            reason=a.reason,
+            success=a.success,
+            detail=a.detail,
+        )
+        for a in wd.recent_actions(limit=20)
+    ]
+    return WatchdogResponse(heartbeats=heartbeats, recent_actions=actions)
 
 
 _STATIC_DIR = Path(__file__).parent / "static"

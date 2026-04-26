@@ -42,6 +42,7 @@ from src.strategies import (
     RSIMeanReversionStrategy,
 )
 from src.utils import get_logger
+from src.watchdog import HeartbeatStore
 
 
 def build_strategies(symbols: list[str]) -> dict:
@@ -227,6 +228,14 @@ def main() -> None:
         explanation_store=(
             TradeExplanationStore(Path("data/trades.db"))
             if os.getenv("EXPLANATIONS_ENABLED", "1").strip() not in ("0", "false", "False", "")
+            else None
+        ),
+        # On by default. One UPSERT per tick lets the external watchdog
+        # detect a wedged bot. Set WATCHDOG_ENABLED=0 to skip the writes
+        # (the watchdog will then have no heartbeat to read and won't act).
+        heartbeat_store=(
+            HeartbeatStore(Path("data/trades.db"))
+            if os.getenv("WATCHDOG_ENABLED", "1").strip() not in ("0", "false", "False", "")
             else None
         ),
     )

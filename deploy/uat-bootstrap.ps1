@@ -105,6 +105,10 @@ if (-not $SkipUserSeed) {
     }
 }
 
+# --- 5b. Watchdog scheduled task -------------------------------------------
+Section "Registering watchdog scheduled task"
+& (Join-Path $PSScriptRoot "watchdog-install.ps1")
+
 # --- 6. Firewall -----------------------------------------------------------
 if (-not $SkipFirewall) {
     Section "Opening firewall for TCP/8000"

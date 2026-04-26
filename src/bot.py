@@ -35,6 +35,7 @@ from src.regime.store import RegimeStore
 from src.risk.position_sizing import lot_size_from_risk
 from src.risk.risk_manager import RiskManager
 from src.strategies.base import Signal, SignalType, Strategy
+from src.watchdog.heartbeat import HeartbeatStore
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +89,8 @@ class Bot:
         allocator_score_window: int = 30,
         db_path: str = "data/trades.db",
         explanation_store: TradeExplanationStore | None = None,
+        heartbeat_store: HeartbeatStore | None = None,
+        heartbeat_process_name: str = "bot",
     ) -> None:
         self.config = config
         self.strategies = strategies
@@ -124,6 +127,10 @@ class Bot:
         # None = "why this trade" panel won't have anything to show. Hot
         # path skips the INSERT entirely when off — zero cost when disabled.
         self.explanation_store = explanation_store
+        # None = no heartbeat published. The external watchdog can't restart
+        # a wedged bot it can't see, but the bot itself runs the same.
+        self.heartbeat_store = heartbeat_store
+        self.heartbeat_process_name = heartbeat_process_name
         self.state = BotState()
 
     # ------------------------------------------------------------------ core
@@ -133,6 +140,7 @@ class Bot:
         self.state.last_heartbeat = datetime.now(timezone.utc)
         self.state.tick_count += 1
         acted = 0
+        tick_error: str | None = None
 
         for order in list(self.executor.open_orders()):
             if self.stop_manager is not None:
@@ -187,6 +195,7 @@ class Bot:
                 if self._handle_signal(signal, strategy, regime):
                     acted += 1
 
+        self._write_heartbeat(tick_error)
         return acted
 
     def run_forever(self) -> None:
@@ -197,9 +206,24 @@ class Bot:
                 acted = self.tick()
                 if acted:
                     log.info("tick acted on %d signals", acted)
-            except Exception:
+            except Exception as exc:
                 log.exception("unhandled error in tick")
+                # tick() didn't reach its own heartbeat write — publish one
+                # here so the watchdog can see the bot is alive but erroring.
+                self._write_heartbeat(repr(exc))
             time.sleep(self.config.poll_interval_s)
+
+    def _write_heartbeat(self, last_error: str | None) -> None:
+        if self.heartbeat_store is None:
+            return
+        try:
+            self.heartbeat_store.write(
+                process_name=self.heartbeat_process_name,
+                tick_count=self.state.tick_count,
+                last_error=last_error,
+            )
+        except Exception:
+            log.exception("heartbeat write failed")
 
     def stop(self) -> None:
         self.state.running = False
