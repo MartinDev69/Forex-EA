@@ -45,6 +45,7 @@ from src.narrator import NarrativeStore, NarratorComposer, build_provider
 from src.propfirm import PropFirmGuard, PropFirmStore, policy_from_env
 from src.replay import PathRecorder, PathStore
 from src.utils import get_logger
+from src.voice import KillSwitchFlag
 from src.watchdog import HeartbeatStore
 
 
@@ -278,6 +279,14 @@ def main() -> None:
                 timeframe=settings.timeframe,
             )
             if os.getenv("REPLAY_ENABLED", "0").strip() not in ("0", "false", "False", "")
+            else None
+        ),
+        # Off by default. When on, the bot polls a SQLite flag at the top
+        # of each tick and halts cleanly if an operator has tripped the
+        # kill switch via /voice/command. One tiny SELECT per tick when on.
+        kill_switch_flag=(
+            KillSwitchFlag(Path("data/trades.db"))
+            if os.getenv("VOICE_KILLSWITCH_ENABLED", "0").strip() not in ("0", "false", "False", "")
             else None
         ),
     )

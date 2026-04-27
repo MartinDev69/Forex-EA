@@ -37,6 +37,7 @@ from src.replay.recorder import PathRecorder
 from src.risk.position_sizing import lot_size_from_risk
 from src.risk.risk_manager import RiskManager
 from src.strategies.base import Signal, SignalType, Strategy
+from src.voice.killswitch import KillSwitchFlag
 from src.watchdog.heartbeat import HeartbeatStore
 
 log = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ class Bot:
         heartbeat_process_name: str = "bot",
         narrator: NarratorComposer | None = None,
         path_recorder: PathRecorder | None = None,
+        kill_switch_flag: KillSwitchFlag | None = None,
     ) -> None:
         self.config = config
         self.strategies = strategies
@@ -142,6 +144,10 @@ class Bot:
         # closed trade traversed so /trades/{id}/replay can simulate
         # alternative SL/TP. Recorder swallows its own errors.
         self.path_recorder = path_recorder
+        # None = voice kill switch off. When set, the bot polls the flag
+        # at the top of each tick and halts cleanly if an operator has
+        # tripped it from the API.
+        self.kill_switch_flag = kill_switch_flag
         self.state = BotState()
 
     # ------------------------------------------------------------------ core
@@ -152,6 +158,16 @@ class Bot:
         self.state.tick_count += 1
         acted = 0
         tick_error: str | None = None
+
+        # Voice kill check first — if tripped, halt the loop before doing
+        # anything else this tick. We don't auto-flatten open positions:
+        # that's an operator decision (panic-close in volatile markets has
+        # bitten people) and the kill itself is enough to prevent new entries.
+        if self.kill_switch_flag is not None and self.kill_switch_flag.is_active():
+            log.warning("voice kill switch active — halting bot loop")
+            self._write_heartbeat("voice killswitch tripped")
+            self.state.running = False
+            return 0
 
         for order in list(self.executor.open_orders()):
             if self.stop_manager is not None:

@@ -68,6 +68,12 @@ from src.propfirm import PropFirmGuard, PropFirmStore, policy_from_env
 from src.replay import PathStore, ReplayEngine, ReplayRequest
 from src.regime import RegimeStore, empty_snapshot_dict
 from src.strategies import STRATEGY_REGISTRY
+from src.voice import (
+    KillSwitchFlag,
+    VoiceKillConfig,
+    VoiceLogStore,
+    match_phrase,
+)
 from src.watchdog import HeartbeatStore
 
 import jwt as _jwt  # noqa: E402  — for exception types in /auth/setup
@@ -128,6 +134,8 @@ heartbeat_store = HeartbeatStore(_DB)
 propfirm_store = PropFirmStore(_DB)
 narrative_store = NarrativeStore(_DB)
 path_store = PathStore(_DB)
+voice_kill_flag = KillSwitchFlag(_DB)
+voice_log_store = VoiceLogStore(_DB)
 # Refresher is created on startup so tests that import this module without a
 # running event loop don't need to deal with asyncio tasks.
 _calendar_refresher: CalendarRefresher | None = None
@@ -1328,6 +1336,127 @@ def propfirm_status(_user: dict = Depends(current_user)) -> PropFirmResponse:
     guard = PropFirmGuard(policy_from_env(), propfirm_store)
     snap = guard.progress(equity)
     return PropFirmResponse(enabled=True, **snap)
+
+
+# ---------- Voice kill switch ----------
+
+class VoiceCommandRequest(BaseModel):
+    transcript: str = Field(min_length=1, max_length=500)
+
+
+class VoiceCommandResponse(BaseModel):
+    matched: bool
+    phrase: str | None = None
+    score: float
+    active: bool
+    message: str
+
+
+class VoiceLogModel(BaseModel):
+    id: int
+    received_at: str
+    username: str
+    transcript: str
+    matched: bool
+    phrase: str | None = None
+    score: float
+
+
+class VoiceStatusResponse(BaseModel):
+    enabled: bool
+    active: bool
+    triggered_at: str | None = None
+    triggered_by: str | None = None
+    phrase: str | None = None
+    cleared_at: str | None = None
+    cleared_by: str | None = None
+
+
+def _voice_enabled() -> bool:
+    return os.getenv("VOICE_KILLSWITCH_ENABLED", "0").strip() not in ("0", "false", "False", "")
+
+
+@app.get("/voice/status", response_model=VoiceStatusResponse)
+def voice_status(_user: dict = Depends(current_user)) -> VoiceStatusResponse:
+    s = voice_kill_flag.state()
+    return VoiceStatusResponse(
+        enabled=_voice_enabled(),
+        active=s.active,
+        triggered_at=s.triggered_at,
+        triggered_by=s.triggered_by,
+        phrase=s.phrase,
+        cleared_at=s.cleared_at,
+        cleared_by=s.cleared_by,
+    )
+
+
+@app.post("/voice/command", response_model=VoiceCommandResponse)
+def voice_command(
+    body: VoiceCommandRequest,
+    user: dict = Depends(current_user),
+) -> VoiceCommandResponse:
+    """Receive a transcribed phrase from a client (mobile STT) and decide
+    whether it's a kill command. Every attempt — match or miss — is logged
+    for audit. Note: this endpoint is intentionally NOT behind require_2fa,
+    because the whole point of a voice kill is to halt the bot fast in an
+    emergency, possibly without unlocking the phone. Re-arming via
+    /voice/clear IS gated by 2FA — coming back online should be the slow
+    path, not the fast one.
+    """
+    if not _voice_enabled():
+        raise HTTPException(503, "voice killswitch disabled (set VOICE_KILLSWITCH_ENABLED=1)")
+    config = VoiceKillConfig.from_env()
+    result = match_phrase(body.transcript, config)
+    voice_log_store.record(username=user["username"], transcript=body.transcript, result=result)
+    if result.matched and result.phrase is not None:
+        voice_kill_flag.activate(username=user["username"], phrase=result.phrase)
+        return VoiceCommandResponse(
+            matched=True,
+            phrase=result.phrase,
+            score=result.score,
+            active=True,
+            message=f"kill switch tripped on phrase '{result.phrase}'",
+        )
+    return VoiceCommandResponse(
+        matched=False,
+        phrase=None,
+        score=result.score,
+        active=voice_kill_flag.is_active(),
+        message="no kill phrase matched",
+    )
+
+
+@app.get("/voice/log", response_model=list[VoiceLogModel])
+def voice_log(
+    limit: int = 50,
+    _user: dict = Depends(current_user),
+) -> list[VoiceLogModel]:
+    return [
+        VoiceLogModel(
+            id=e.id, received_at=e.received_at, username=e.username,
+            transcript=e.transcript, matched=e.matched,
+            phrase=e.phrase, score=e.score,
+        )
+        for e in voice_log_store.recent(limit=limit)
+    ]
+
+
+@app.post("/voice/clear", response_model=VoiceStatusResponse)
+def voice_clear(user: dict = Depends(require_2fa)) -> VoiceStatusResponse:
+    """Re-arm the bot after a kill. Gated by 2FA so you can't accidentally
+    reverse a kill the way you triggered it (a stray voice command).
+    """
+    voice_kill_flag.clear(username=user["username"])
+    s = voice_kill_flag.state()
+    return VoiceStatusResponse(
+        enabled=_voice_enabled(),
+        active=s.active,
+        triggered_at=s.triggered_at,
+        triggered_by=s.triggered_by,
+        phrase=s.phrase,
+        cleared_at=s.cleared_at,
+        cleared_by=s.cleared_by,
+    )
 
 
 _STATIC_DIR = Path(__file__).parent / "static"
