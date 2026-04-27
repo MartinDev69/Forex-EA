@@ -51,6 +51,8 @@ from src.api.broker_config import BrokerConfig, BrokerConfigStore
 from src.api.broker_status import BrokerStatusStore
 from src.api.mailer import send_setup_email
 from src.api.setup_tokens import SETUP_TTL_S, create_setup_token, decode_setup_token
+from src.api.totp import generate_secret, provisioning_uri, verify_code
+from src.api.totp_store import TOTPStore
 from src.api.users import LastAdminError, UserStore
 from src.allocator import AllocationStore
 from src.explanations import TradeExplanationStore
@@ -131,6 +133,7 @@ path_store = PathStore(_DB)
 _calendar_refresher: CalendarRefresher | None = None
 # Lazy — needs AUTH_SECRET and that check belongs on first real use, not import.
 _broker_config_store: BrokerConfigStore | None = None
+_totp_store: TOTPStore | None = None
 
 
 def _broker_store() -> BrokerConfigStore:
@@ -138,6 +141,34 @@ def _broker_store() -> BrokerConfigStore:
     if _broker_config_store is None:
         _broker_config_store = BrokerConfigStore(_DB, secret=_secret())
     return _broker_config_store
+
+
+def _totp() -> TOTPStore:
+    global _totp_store
+    if _totp_store is None:
+        _totp_store = TOTPStore(_DB, secret=_secret())
+    return _totp_store
+
+
+def require_2fa(
+    request: Request,
+    user: dict = Depends(current_user),
+) -> dict:
+    """Gate destructive operations behind a fresh TOTP code when the caller
+    has 2FA enabled. Opt-in per user — accounts without an active secret
+    pass through untouched, so existing flows keep working until an
+    operator chooses to enroll.
+    """
+    store = _totp()
+    if not store.is_enabled(user["username"]):
+        return user
+    code = (request.headers.get("X-2FA-Code") or "").strip()
+    if not code:
+        raise HTTPException(401, "2FA code required (X-2FA-Code header)")
+    secret = store.get_active_secret(user["username"])
+    if secret is None or not verify_code(secret, code):
+        raise HTTPException(401, "invalid 2FA code")
+    return user
 
 
 class LoginRequest(BaseModel):
@@ -341,7 +372,7 @@ def list_strategies(_user: dict = Depends(current_user)) -> list[StrategyRespons
 
 
 @app.post("/strategies/{name}/toggle", response_model=StrategyResponse)
-def toggle_strategy(name: str, _user: dict = Depends(current_user)) -> StrategyResponse:
+def toggle_strategy(name: str, _user: dict = Depends(require_2fa)) -> StrategyResponse:
     try:
         enabled = toggle_store.toggle(name)
     except KeyError:
@@ -368,14 +399,14 @@ def trades(limit: int = 20, _user: dict = Depends(current_user)) -> list[TradeRe
 
 
 @app.post("/bot/start")
-def start_bot(_user: dict = Depends(current_user)) -> dict[str, str]:
+def start_bot(_user: dict = Depends(require_2fa)) -> dict[str, str]:
     state.running = True
     state.last_heartbeat = datetime.utcnow()
     return {"status": "started"}
 
 
 @app.post("/bot/stop")
-def stop_bot(_user: dict = Depends(current_user)) -> dict[str, str]:
+def stop_bot(_user: dict = Depends(require_2fa)) -> dict[str, str]:
     state.running = False
     return {"status": "stopped"}
 
@@ -398,7 +429,7 @@ def get_broker_config(user: dict = Depends(current_user)) -> BrokerConfigRespons
 @app.put("/broker/config", response_model=BrokerConfigResponse)
 def save_broker_config(
     body: BrokerConfigRequest,
-    user: dict = Depends(current_user),
+    user: dict = Depends(require_2fa),
 ) -> BrokerConfigResponse:
     if body.broker not in broker_presets.PRESET_BY_ID:
         raise HTTPException(400, f"unknown broker '{body.broker}'")
@@ -416,7 +447,7 @@ def save_broker_config(
 
 
 @app.delete("/broker/config")
-def clear_broker_config(user: dict = Depends(current_user)) -> dict[str, bool]:
+def clear_broker_config(user: dict = Depends(require_2fa)) -> dict[str, bool]:
     removed = _broker_store().clear(user["username"])
     return {"removed": removed}
 
@@ -507,6 +538,7 @@ def user_pool(_admin: dict = Depends(require_admin)) -> PoolResponse:
 def refill_pool(
     target: int = 100,
     _admin: dict = Depends(require_admin),
+    _twofa: dict = Depends(require_2fa),
 ) -> PoolResponse:
     if target < 1 or target > 1000:
         raise HTTPException(400, "target must be between 1 and 1000")
@@ -519,6 +551,7 @@ def refill_pool(
 def assign_user(
     body: AssignUserRequest,
     _admin: dict = Depends(require_admin),
+    _twofa: dict = Depends(require_2fa),
 ) -> AssignUserResponse:
     """Claim an AD-ID + email setup link. The recipient picks their own password."""
     if body.ad_id == ADMIN_AD_ID or not is_user_ad_id(body.ad_id):
@@ -572,6 +605,7 @@ def _issue_setup_link(ad_id: str, email: str) -> AssignUserResponse:
 def delete_user(
     username: str,
     admin: dict = Depends(require_admin),
+    _twofa: dict = Depends(require_2fa),
 ) -> dict[str, bool]:
     if username == admin["username"]:
         raise HTTPException(400, "cannot delete your own account")
@@ -589,6 +623,7 @@ def reset_user_password(
     username: str,
     body: ResetPasswordRequest,
     _admin: dict = Depends(require_admin),
+    _twofa: dict = Depends(require_2fa),
 ) -> dict[str, bool]:
     if not user_store.exists(username):
         raise HTTPException(404, "user not found")
@@ -639,6 +674,79 @@ def complete_setup(token: str, body: SetupPasswordRequest) -> dict[str, bool]:
         raise HTTPException(400, str(e)) from None
     user_store.set_password(claims["ad_id"], pw_hash)
     return {"activated": True}
+
+
+# ---------- 2FA enrollment ----------
+
+class TOTPStatusResponse(BaseModel):
+    enabled: bool
+    pending: bool
+    enrolled_at: str | None = None
+
+
+class TOTPEnrollResponse(BaseModel):
+    secret: str
+    provisioning_uri: str
+
+
+class TOTPCodeRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=6)
+
+
+@app.get("/auth/2fa/status", response_model=TOTPStatusResponse)
+def totp_status(user: dict = Depends(current_user)) -> TOTPStatusResponse:
+    s = _totp().status(user["username"])
+    return TOTPStatusResponse(enabled=s.enabled, pending=s.pending, enrolled_at=s.enrolled_at)
+
+
+@app.post("/auth/2fa/enroll", response_model=TOTPEnrollResponse)
+def totp_enroll(user: dict = Depends(current_user)) -> TOTPEnrollResponse:
+    """Stage a fresh TOTP secret. Caller scans the otpauth URI in their
+    authenticator app and POSTs /auth/2fa/confirm with the first code.
+    Re-running overwrites the pending value but leaves an active secret
+    intact, so a botched enrollment doesn't lock the user out.
+    """
+    secret = generate_secret()
+    _totp().stage_pending(user["username"], secret)
+    return TOTPEnrollResponse(
+        secret=secret,
+        provisioning_uri=provisioning_uri(secret, account=user["username"]),
+    )
+
+
+@app.post("/auth/2fa/confirm", response_model=TOTPStatusResponse)
+def totp_confirm(
+    body: TOTPCodeRequest,
+    user: dict = Depends(current_user),
+) -> TOTPStatusResponse:
+    """Promote the pending secret to active once a valid code is presented."""
+    store = _totp()
+    pending = store.get_pending_secret(user["username"])
+    if pending is None:
+        raise HTTPException(400, "no pending enrollment — call /auth/2fa/enroll first")
+    if not verify_code(pending, body.code):
+        raise HTTPException(401, "invalid code")
+    store.activate(user["username"], pending)
+    s = store.status(user["username"])
+    return TOTPStatusResponse(enabled=s.enabled, pending=s.pending, enrolled_at=s.enrolled_at)
+
+
+@app.post("/auth/2fa/disable", response_model=TOTPStatusResponse)
+def totp_disable(
+    body: TOTPCodeRequest,
+    user: dict = Depends(current_user),
+) -> TOTPStatusResponse:
+    """Turn 2FA off. Requires a current code so a hijacked session token
+    alone can't drop the second factor.
+    """
+    store = _totp()
+    secret = store.get_active_secret(user["username"])
+    if secret is None:
+        raise HTTPException(400, "2FA is not enabled")
+    if not verify_code(secret, body.code):
+        raise HTTPException(401, "invalid code")
+    store.disable(user["username"])
+    return TOTPStatusResponse(enabled=False, pending=False, enrolled_at=None)
 
 
 class CalendarEventResponse(BaseModel):
