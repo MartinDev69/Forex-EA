@@ -1,4 +1,4 @@
-# One-shot bootstrap for a fresh Windows VPS — UAT only.
+# One-shot bootstrap for a fresh Windows VPS -- UAT only.
 #
 # Walks through:
 #   1. Prereq sanity check (Python 3.12, Git, NSSM, MT5 terminal).
@@ -9,7 +9,7 @@
 #   6. Opens TCP/8000 in Windows Firewall.
 #   7. Runs healthcheck.
 #
-# Idempotent — safe to re-run after fixing any issue. Run from elevated PowerShell:
+# Idempotent -- safe to re-run after fixing any issue. Run from elevated PowerShell:
 #   .\deploy\uat-bootstrap.ps1
 #
 # Skip flags for re-runs:
@@ -72,7 +72,7 @@ Section "Running install.ps1"
 # --- 3. Validate .env ------------------------------------------------------
 Section "Validating .env"
 $envPath = Join-Path $RepoRoot ".env"
-if (-not (Test-Path $envPath)) { throw ".env missing — install.ps1 should have created it." }
+if (-not (Test-Path $envPath)) { throw ".env missing -- install.ps1 should have created it." }
 
 $envContent = Get-Content $envPath -Raw
 $needsEdit = $false
@@ -98,7 +98,7 @@ if (-not $SkipUserSeed) {
     Write-Host "(skip with -SkipUserSeed if you already have an admin)"
     $username = Read-Host "Admin username (blank to skip)"
     if ([string]::IsNullOrWhiteSpace($username)) {
-        Write-Host "  No username entered — skipped."
+        Write-Host "  No username entered -- skipped."
     } else {
         $venvPython = Join-Path $RepoRoot "venv\Scripts\python.exe"
         & $venvPython (Join-Path $RepoRoot "scripts\create_user.py") --username $username
@@ -114,7 +114,7 @@ if (-not $SkipFirewall) {
     Section "Opening firewall for TCP/8000"
     $rule = Get-NetFirewallRule -DisplayName "ForexEA API" -ErrorAction SilentlyContinue
     if ($rule) {
-        Write-Host "  Rule already exists — skipping"
+        Write-Host "  Rule already exists -- skipping"
     } else {
         New-NetFirewallRule -DisplayName "ForexEA API" -Direction Inbound `
             -Protocol TCP -LocalPort 8000 -Action Allow | Out-Null

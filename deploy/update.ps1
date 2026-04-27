@@ -3,7 +3,7 @@
 # Run from the repo root on the VPS:
 #   .\deploy\update.ps1
 #
-# Safe to run while the bot is live — services get restarted in a controlled order.
+# Safe to run while the bot is live -- services get restarted in a controlled order.
 
 $ErrorActionPreference = "Stop"
 
@@ -20,7 +20,7 @@ $dirty = git status --porcelain
 if ($dirty) {
     Write-Warning "Working tree has uncommitted changes:"
     Write-Warning $dirty
-    throw "Refusing to update with a dirty tree — stash/commit first."
+    throw "Refusing to update with a dirty tree -- stash/commit first."
 }
 
 git pull --ff-only
@@ -29,7 +29,7 @@ if ($LASTEXITCODE -ne 0) { throw "git pull failed" }
 # --- Refresh deps ----------------------------------------------------------
 $venvPython = Join-Path $RepoRoot "venv\Scripts\python.exe"
 if (-not (Test-Path $venvPython)) {
-    throw "venv missing at $venvPython — run deploy\install.ps1 first."
+    throw "venv missing at $venvPython -- run deploy\install.ps1 first."
 }
 Write-Host "Reinstalling requirements (upgrade-only-if-needed)"
 & $venvPython -m pip install -r (Join-Path $RepoRoot "requirements.txt") | Out-Host
@@ -42,7 +42,7 @@ foreach ($svc in $services) {
         Write-Host "Restarting $svc"
         Restart-Service -Name $svc
     } else {
-        Write-Warning "Service $svc not installed — skipping."
+        Write-Warning "Service $svc not installed -- skipping."
     }
 }
 

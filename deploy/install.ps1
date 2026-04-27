@@ -39,7 +39,7 @@ if (-not (Test-Path $venv)) {
 }
 $venvPython = Join-Path $venv "Scripts\python.exe"
 if (-not (Test-Path $venvPython)) {
-    throw "venv python missing at $venvPython — venv creation failed."
+    throw "venv python missing at $venvPython -- venv creation failed."
 }
 
 # --- dependencies ----------------------------------------------------------
@@ -60,12 +60,12 @@ $envExample = Join-Path $RepoRoot ".env.example"
 if (-not (Test-Path $envPath)) {
     if (Test-Path $envExample) {
         Copy-Item $envExample $envPath
-        Write-Host "Created .env from .env.example — edit it now before starting the bot."
+        Write-Host "Created .env from .env.example -- edit it now before starting the bot."
     } else {
         Write-Warning ".env.example not found. Create a .env manually."
     }
 } else {
-    Write-Host ".env already exists — leaving it alone."
+    Write-Host ".env already exists -- leaving it alone."
 }
 
 # --- AUTH_SECRET auto-fill ------------------------------------------------
@@ -73,7 +73,7 @@ if (-not (Test-Path $envPath)) {
 # operator can't accidentally boot a service with no signing key.
 $envContent = Get-Content $envPath -Raw
 if ($envContent -match "(?m)^AUTH_SECRET=\s*$") {
-    Write-Host "AUTH_SECRET is empty — generating one"
+    Write-Host "AUTH_SECRET is empty -- generating one"
     $newSecret = & $venvPython -c "import secrets; print(secrets.token_urlsafe(48))"
     $envContent = [regex]::Replace($envContent, "(?m)^AUTH_SECRET=\s*$", "AUTH_SECRET=$newSecret")
     Set-Content -Path $envPath -Value $envContent -NoNewline

@@ -3,7 +3,7 @@
 # Runs scripts/watchdog.py every 60s under SYSTEM, so it has rights to
 # Restart-Service and taskkill MT5 even if the operator user is logged out.
 #
-# Idempotent — re-running replaces the existing task.
+# Idempotent -- re-running replaces the existing task.
 
 param(
     [int]$IntervalSeconds = 60,
@@ -17,7 +17,7 @@ Set-Location $RepoRoot
 
 $venvPython = Join-Path $RepoRoot "venv\Scripts\python.exe"
 if (-not (Test-Path $venvPython)) {
-    throw "venv missing at $venvPython — run .\deploy\install.ps1 first."
+    throw "venv missing at $venvPython -- run .\deploy\install.ps1 first."
 }
 
 $watchdogScript = Join-Path $RepoRoot "scripts\watchdog.py"
@@ -29,7 +29,7 @@ $logsDir = Join-Path $RepoRoot "logs"
 if (-not (Test-Path $logsDir)) { New-Item -ItemType Directory -Path $logsDir | Out-Null }
 
 # Wrap the python call in cmd /c so we can redirect stdout/stderr to a log
-# file. The log gets one line per tick — easy to tail with service-control.
+# file. The log gets one line per tick -- easy to tail with service-control.
 $logFile = Join-Path $logsDir "watchdog.log"
 $cmd = "/c `"$venvPython`" `"$watchdogScript`" >> `"$logFile`" 2>&1"
 
@@ -37,7 +37,7 @@ $cmd = "/c `"$venvPython`" `"$watchdogScript`" >> `"$logFile`" 2>&1"
 $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $cmd -WorkingDirectory $RepoRoot
 
 # Repetition every $IntervalSeconds, indefinitely. PowerShell's
-# RepetitionInterval needs a TimeSpan ≥ 1 minute on most builds, so we
+# RepetitionInterval needs a TimeSpan >= 1 minute on most builds, so we
 # clamp 60s as the floor.
 $intervalSpan = if ($IntervalSeconds -lt 60) { New-TimeSpan -Seconds 60 } else { New-TimeSpan -Seconds $IntervalSeconds }
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date)

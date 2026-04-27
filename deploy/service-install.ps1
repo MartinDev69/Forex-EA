@@ -1,12 +1,12 @@
 # Register the bot + API as Windows services using NSSM.
 #
 # Prerequisites:
-#   * NSSM installed and on PATH (https://nssm.cc — chocolatey: `choco install nssm`).
+#   * NSSM installed and on PATH (https://nssm.cc -- chocolatey: `choco install nssm`).
 #   * .\deploy\install.ps1 has been run (venv exists).
 #
 # Services created:
-#   ForexEABot — runs main.py in a loop.
-#   ForexEAApi — uvicorn serving src.api.server:app on port 8000.
+#   ForexEABot -- runs main.py in a loop.
+#   ForexEAApi -- uvicorn serving src.api.server:app on port 8000.
 #
 # Both run as the current user by default. For production, use
 # `nssm set <svc> ObjectName <user> <pass>` to run under a dedicated service account.
@@ -24,7 +24,7 @@ if (-not $nssm) {
 
 $venvPython = Join-Path $RepoRoot "venv\Scripts\python.exe"
 if (-not (Test-Path $venvPython)) {
-    throw "venv missing at $venvPython — run .\deploy\install.ps1 first."
+    throw "venv missing at $venvPython -- run .\deploy\install.ps1 first."
 }
 
 $logsDir = Join-Path $RepoRoot "logs"
@@ -42,7 +42,7 @@ function Install-Svc {
 
     $existing = Get-Service -Name $Name -ErrorAction SilentlyContinue
     if ($existing) {
-        Write-Host "Service $Name already exists — stopping and reconfiguring"
+        Write-Host "Service $Name already exists -- stopping and reconfiguring"
         & nssm stop $Name confirm | Out-Null
         & nssm remove $Name confirm | Out-Null
     }
@@ -67,7 +67,7 @@ Install-Svc `
     -StdoutLog (Join-Path $logsDir "bot.stdout.log") `
     -StderrLog (Join-Path $logsDir "bot.stderr.log")
 
-# Environment for the bot service — tells main.py to use real MT5 and load the ML model if present.
+# Environment for the bot service -- tells main.py to use real MT5 and load the ML model if present.
 & nssm set ForexEABot AppEnvironmentExtra "USE_MT5=1" | Out-Null
 
 # --- API -------------------------------------------------------------------
