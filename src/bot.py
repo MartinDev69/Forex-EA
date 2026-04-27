@@ -33,6 +33,7 @@ from src.monitoring.telegram_notifier import NoOpNotifier
 from src.narrator.composer import NarratorComposer
 from src.regime.classifier import RegimeClassifier, RegimeSnapshot
 from src.regime.store import RegimeStore
+from src.replay.recorder import PathRecorder
 from src.risk.position_sizing import lot_size_from_risk
 from src.risk.risk_manager import RiskManager
 from src.strategies.base import Signal, SignalType, Strategy
@@ -93,6 +94,7 @@ class Bot:
         heartbeat_store: HeartbeatStore | None = None,
         heartbeat_process_name: str = "bot",
         narrator: NarratorComposer | None = None,
+        path_recorder: PathRecorder | None = None,
     ) -> None:
         self.config = config
         self.strategies = strategies
@@ -136,6 +138,10 @@ class Bot:
         # None = no LLM post-trade narration. When set, runs once per close
         # in best-effort mode — failures log but never crash the close path.
         self.narrator = narrator
+        # None = no replay path captured. When set, records the bars a
+        # closed trade traversed so /trades/{id}/replay can simulate
+        # alternative SL/TP. Recorder swallows its own errors.
+        self.path_recorder = path_recorder
         self.state = BotState()
 
     # ------------------------------------------------------------------ core
@@ -526,6 +532,16 @@ class Bot:
         latency_ms = (time.perf_counter() - send_started) * 1000.0
         self._record_fill(closed, "CLOSE", requested_close, latency_ms)
         self.journal.record_close(closed)
+        if self.path_recorder is not None and closed.closed_at is not None:
+            try:
+                self.path_recorder.record(
+                    trade_id=closed.id,
+                    symbol=closed.symbol,
+                    opened_at=closed.opened_at,
+                    closed_at=closed.closed_at,
+                )
+            except Exception:
+                log.exception("path recorder failed for trade %d", closed.id)
         if self.narrator is not None:
             try:
                 self.narrator.narrate(closed.id)

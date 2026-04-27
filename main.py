@@ -43,6 +43,7 @@ from src.strategies import (
 )
 from src.narrator import NarrativeStore, NarratorComposer, build_provider
 from src.propfirm import PropFirmGuard, PropFirmStore, policy_from_env
+from src.replay import PathRecorder, PathStore
 from src.utils import get_logger
 from src.watchdog import HeartbeatStore
 
@@ -265,6 +266,18 @@ def main() -> None:
                 db_path="data/trades.db",
             )
             if os.getenv("NARRATOR_ENABLED", "0").strip() not in ("0", "false", "False", "")
+            else None
+        ),
+        # Off by default. Captures OHLC bars over the trade's lifecycle so
+        # /trades/{id}/replay can walk them with tweaked SL/TP. One small
+        # batch INSERT per close — recorder swallows feed errors.
+        path_recorder=(
+            PathRecorder(
+                feed=data_feed,
+                store=PathStore(Path("data/trades.db")),
+                timeframe=settings.timeframe,
+            )
+            if os.getenv("REPLAY_ENABLED", "0").strip() not in ("0", "false", "False", "")
             else None
         ),
     )

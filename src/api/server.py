@@ -63,6 +63,7 @@ from src.execution.journal import TradeJournal
 from src.execution.strategy_toggles import DEFAULT_STRATEGY_FLAGS, StrategyToggleStore
 from src.narrator import NarrativeStore
 from src.propfirm import PropFirmGuard, PropFirmStore, policy_from_env
+from src.replay import PathStore, ReplayEngine, ReplayRequest
 from src.regime import RegimeStore, empty_snapshot_dict
 from src.strategies import STRATEGY_REGISTRY
 from src.watchdog import HeartbeatStore
@@ -124,6 +125,7 @@ explanation_store = TradeExplanationStore(_DB)
 heartbeat_store = HeartbeatStore(_DB)
 propfirm_store = PropFirmStore(_DB)
 narrative_store = NarrativeStore(_DB)
+path_store = PathStore(_DB)
 # Refresher is created on startup so tests that import this module without a
 # running event loop don't need to deal with asyncio tasks.
 _calendar_refresher: CalendarRefresher | None = None
@@ -1051,6 +1053,65 @@ def trade_narrative(
     if n is None:
         raise HTTPException(404, f"no narrative for trade {trade_id}")
     return TradeNarrativeModel(**n.to_dict())
+
+
+# ---------- Replay-with-different-params ----------
+
+class ReplayRequestBody(BaseModel):
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    sl_mult: float | None = None
+    tp_mult: float | None = None
+
+
+class ReplayResponse(BaseModel):
+    trade_id: int
+    side: str
+    symbol: str
+    entry_price: float
+    original_stop: float
+    original_target: float
+    original_pnl: float
+    original_close_reason: str | None = None
+    replay_stop: float
+    replay_target: float
+    replay_exit_price: float | None = None
+    replay_close_reason: str
+    replay_pnl: float
+    replay_r_multiple: float | None = None
+    pnl_delta: float
+    bars_walked: int
+
+
+@app.post("/trades/{trade_id}/replay", response_model=ReplayResponse)
+def replay_trade(
+    trade_id: int,
+    body: ReplayRequestBody,
+    _user: dict = Depends(current_user),
+) -> ReplayResponse:
+    """Re-walk a closed trade with tweaked SL/TP and report the alternative
+    outcome. Either pass absolute prices (`stop_loss`, `take_profit`) or
+    multipliers (`sl_mult`, `tp_mult`) applied to the original distance
+    from entry. With an empty body the replay returns the original outcome
+    unchanged — useful for sanity-checking the engine.
+
+    Returns 404 only when the trade itself doesn't exist or hasn't closed.
+    A trade with no recorded path still returns 200 with `replay_close_reason
+    = 'no_path'` so the UI can explain why no alternative was computed.
+    """
+    engine = ReplayEngine(path_store, db_path=_DB)
+    result = engine.replay(
+        trade_id,
+        ReplayRequest(
+            stop_loss=body.stop_loss,
+            take_profit=body.take_profit,
+            sl_mult=body.sl_mult,
+            tp_mult=body.tp_mult,
+        ),
+    )
+    if result is None:
+        raise HTTPException(404, f"trade {trade_id} not found or still open")
+    return ReplayResponse(**result.to_dict())
 
 
 # ---------- Watchdog ----------
