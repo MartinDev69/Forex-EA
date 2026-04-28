@@ -196,7 +196,7 @@ def main() -> None:
         regime_classifier = RegimeClassifier(RegimeConfig.from_env())
         regime_store = RegimeStore(Path("data/trades.db"))
         log.info(
-            "Regime classifier enabled (ADX≥%.0f → trend). Strategies with "
+            "Regime classifier enabled (ADX>=%.0f -> trend). Strategies with "
             "preferred_regimes not matching the current regime will be gated.",
             regime_classifier.config.adx_trend_threshold,
         )

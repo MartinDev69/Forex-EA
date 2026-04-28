@@ -68,7 +68,9 @@ Install-Svc `
     -StderrLog (Join-Path $logsDir "bot.stderr.log")
 
 # Environment for the bot service -- tells main.py to use real MT5 and load the ML model if present.
-& nssm set ForexEABot AppEnvironmentExtra "USE_MT5=1" | Out-Null
+# PYTHONUTF8=1 forces Python's UTF-8 mode so log lines with non-ASCII chars don't
+# blow up when Windows' default code page is cp1252 (services have no console).
+& nssm set ForexEABot AppEnvironmentExtra "USE_MT5=1" "PYTHONUTF8=1" | Out-Null
 
 # --- API -------------------------------------------------------------------
 $uvicornExe = Join-Path $RepoRoot "venv\Scripts\uvicorn.exe"
@@ -79,6 +81,7 @@ Install-Svc `
     -Cwd $RepoRoot `
     -StdoutLog (Join-Path $logsDir "api.stdout.log") `
     -StderrLog (Join-Path $logsDir "api.stderr.log")
+& nssm set ForexEAApi AppEnvironmentExtra "PYTHONUTF8=1" | Out-Null
 
 # --- Start -----------------------------------------------------------------
 Write-Host "Starting services"
