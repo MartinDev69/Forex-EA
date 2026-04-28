@@ -366,9 +366,13 @@ def get_status(_user: dict = Depends(current_user)) -> StatusResponse:
 @app.get("/account", response_model=AccountResponse)
 def account(_user: dict = Depends(current_user)) -> AccountResponse:
     today = journal.summary_today()
+    status = broker_status_store.read()
+    info = status.account_info if status and status.connected else None
+    balance = info["balance"] if info and "balance" in info else state.balance
+    equity = info["equity"] if info and "equity" in info else balance + today["pnl"]
     return AccountResponse(
-        balance=state.balance,
-        equity=state.balance + today["pnl"],
+        balance=balance,
+        equity=equity,
         open_positions=_open_positions(),
         daily_pnl=today["pnl"],
     )
@@ -487,15 +491,32 @@ def test_broker(
     try:
         client.connect()
         info = client.account_info()
-        return BrokerTestResponse(ok=True, account={
-            "login": info.login,
-            "server": info.server,
+        account_info = {
             "balance": info.balance,
             "equity": info.equity,
             "currency": info.currency,
             "leverage": info.leverage,
+        }
+        broker_status_store.write(
+            connected=True,
+            broker=body.broker,
+            server=info.server,
+            login=info.login,
+            account_info=account_info,
+        )
+        return BrokerTestResponse(ok=True, account={
+            "login": info.login,
+            "server": info.server,
+            **account_info,
         })
     except Exception as e:
+        broker_status_store.write(
+            connected=False,
+            broker=body.broker,
+            server=body.server,
+            login=body.login,
+            last_error=str(e),
+        )
         return BrokerTestResponse(ok=False, error=str(e))
     finally:
         try:

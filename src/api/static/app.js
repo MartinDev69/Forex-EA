@@ -481,9 +481,7 @@ document.addEventListener("alpine:init", () => {
 
     onBrokerChange() {
       const p = this.activePreset();
-      // Suggest the first server if the field is empty, and the hint path if empty.
       if (p && p.servers.length && !this.form.server) this.form.server = p.servers[0];
-      if (p && p.mt5_path_hint && !this.form.mt5_path) this.form.mt5_path = p.mt5_path_hint;
     },
 
     canSubmit() {
