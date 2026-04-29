@@ -189,7 +189,14 @@ class Bot:
         for symbol, strategies in self.strategies.items():
             if not strategies:
                 continue
-            bars = self.feed.latest_bars(symbol, self.config.timeframe, self.config.bars_per_request)
+            try:
+                bars = self.feed.latest_bars(symbol, self.config.timeframe, self.config.bars_per_request)
+            except Exception as exc:
+                # One bad symbol shouldn't crash the whole tick — most often
+                # this is a Market Watch / naming mismatch on a single pair.
+                # Log it and move on so the rest of the symbols still trade.
+                log.warning("feed failed for %s: %s", symbol, exc)
+                continue
             if len(bars) < 10:
                 continue
 

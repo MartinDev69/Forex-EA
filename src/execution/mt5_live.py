@@ -70,11 +70,32 @@ class MT5DataFeed:
     def __init__(self, mt5_module: Any | None = None) -> None:
         self._mt5 = mt5_module if mt5_module is not None else _load_mt5()
         _require_mt5(self._mt5)
+        # Track which symbols we've already pushed into Market Watch so we
+        # only pay the symbol_select call once per symbol per process. MT5
+        # won't serve copy_rates for symbols that aren't selected, which
+        # silently breaks any pair the operator adds via SYMBOLS unless we
+        # do it ourselves.
+        self._selected: set[str] = set()
+
+    def _ensure_selected(self, symbol: str) -> None:
+        if symbol in self._selected:
+            return
+        # symbol_select returns True when the symbol exists on this server
+        # (whether or not it was already selected). False = symbol not on the
+        # server at all — usually a naming mismatch (e.g. broker uses XAUUSDm).
+        if not self._mt5.symbol_select(symbol, True):
+            last_err = getattr(self._mt5, "last_error", lambda: "unknown")()
+            raise RuntimeError(
+                f"symbol_select({symbol}) failed: {last_err}. "
+                f"Check the symbol name on this broker server."
+            )
+        self._selected.add(symbol)
 
     def latest_bars(self, symbol: str, timeframe: str, count: int) -> pd.DataFrame:
         tf = TIMEFRAME_MAP.get(timeframe.upper())
         if tf is None:
             raise ValueError(f"Unknown timeframe: {timeframe}")
+        self._ensure_selected(symbol)
         rates = self._mt5.copy_rates_from_pos(symbol, tf, 0, count)
         if rates is None or len(rates) == 0:
             last_err = getattr(self._mt5, "last_error", lambda: "unknown")()

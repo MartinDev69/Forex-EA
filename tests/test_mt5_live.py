@@ -93,6 +93,11 @@ class _FakeMT5:
     def symbol_info(self, symbol):
         return self.symbol_infos.get(symbol)
 
+    def symbol_select(self, symbol, enable):
+        # Mirror the real API: returns True if the symbol exists on this
+        # "server" (we use the symbol_infos dict as the universe).
+        return symbol in self.symbol_infos
+
     def account_info(self):
         return self.account
 
