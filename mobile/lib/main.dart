@@ -10,14 +10,26 @@ import 'theme.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await loadThemeMode();
-  // Probe quick-unlock state once at startup so the first frame routes
-  // straight to lock or login without an intermediate spinner.
-  final qu = await QuickUnlock.instance.isEnabled();
+  // Defensive: secure storage init can fail on rooted/jailbroken devices or
+  // first launch after an OS upgrade. Treat any failure as "no quick unlock"
+  // so the app falls back to the password screen instead of crashing.
+  bool qu = false;
+  try {
+    qu = await QuickUnlock.instance.isEnabled();
+  } catch (_) {
+    qu = false;
+  }
   runApp(AntiGreedApp(
     apiClient: ApiClient(baseUrl: apiBaseUrl),
     startWithQuickUnlock: qu,
   ));
 }
+
+/// How long the app can be in the background before we re-show the lock
+/// screen on resume. Short enough that an unattended phone can't be picked
+/// up and casually browsed; long enough that a quick switch to a 2FA app
+/// or copy-paste from another tab doesn't force a re-unlock.
+const Duration _autoLockAfter = Duration(seconds: 30);
 
 class AntiGreedApp extends StatefulWidget {
   const AntiGreedApp({
@@ -33,17 +45,46 @@ class AntiGreedApp extends StatefulWidget {
   State<AntiGreedApp> createState() => _AntiGreedAppState();
 }
 
-class _AntiGreedAppState extends State<AntiGreedApp> {
-  // null     → no token yet, decide between lock and login
-  // 'lock'   → show LockScreen (quick unlock available)
-  // 'login'  → show LoginScreen (cold sign-in)
-  // 'home'   → show HomeScreen (token live)
+class _AntiGreedAppState extends State<AntiGreedApp> with WidgetsBindingObserver {
+  // 'lock'  → biometric + PIN screen (quick unlock is enabled)
+  // 'login' → password screen (cold start or user opted out)
+  // 'home'  → main app (token live)
   late String _route;
+  DateTime? _backgroundedAt;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _route = widget.startWithQuickUnlock ? 'lock' : 'login';
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      _backgroundedAt = DateTime.now();
+    } else if (state == AppLifecycleState.resumed) {
+      _maybeRelock();
+    }
+  }
+
+  Future<void> _maybeRelock() async {
+    final stamp = _backgroundedAt;
+    _backgroundedAt = null;
+    if (stamp == null) return;
+    if (_route != 'home') return; // already on lock/login — nothing to do
+    if (DateTime.now().difference(stamp) < _autoLockAfter) return;
+    if (!await QuickUnlock.instance.isEnabled()) return;
+    // Drop the live token so a stolen phone can't keep using it.
+    widget.apiClient.logout();
+    if (!mounted) return;
+    setState(() => _route = 'lock');
   }
 
   void _toLogin() => setState(() => _route = 'login');
@@ -70,7 +111,7 @@ class _AntiGreedAppState extends State<AntiGreedApp> {
       case 'home':
         body = HomeScreen(
           apiClient: widget.apiClient,
-          onSignedOut: () => _signOut(),
+          onSignedOut: _signOut,
         );
         break;
       case 'login':

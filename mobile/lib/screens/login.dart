@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../services/quick_unlock.dart';
+import 'pin_setup.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.apiClient, required this.onSignedIn});
@@ -16,9 +17,6 @@ class _LoginScreenState extends State<LoginScreen> {
   final _pass = TextEditingController();
   bool _busy = false;
   String? _error;
-  // Default-on so the next launch is one tap away. We still always confirm
-  // it's available on this device before saving anything.
-  bool _enableQuickUnlock = true;
 
   @override
   void dispose() {
@@ -38,20 +36,103 @@ class _LoginScreenState extends State<LoginScreen> {
       final username = _user.text.trim();
       final password = _pass.text;
       await widget.apiClient.login(username, password);
-      if (_enableQuickUnlock && await QuickUnlock.instance.isAvailable()) {
-        await QuickUnlock.instance.enable(username: username, password: password);
-      }
+      // Sign-in succeeded. Offer quick unlock as an optional follow-up,
+      // but never block the user from getting to the dashboard. If they
+      // skip, dismiss, or any step fails, sign-in still completes.
+      await _maybeOfferQuickUnlock(username: username, password: password);
       if (!mounted) return;
       widget.onSignedIn();
     } on ApiException catch (e) {
       if (!mounted) return;
-      setState(() => _error = e.body);
-    } catch (e) {
+      setState(() => _error = e.detail);
+    } catch (_) {
       if (!mounted) return;
       setState(() => _error = 'Login failed. Check the API URL and try again.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _maybeOfferQuickUnlock({
+    required String username,
+    required String password,
+  }) async {
+    if (!await QuickUnlock.instance.isDeviceSecure()) return;
+    if (!mounted) return;
+    final wantsIt = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Set up quick unlock?'),
+        content: const Text(
+          'Skip the password on the next launch by unlocking with a 4–6 digit '
+          'PIN, optionally backed by Face ID / fingerprint.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Set up'),
+          ),
+        ],
+      ),
+    );
+    if (wantsIt != true) return;
+
+    if (!mounted) return;
+    final pin = await showPinSetup(context);
+    if (pin == null) return; // user cancelled
+
+    bool useBiometrics = false;
+    if (await QuickUnlock.instance.hasBiometricEnrolled()) {
+      if (!mounted) return;
+      final wantBio = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Enable biometrics too?'),
+          content: const Text(
+            'Use Face ID / fingerprint as a faster shortcut. Your PIN still '
+            'works as a fallback any time.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('PIN only'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Enable'),
+            ),
+          ],
+        ),
+      );
+      if (wantBio == true) {
+        // Verify the prompt actually works on this device before we trust
+        // it for unlock — otherwise the user might enable biometrics they
+        // can't actually pass and get stuck on the lock screen.
+        useBiometrics = await QuickUnlock.instance.testBiometric();
+        if (!useBiometrics && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text(
+              'Biometric check didn\'t pass — saved with PIN only.',
+            )),
+          );
+        }
+      }
+    }
+
+    await QuickUnlock.instance.enable(
+      username: username,
+      password: password,
+      pin: pin,
+      useBiometrics: useBiometrics,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Quick unlock enabled.')),
+    );
   }
 
   @override
@@ -120,22 +201,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                   ],
-                  const SizedBox(height: 8),
-                  CheckboxListTile(
-                    value: _enableQuickUnlock,
-                    onChanged: _busy
-                        ? null
-                        : (v) => setState(() => _enableQuickUnlock = v ?? false),
-                    title: const Text('Enable biometrics / PIN unlock'),
-                    subtitle: Text(
-                      'Skip the password on next launch.',
-                      style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
-                    ),
-                    controlAffinity: ListTileControlAffinity.leading,
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                  ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 20),
                   SizedBox(
                     width: double.infinity,
                     height: 48,

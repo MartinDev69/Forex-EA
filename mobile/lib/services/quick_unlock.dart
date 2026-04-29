@@ -1,20 +1,33 @@
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:local_auth/local_auth.dart';
 
-/// Stores the user's AD-ID and password in platform-encrypted storage
-/// (iOS Keychain / Android Keystore-backed EncryptedSharedPreferences) so we
-/// can re-issue a fresh token after a biometric/PIN unlock without making the
-/// user retype their password every launch.
+/// Two-factor app unlock: an app-specific PIN that always works, plus an
+/// optional biometric shortcut layered on top. Both unlock the same saved
+/// AD-ID + password, which is then handed back to the API client to mint a
+/// fresh JWT — we never persist the JWT, only the credentials, and only
+/// inside platform-encrypted storage (iOS Keychain / Android Keystore).
 class QuickUnlock {
   QuickUnlock._();
   static final QuickUnlock instance = QuickUnlock._();
 
-  static const _kEnabled = 'qu_enabled';
+  // Storage keys — namespaced so we can wipe/migrate without nuking other data.
+  static const _kEnabled = 'qu_enabled_v2';
   static const _kUsername = 'qu_username';
   static const _kPassword = 'qu_password';
+  static const _kPinHash = 'qu_pin_hash';
+  static const _kPinSalt = 'qu_pin_salt';
+  static const _kBiometricsOn = 'qu_biometrics_on';
+  static const _kFailedAttempts = 'qu_failed_attempts';
 
-  // Use EncryptedSharedPreferences on Android — survives backup, faster than
-  // the AndroidKeyStore-only path, still backed by a Keystore-protected key.
+  // 5 wrong PINs in a row → wipe everything. Forces the user back to a full
+  // password sign-in. Lower than the typical 10 because the "attacker" here
+  // already has physical access to an unlocked device.
+  static const int _maxFailedAttempts = 5;
+
   final FlutterSecureStorage _storage = const FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
     iOptions: IOSOptions(
@@ -24,69 +37,158 @@ class QuickUnlock {
 
   final LocalAuthentication _auth = LocalAuthentication();
 
-  /// True only if the user has explicitly opted in AND we have creds saved.
-  Future<bool> isEnabled() async {
-    final flag = await _storage.read(key: _kEnabled);
-    if (flag != '1') return false;
-    final user = await _storage.read(key: _kUsername);
-    final pass = await _storage.read(key: _kPassword);
-    return user != null && pass != null;
-  }
+  // ----- Capability ---------------------------------------------------------
 
-  /// True if the device has biometric hardware OR a device PIN/passcode set.
-  /// We accept either — local_auth will fall back to device credential when
-  /// biometrics aren't enrolled.
-  Future<bool> isAvailable() async {
+  /// True if the device has a screen lock set (biometric or PIN/passcode).
+  /// We require this to attempt biometric prompts at all.
+  Future<bool> isDeviceSecure() async {
     try {
-      final supported = await _auth.isDeviceSupported();
-      if (!supported) return false;
-      final canCheck = await _auth.canCheckBiometrics;
-      // canCheckBiometrics is false on devices with only a PIN — but we still
-      // want to allow that path, so isDeviceSupported is the real gate.
-      return canCheck || supported;
+      return await _auth.isDeviceSupported();
     } catch (_) {
       return false;
     }
   }
 
-  /// Persist creds and turn the flag on. Caller is responsible for confirming
-  /// the user actually wants this (don't enable silently after every login).
-  Future<void> enable({required String username, required String password}) async {
+  /// True if at least one biometric is enrolled (Face ID, Touch ID,
+  /// fingerprint). When false, we still allow quick unlock — just PIN-only.
+  Future<bool> hasBiometricEnrolled() async {
+    try {
+      if (!await _auth.isDeviceSupported()) return false;
+      final list = await _auth.getAvailableBiometrics();
+      return list.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // ----- State --------------------------------------------------------------
+
+  /// True only if the user has explicitly opted in AND we have a PIN saved.
+  Future<bool> isEnabled() async {
+    try {
+      if (await _storage.read(key: _kEnabled) != '1') return false;
+      final hash = await _storage.read(key: _kPinHash);
+      final salt = await _storage.read(key: _kPinSalt);
+      return hash != null && salt != null;
+    } catch (_) {
+      // Secure storage init can fail on rooted/jailbroken devices or on
+      // first launch after an OS upgrade. Treat as "not enabled" so the
+      // user falls back to the password screen instead of a crash.
+      return false;
+    }
+  }
+
+  /// Did the user opt to use biometrics in addition to the PIN?
+  Future<bool> isBiometricsOn() async {
+    if (!await isEnabled()) return false;
+    return (await _storage.read(key: _kBiometricsOn)) == '1';
+  }
+
+  Future<int> failedAttempts() async {
+    final s = await _storage.read(key: _kFailedAttempts);
+    return int.tryParse(s ?? '') ?? 0;
+  }
+
+  Future<int> attemptsRemaining() async {
+    return _maxFailedAttempts - await failedAttempts();
+  }
+
+  // ----- Enable / disable ---------------------------------------------------
+
+  /// Persist creds + PIN + biometric preference. Caller is responsible for
+  /// confirming the device supports biometric *before* passing
+  /// `useBiometrics: true`.
+  Future<void> enable({
+    required String username,
+    required String password,
+    required String pin,
+    required bool useBiometrics,
+  }) async {
+    _validatePin(pin);
+    final salt = _randomSalt();
+    final hash = _hashPin(pin, salt);
     await _storage.write(key: _kUsername, value: username);
     await _storage.write(key: _kPassword, value: password);
+    await _storage.write(key: _kPinHash, value: hash);
+    await _storage.write(key: _kPinSalt, value: salt);
+    await _storage.write(key: _kBiometricsOn, value: useBiometrics ? '1' : '0');
+    await _storage.write(key: _kFailedAttempts, value: '0');
     await _storage.write(key: _kEnabled, value: '1');
   }
 
-  /// Wipe everything. Called on sign-out, after a 401 (creds rotated server
-  /// side), or when the user disables quick unlock from settings.
+  /// Wipe everything. Called on sign-out, on too many PIN failures, or when
+  /// the saved creds no longer authenticate against the server.
   Future<void> disable() async {
-    await _storage.delete(key: _kEnabled);
-    await _storage.delete(key: _kUsername);
-    await _storage.delete(key: _kPassword);
+    try {
+      await _storage.deleteAll();
+    } catch (_) {
+      // best-effort — secure storage might already be unavailable
+    }
   }
 
-  /// Read saved creds AFTER a successful unlock prompt. Returns null on
-  /// cancel, fail, or if quick unlock isn't enabled.
-  Future<({String username, String password})?> unlockAndRead() async {
-    final ok = await _prompt();
+  // ----- Unlock paths -------------------------------------------------------
+
+  /// Tries the system biometric/credential prompt. Returns saved creds on
+  /// success, null on cancel or any failure. Does NOT count toward PIN
+  /// lockout — biometric and PIN failures are separate.
+  Future<({String username, String password})?> unlockWithBiometrics() async {
+    if (!await isBiometricsOn()) return null;
+    final ok = await _runBiometricPrompt(reason: 'Unlock AntiGreed');
     if (!ok) return null;
+    return _readCreds();
+  }
+
+  /// Verify a user-supplied PIN. Returns saved creds on success.
+  /// On failure, increments the lockout counter and wipes if the cap is hit.
+  Future<UnlockResult> unlockWithPin(String pin) async {
+    final salt = await _storage.read(key: _kPinSalt);
+    final hash = await _storage.read(key: _kPinHash);
+    if (salt == null || hash == null) {
+      return UnlockResult.notEnabled();
+    }
+    if (_hashPin(pin, salt) == hash) {
+      await _storage.write(key: _kFailedAttempts, value: '0');
+      final creds = await _readCreds();
+      if (creds == null) return UnlockResult.notEnabled();
+      return UnlockResult.success(creds);
+    }
+    final next = (await failedAttempts()) + 1;
+    if (next >= _maxFailedAttempts) {
+      await disable();
+      return UnlockResult.lockedOut();
+    }
+    await _storage.write(key: _kFailedAttempts, value: '$next');
+    return UnlockResult.wrongPin(_maxFailedAttempts - next);
+  }
+
+  /// Run a biometric prompt without unlocking — used during enable() flow
+  /// to *verify the device can authenticate this user* before we trust
+  /// quick unlock with their creds.
+  Future<bool> testBiometric() async {
+    if (!await hasBiometricEnrolled()) return false;
+    return _runBiometricPrompt(reason: 'Confirm to enable quick unlock');
+  }
+
+  // ----- Internals ----------------------------------------------------------
+
+  Future<({String username, String password})?> _readCreds() async {
     final user = await _storage.read(key: _kUsername);
     final pass = await _storage.read(key: _kPassword);
     if (user == null || pass == null) return null;
     return (username: user, password: pass);
   }
 
-  Future<bool> _prompt() async {
+  Future<bool> _runBiometricPrompt({required String reason}) async {
     try {
       return await _auth.authenticate(
-        localizedReason: 'Unlock AntiGreed',
+        localizedReason: reason,
         options: const AuthenticationOptions(
-          // false = allow PIN/passcode fallback when biometrics fail or
-          // aren't enrolled. Matches what the user expects from "PIN or
-          // biometrics".
-          biometricOnly: false,
+          // We have our own PIN as fallback, so reject device-credential
+          // fallback here — any failure should drop the user to our PIN
+          // screen, not let them in with the device passcode (which might
+          // be different from their app PIN).
+          biometricOnly: true,
           stickyAuth: true,
-          // Keep the system-modal nature — don't show our own UI behind it.
           useErrorDialogs: true,
         ),
       );
@@ -94,4 +196,53 @@ class QuickUnlock {
       return false;
     }
   }
+
+  void _validatePin(String pin) {
+    if (pin.length < 4 || pin.length > 6) {
+      throw ArgumentError('PIN must be 4-6 digits');
+    }
+    if (!RegExp(r'^[0-9]+$').hasMatch(pin)) {
+      throw ArgumentError('PIN must be digits only');
+    }
+  }
+
+  String _randomSalt() {
+    final r = Random.secure();
+    final bytes = List<int>.generate(16, (_) => r.nextInt(256));
+    return base64Url.encode(bytes);
+  }
+
+  String _hashPin(String pin, String salt) {
+    final input = utf8.encode('$salt:$pin');
+    return sha256.convert(input).toString();
+  }
+}
+
+/// Tagged-union return for `unlockWithPin`. Lets the screen tell the user
+/// "wrong PIN, 3 attempts left" vs "you've been locked out, sign in again."
+sealed class UnlockResult {
+  const UnlockResult();
+  factory UnlockResult.success(({String username, String password}) creds) =
+      UnlockSuccess;
+  factory UnlockResult.wrongPin(int attemptsLeft) = UnlockWrongPin;
+  factory UnlockResult.lockedOut() = UnlockLockedOut;
+  factory UnlockResult.notEnabled() = UnlockNotEnabled;
+}
+
+class UnlockSuccess extends UnlockResult {
+  const UnlockSuccess(this.creds);
+  final ({String username, String password}) creds;
+}
+
+class UnlockWrongPin extends UnlockResult {
+  const UnlockWrongPin(this.attemptsLeft);
+  final int attemptsLeft;
+}
+
+class UnlockLockedOut extends UnlockResult {
+  const UnlockLockedOut();
+}
+
+class UnlockNotEnabled extends UnlockResult {
+  const UnlockNotEnabled();
 }
