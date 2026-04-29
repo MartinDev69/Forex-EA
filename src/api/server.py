@@ -355,9 +355,10 @@ def health() -> dict[str, str]:
 
 @app.get("/status", response_model=StatusResponse)
 def get_status(_user: dict = Depends(current_user)) -> StatusResponse:
+    bs = broker_status_store.read()
     return StatusResponse(
         running=state.running,
-        mt5_connected=False,
+        mt5_connected=bool(bs.connected) if bs else False,
         last_heartbeat=state.last_heartbeat,
         open_positions=_open_positions(),
     )

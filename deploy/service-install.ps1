@@ -34,7 +34,7 @@ function Install-Svc {
     param(
         [string]$Name,
         [string]$Exe,
-        [string]$Args,
+        [string]$AppArgs,
         [string]$Cwd,
         [string]$StdoutLog,
         [string]$StderrLog
@@ -47,7 +47,8 @@ function Install-Svc {
         & nssm remove $Name confirm | Out-Null
     }
 
-    & nssm install $Name $Exe $Args | Out-Host
+    & nssm install $Name $Exe | Out-Host
+    & nssm set $Name AppParameters $AppArgs | Out-Null
     & nssm set $Name AppDirectory $Cwd | Out-Null
     & nssm set $Name AppStdout $StdoutLog | Out-Null
     & nssm set $Name AppStderr $StderrLog | Out-Null
@@ -62,7 +63,7 @@ function Install-Svc {
 Install-Svc `
     -Name "ForexEABot" `
     -Exe $venvPython `
-    -Args "main.py" `
+    -AppArgs "main.py" `
     -Cwd $RepoRoot `
     -StdoutLog (Join-Path $logsDir "bot.stdout.log") `
     -StderrLog (Join-Path $logsDir "bot.stderr.log")
@@ -77,7 +78,7 @@ $uvicornExe = Join-Path $RepoRoot "venv\Scripts\uvicorn.exe"
 Install-Svc `
     -Name "ForexEAApi" `
     -Exe $uvicornExe `
-    -Args "src.api.server:app --host 0.0.0.0 --port 8000" `
+    -AppArgs "src.api.server:app --host 0.0.0.0 --port 8000" `
     -Cwd $RepoRoot `
     -StdoutLog (Join-Path $logsDir "api.stdout.log") `
     -StderrLog (Join-Path $logsDir "api.stderr.log")
