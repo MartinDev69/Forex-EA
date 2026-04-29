@@ -34,7 +34,7 @@ from src.narrator.composer import NarratorComposer
 from src.regime.classifier import RegimeClassifier, RegimeSnapshot
 from src.regime.store import RegimeStore
 from src.replay.recorder import PathRecorder
-from src.risk.position_sizing import lot_size_from_risk
+from src.risk.position_sizing import lot_size_from_risk, pip_size
 from src.risk.risk_manager import RiskManager
 from src.strategies.base import Signal, SignalType, Strategy
 from src.voice.killswitch import KillSwitchFlag
@@ -360,7 +360,7 @@ class Bot:
             log.warning("signal from %s missing SL/TP — skipping", strategy.name)
             return False
 
-        stop_distance_pips = abs(signal.price - signal.stop_loss) * 10_000
+        stop_distance_pips = abs(signal.price - signal.stop_loss) / pip_size(signal.symbol)
         # Default to full weight when the allocator hasn't decided yet (cold
         # start) or isn't wired at all — the system shouldn't go silent just
         # because it has no opinion yet.
@@ -493,7 +493,7 @@ class Bot:
                 signal_stop=signal.stop_loss,
                 signal_target=signal.take_profit,
                 risk_reward=rr,
-                stop_distance_pips=abs(signal.price - signal.stop_loss) * 10_000,
+                stop_distance_pips=abs(signal.price - signal.stop_loss) / pip_size(order.symbol),
                 lot_size=order.lot_size,
                 account_balance=self.executor.account_balance(),
                 opened_at=order.opened_at.isoformat(),
