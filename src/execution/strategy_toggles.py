@@ -17,9 +17,13 @@ CREATE TABLE IF NOT EXISTS strategy_toggles (
 """
 
 DEFAULT_STRATEGY_FLAGS: dict[str, bool] = {
+    # All three on by default so a fresh deploy has *some* strategy eligible
+    # in every regime: ma_crossover for trends, rsi_mean_reversion for ranges,
+    # donchian_breakout as the all-regime fallback. Each is still gated by
+    # its preferred_regimes — they don't all fire on the same bar.
     "ma_crossover": True,
-    "rsi_mean_reversion": False,
-    "donchian_breakout": False,
+    "rsi_mean_reversion": True,
+    "donchian_breakout": True,
 }
 
 
