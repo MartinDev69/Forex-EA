@@ -29,6 +29,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
+
+# Pull .env into os.environ before any module reads SMTP_*, PUBLIC_BASE_URL,
+# AUTH_SECRET, etc. The bot process gets this for free via load_settings();
+# the API was missing it, so SMTP and setup-link config were silently empty
+# under NSSM where only PYTHONUTF8 is injected explicitly.
+load_dotenv()
+
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
