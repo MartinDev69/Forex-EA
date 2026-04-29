@@ -1,38 +1,60 @@
 """Email sender for operator setup links.
 
-Generic SMTP via stdlib so we're not tied to a specific provider (Gmail,
-SendGrid, SES, Postmark all work the same). Config lives in env:
+Two providers are supported. Pick one with EMAIL_PROVIDER:
 
-  SMTP_HOST         e.g. smtp.gmail.com   (empty → dev-mode: log to stdout)
-  SMTP_PORT         default 587
-  SMTP_USER         account for auth
-  SMTP_PASSWORD     app password / API key
-  SMTP_FROM         e.g. "AntiGreed <noreply@antigreed.local>"
-  SMTP_STARTTLS     "1" (default) or "0" to disable STARTTLS
+  smtp    (default) — generic SMTP via stdlib. Config:
+    SMTP_HOST       e.g. smtp.gmail.com
+    SMTP_PORT       default 587
+    SMTP_USER       account for auth
+    SMTP_PASSWORD   app password / API key
+    SMTP_FROM       e.g. "AntiGreed <noreply@antigreed.local>"
+    SMTP_STARTTLS   "1" (default) or "0" to disable STARTTLS
+
+  resend  — Resend HTTP API. Use this when the VPS blocks outbound 587/465.
+    RESEND_API_KEY  Resend API key (re_...)
+    SMTP_FROM       reused as the From: address (must be a verified sender)
+
+Shared config:
   PUBLIC_BASE_URL   e.g. http://localhost:8000 — base for setup links
 
-If SMTP_HOST is unset we refuse to silently swallow the email; instead we
-print the full setup URL to stdout so local dev still works end-to-end.
+If neither provider is configured we refuse to silently swallow the email;
+instead we print the full setup URL to stdout so local dev still works.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import smtplib
+import urllib.error
+import urllib.request
 from email.message import EmailMessage
 
 log = logging.getLogger(__name__)
 
 _DEFAULT_FROM = "AntiGreed <noreply@antigreed.local>"
 _DEFAULT_BASE_URL = "http://localhost:8000"
+_RESEND_URL = "https://api.resend.com/emails"
 
 
 def public_base_url() -> str:
     return os.environ.get("PUBLIC_BASE_URL", _DEFAULT_BASE_URL).rstrip("/")
 
 
+def _provider() -> str:
+    return (os.environ.get("EMAIL_PROVIDER") or "smtp").strip().lower()
+
+
 def smtp_configured() -> bool:
     return bool(os.environ.get("SMTP_HOST"))
+
+
+def mailer_configured() -> bool:
+    """True if any send path is wired up — used by the API to decide whether
+    to surface the setup URL inline (dev/no-mailer) or trust delivery."""
+    if _provider() == "resend":
+        return bool(os.environ.get("RESEND_API_KEY"))
+    return smtp_configured()
 
 
 def send_setup_email(*, to: str, ad_id: str, setup_url: str, expires_hours: int) -> None:
@@ -58,10 +80,16 @@ def send_setup_email(*, to: str, ad_id: str, setup_url: str, expires_hours: int)
   <p style="color:#666;font-size:13px">Link expires in {expires_hours} hours. If you weren't expecting this email, ignore it.</p>
 </body></html>"""
 
+    provider = _provider()
+    if provider == "resend":
+        _send_via_resend(to=to, subject=subject, text=text_body, html=html_body)
+        log.info("Sent setup email to %s for AD-ID %s via Resend", to, ad_id)
+        return
+
     if not smtp_configured():
         log.warning(
-            "SMTP not configured — printing setup link to stdout instead of sending. "
-            "Set SMTP_HOST/SMTP_USER/SMTP_PASSWORD to enable email delivery."
+            "No mailer configured — printing setup link to stdout instead of sending. "
+            "Set EMAIL_PROVIDER=resend with RESEND_API_KEY, or SMTP_HOST/USER/PASSWORD."
         )
         print(
             "\n" + "=" * 72
@@ -92,4 +120,36 @@ def send_setup_email(*, to: str, ad_id: str, setup_url: str, expires_hours: int)
         if user and password:
             s.login(user, password)
         s.send_message(msg)
-    log.info("Sent setup email to %s for AD-ID %s", to, ad_id)
+    log.info("Sent setup email to %s for AD-ID %s via SMTP", to, ad_id)
+
+
+def _send_via_resend(*, to: str, subject: str, text: str, html: str) -> None:
+    api_key = os.environ.get("RESEND_API_KEY")
+    if not api_key:
+        raise RuntimeError("RESEND_API_KEY not set — cannot use EMAIL_PROVIDER=resend")
+    payload = {
+        "from": os.environ.get("SMTP_FROM", _DEFAULT_FROM),
+        "to": [to],
+        "subject": subject,
+        "text": text,
+        "html": html,
+    }
+    req = urllib.request.Request(
+        _RESEND_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        # Resend returns JSON error bodies; bubble them up so the admin can
+        # see "domain not verified" / "invalid api key" / etc.
+        detail = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"resend HTTP {e.code}: {detail}") from None
+    if "id" not in body:
+        raise RuntimeError(f"resend unexpected response: {body}")

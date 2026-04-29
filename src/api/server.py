@@ -621,7 +621,7 @@ def resend_setup_link(
 
 def _issue_setup_link(ad_id: str, email: str) -> AssignUserResponse:
     """Mint a fresh setup JWT, try to email it, surface the URL in dev mode."""
-    from src.api.mailer import smtp_configured
+    from src.api.mailer import mailer_configured
 
     token, exp, url = create_setup_token(ad_id, email)
     hours = SETUP_TTL_S // 3600
@@ -629,13 +629,13 @@ def _issue_setup_link(ad_id: str, email: str) -> AssignUserResponse:
         send_setup_email(to=email, ad_id=ad_id, setup_url=url, expires_hours=hours)
     except Exception as e:
         # The AD-ID is already assigned — surface the failure so the admin
-        # knows to fix SMTP or send the link manually.
+        # knows to fix the mailer or send the link manually.
         raise HTTPException(502, f"email delivery failed: {e}") from None
     return AssignUserResponse(
         ad_id=ad_id, email=email, setup_expires_at=exp,
-        # In dev (no SMTP) the email wasn't really sent — hand back the URL
+        # No mailer wired up → email wasn't really sent — hand back the URL
         # so the admin can copy it to the recipient.
-        setup_url=None if smtp_configured() else url,
+        setup_url=None if mailer_configured() else url,
     )
 
 
