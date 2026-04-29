@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api/client.dart';
+import '../services/quick_unlock.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.apiClient, required this.onSignedIn});
@@ -15,6 +16,9 @@ class _LoginScreenState extends State<LoginScreen> {
   final _pass = TextEditingController();
   bool _busy = false;
   String? _error;
+  // Default-on so the next launch is one tap away. We still always confirm
+  // it's available on this device before saving anything.
+  bool _enableQuickUnlock = true;
 
   @override
   void dispose() {
@@ -31,7 +35,12 @@ class _LoginScreenState extends State<LoginScreen> {
     }
     setState(() { _busy = true; _error = null; });
     try {
-      await widget.apiClient.login(_user.text.trim(), _pass.text);
+      final username = _user.text.trim();
+      final password = _pass.text;
+      await widget.apiClient.login(username, password);
+      if (_enableQuickUnlock && await QuickUnlock.instance.isAvailable()) {
+        await QuickUnlock.instance.enable(username: username, password: password);
+      }
       if (!mounted) return;
       widget.onSignedIn();
     } on ApiException catch (e) {
@@ -111,7 +120,22 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                   ],
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 8),
+                  CheckboxListTile(
+                    value: _enableQuickUnlock,
+                    onChanged: _busy
+                        ? null
+                        : (v) => setState(() => _enableQuickUnlock = v ?? false),
+                    title: const Text('Enable biometrics / PIN unlock'),
+                    subtitle: Text(
+                      'Skip the password on next launch.',
+                      style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+                    ),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                  const SizedBox(height: 8),
                   SizedBox(
                     width: double.infinity,
                     height: 48,
