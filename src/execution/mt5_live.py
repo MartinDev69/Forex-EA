@@ -78,18 +78,21 @@ class MT5DataFeed:
         self._selected: set[str] = set()
 
     def _ensure_selected(self, symbol: str) -> None:
+        """Best-effort push the symbol into Market Watch.
+
+        Some broker builds reject symbol_select with a generic 'Terminal: Call
+        failed' even though copy_rates works fine on the same symbol. So we
+        try once per process, swallow any failure, and let copy_rates be the
+        real source of truth — it surfaces a clear "no rates" error if the
+        symbol genuinely isn't on this server.
+        """
         if symbol in self._selected:
             return
-        # symbol_select returns True when the symbol exists on this server
-        # (whether or not it was already selected). False = symbol not on the
-        # server at all — usually a naming mismatch (e.g. broker uses XAUUSDm).
-        if not self._mt5.symbol_select(symbol, True):
-            last_err = getattr(self._mt5, "last_error", lambda: "unknown")()
-            raise RuntimeError(
-                f"symbol_select({symbol}) failed: {last_err}. "
-                f"Check the symbol name on this broker server."
-            )
-        self._selected.add(symbol)
+        self._selected.add(symbol)  # mark before the call — never retry per tick
+        try:
+            self._mt5.symbol_select(symbol, True)
+        except Exception:
+            pass
 
     def latest_bars(self, symbol: str, timeframe: str, count: int) -> pd.DataFrame:
         tf = TIMEFRAME_MAP.get(timeframe.upper())
