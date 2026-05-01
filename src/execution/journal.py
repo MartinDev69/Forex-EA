@@ -110,3 +110,53 @@ class TradeJournal:
                 (OrderStatus.CLOSED.value, today),
             ).fetchone()
         return {"total": row["total"], "wins": row["wins"] or 0, "pnl": row["total_pnl"]}
+
+    def summary_window(self, days: int) -> dict:
+        """Aggregate closed trades over the last `days` UTC days, plus best/
+        worst pair and best strategy by P&L. Used by the weekly digest."""
+        with self._conn() as c:
+            agg = c.execute(
+                f"""
+                SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins,
+                       COALESCE(SUM(pnl), 0) AS total_pnl
+                FROM trades
+                WHERE status = ?
+                  AND closed_at >= datetime('now', '-{int(days)} days')
+                """,
+                (OrderStatus.CLOSED.value,),
+            ).fetchone()
+            by_symbol = c.execute(
+                f"""
+                SELECT symbol, COALESCE(SUM(pnl), 0) AS pnl
+                FROM trades
+                WHERE status = ?
+                  AND closed_at >= datetime('now', '-{int(days)} days')
+                GROUP BY symbol
+                ORDER BY pnl DESC
+                """,
+                (OrderStatus.CLOSED.value,),
+            ).fetchall()
+            by_strategy = c.execute(
+                f"""
+                SELECT strategy, COALESCE(SUM(pnl), 0) AS pnl,
+                       COUNT(*) AS trades
+                FROM trades
+                WHERE status = ?
+                  AND closed_at >= datetime('now', '-{int(days)} days')
+                GROUP BY strategy
+                ORDER BY pnl DESC
+                """,
+                (OrderStatus.CLOSED.value,),
+            ).fetchall()
+        best_symbol = by_symbol[0]["symbol"] if by_symbol else None
+        worst_symbol = by_symbol[-1]["symbol"] if len(by_symbol) > 1 else None
+        best_strategy = by_strategy[0]["strategy"] if by_strategy else None
+        return {
+            "total": agg["total"],
+            "wins": agg["wins"] or 0,
+            "pnl": agg["total_pnl"],
+            "best_symbol": best_symbol,
+            "worst_symbol": worst_symbol,
+            "best_strategy": best_strategy,
+        }

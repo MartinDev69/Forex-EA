@@ -69,6 +69,14 @@ class BotState:
     # Empty string = never sent — first eligible tick after the rollover hour
     # publishes the previous day's digest.
     last_daily_summary_date: str = ""
+    # ISO year-week ('2026-W17') of the last weekly digest we shipped.
+    last_weekly_digest_yw: str = ""
+    # Calendar event keys ("isots:CCY:title") we've already announced as
+    # "blackout incoming" so we don't re-spam the same event every tick.
+    announced_blackouts: set[str] = field(default_factory=set)
+    # (strategy, symbol) -> UTC datetime of the last setup-alert we sent.
+    # Throttles "near miss" pings to one per pair-strategy per hour.
+    last_setup_alert: dict[tuple[str, str], datetime] = field(default_factory=dict)
 
 
 class Bot:
@@ -190,6 +198,8 @@ class Bot:
         self._maybe_refresh_correlations()
         self._maybe_refresh_allocator()
         self._maybe_send_daily_summary()
+        self._maybe_send_weekly_digest()
+        self._maybe_warn_blackouts()
 
         for symbol, strategies in self.strategies.items():
             if not strategies:
@@ -238,6 +248,13 @@ class Bot:
                     signal, bars, strategy.name
                 ):
                     log.info("ML filter rejected %s %s", strategy.name, signal.symbol)
+                    self._maybe_send_setup_alert(
+                        strategy_name=strategy.name,
+                        symbol=signal.symbol,
+                        side=signal.type.value,
+                        gate="ML filter",
+                        detail=signal.reason or "below confidence threshold",
+                    )
                     continue
                 if self._handle_signal(signal, strategy, regime):
                     acted += 1
@@ -339,6 +356,129 @@ class Bot:
         except Exception:
             log.exception("daily summary send failed (will retry next tick)")
 
+    def _maybe_send_weekly_digest(self) -> None:
+        """One weekly_digest per ISO week, fired Sunday after 21:00 UTC.
+
+        Same dedup pattern as the daily — we record the ISO year-week we've
+        already shipped and skip until that rolls forward.
+        """
+        if not hasattr(self.notifier, "weekly_digest"):
+            return
+        now = datetime.now(timezone.utc)
+        # weekday() Sun=6, Sat=5. We fire on Sun >= 21:00 UTC.
+        if now.weekday() != 6 or now.hour < 21:
+            return
+        iso_yw = f"{now.isocalendar().year}-W{now.isocalendar().week:02d}"
+        if self.state.last_weekly_digest_yw == iso_yw:
+            return
+        try:
+            window = (
+                self.journal.summary_window(7)
+                if hasattr(self.journal, "summary_window") else {}
+            )
+            balance = (
+                float(self.executor.account_balance())
+                if hasattr(self.executor, "account_balance") else 0.0
+            )
+            self.notifier.weekly_digest(
+                trades=window.get("total", 0),
+                wins=window.get("wins", 0),
+                pnl=window.get("pnl", 0.0),
+                equity=balance,
+                best_symbol=window.get("best_symbol"),
+                worst_symbol=window.get("worst_symbol"),
+                best_strategy=window.get("best_strategy"),
+            )
+            self.state.last_weekly_digest_yw = iso_yw
+            log.info("weekly digest sent for %s", iso_yw)
+        except Exception:
+            log.exception("weekly digest send failed (will retry next tick)")
+
+    def _maybe_warn_blackouts(self) -> None:
+        """Telegram a heads-up when a high-impact event is approaching.
+
+        We fire 5 minutes before the actual blackout window starts (so the
+        operator gets a chance to react before new entries are paused). The
+        risk manager still blocks entries via current_blackout(); this is
+        purely a notification layer.
+        """
+        if not hasattr(self.notifier, "blackout_warning"):
+            return
+        checker = getattr(self.risk, "blackout_checker", None)
+        if checker is None or not checker.policy.enabled:
+            return
+        now = datetime.now(timezone.utc)
+        # Warn `before_min + 5` minutes before the event — gives a lead time
+        # before the actual blackout kicks in, AFTER which it's too late to
+        # be useful as a "heads up".
+        lead_window_min = checker.policy.before_min + 5
+        # Map currency → list of symbols in our universe affected by it.
+        # Build it once per call from the configured symbol list.
+        from src.econ_calendar.symbols import currencies_for_symbol
+        ccy_to_pairs: dict[str, list[str]] = {}
+        for sym in self.strategies.keys():
+            for ccy in currencies_for_symbol(sym):
+                ccy_to_pairs.setdefault(ccy, []).append(sym)
+
+        for sym in self.strategies.keys():
+            event = checker.next_event(sym, now=now)
+            if event is None:
+                continue
+            mins = event.minutes_until(now)
+            if mins <= 0 or mins > lead_window_min:
+                continue
+            key = f"{event.event_time.isoformat()}:{event.currency}:{event.title}"
+            if key in self.state.announced_blackouts:
+                continue
+            self.state.announced_blackouts.add(key)
+            affected = sorted(set(ccy_to_pairs.get(event.currency, [])))
+            try:
+                self.notifier.blackout_warning(
+                    title=event.title,
+                    currency=event.currency,
+                    minutes_until=mins,
+                    affected_pairs=affected,
+                    before_min=checker.policy.before_min,
+                    after_min=checker.policy.after_min,
+                )
+                log.info("blackout warning sent for %s (%s)", event.title, event.currency)
+            except Exception:
+                log.exception("blackout warning send failed for %s", event.title)
+            # Don't bombard — one warning per tick is enough; the next tick
+            # will catch any other event that needs announcing.
+            return
+
+    def _maybe_send_setup_alert(
+        self,
+        *,
+        strategy_name: str,
+        symbol: str,
+        side: str,
+        gate: str,
+        detail: str,
+    ) -> None:
+        """Fire a 'setup spotted but gated' Telegram, throttled to one per
+        (strategy, symbol) per hour. Lets the user feel the bot is watching
+        even when nothing is opening, without spamming every minute.
+        """
+        if not hasattr(self.notifier, "setup_alert"):
+            return
+        now = datetime.now(timezone.utc)
+        last = self.state.last_setup_alert.get((strategy_name, symbol))
+        if last is not None and (now - last).total_seconds() < 3600:
+            return
+        self.state.last_setup_alert[(strategy_name, symbol)] = now
+        try:
+            self.notifier.setup_alert(
+                symbol=symbol,
+                side=side,
+                strategy=strategy_name,
+                gate=gate,
+                detail=detail,
+            )
+        except Exception:
+            log.exception("setup alert send failed for %s %s", strategy_name, symbol)
+
     def _maybe_refresh_allocator(self) -> None:
         """Recompute per-(strategy, symbol) risk weights from recent trades.
 
@@ -419,6 +559,13 @@ class Bot:
         )
         if not decision.approved:
             log.info("risk rejected %s %s: %s", strategy.name, signal.symbol, decision.reason)
+            self._maybe_send_setup_alert(
+                strategy_name=strategy.name,
+                symbol=signal.symbol,
+                side=signal.type.value,
+                gate="risk manager",
+                detail=decision.reason or "rejected",
+            )
             return False
 
         order = Order(

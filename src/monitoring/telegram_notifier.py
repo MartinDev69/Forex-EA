@@ -164,6 +164,67 @@ class TelegramNotifier:
             lines.append(f"Worst: {worst_pair}")
         return self.send("\n".join(lines))
 
+    def blackout_warning(
+        self,
+        *,
+        title: str,
+        currency: str,
+        minutes_until: float,
+        affected_pairs: list[str],
+        before_min: int,
+        after_min: int,
+    ) -> bool:
+        pairs = ", ".join(affected_pairs) if affected_pairs else "—"
+        return self.send(
+            f"<b>⚠️ {title}</b> · <b>{currency}</b>\n"
+            f"Event in {self._fmt_duration(minutes_until)} · "
+            f"blackout {before_min}m before → {after_min}m after\n"
+            f"New entries paused on: <code>{pairs}</code>"
+        )
+
+    def setup_alert(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        strategy: str,
+        gate: str,
+        detail: str,
+    ) -> bool:
+        emoji = "👀"
+        return self.send(
+            f"<b>{emoji} Setup spotted: {side.upper()} {symbol}</b>\n"
+            f"Strategy: {strategy.replace('_', ' ').title()}\n"
+            f"Gated by {gate}: <i>{detail}</i>"
+        )
+
+    def weekly_digest(
+        self,
+        *,
+        trades: int,
+        wins: int,
+        pnl: float,
+        equity: float,
+        best_symbol: str | None,
+        worst_symbol: str | None,
+        best_strategy: str | None,
+    ) -> bool:
+        win_rate = wins / trades if trades else 0
+        emoji = "🏆" if pnl >= 0 else "🧹"
+        lines = [
+            f"<b>{emoji} Weekly Digest</b>",
+            f"Trades: {trades} · Wins: {wins} ({win_rate:.0%})",
+            f"P&L: {pnl:+.2f}",
+            f"Equity: {equity:.2f}",
+        ]
+        if best_strategy:
+            lines.append(f"Top strategy: {best_strategy.replace('_', ' ').title()}")
+        if best_symbol:
+            lines.append(f"Best pair: {best_symbol}")
+        if worst_symbol and worst_symbol != best_symbol:
+            lines.append(f"Worst pair: {worst_symbol}")
+        return self.send("\n".join(lines))
+
     @staticmethod
     def _fmt_duration(minutes: float) -> str:
         if minutes < 60:
