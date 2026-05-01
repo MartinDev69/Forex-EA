@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../api/client.dart';
 import '../models/user.dart';
+import '../widgets/logo_spinner.dart';
 
 class UsersScreen extends StatefulWidget {
   const UsersScreen({super.key, required this.apiClient});
@@ -194,7 +195,7 @@ class _UsersScreenState extends State<UsersScreen> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: _loading
-            ? const Center(child: CircularProgressIndicator())
+            ? const Center(child: LogoSpinner(size: 80, label: 'LOADING'))
             : _error != null
                 ? ListView(children: [
                     Padding(

@@ -11,6 +11,7 @@ import '../models/fill_stats.dart';
 import '../models/regime.dart';
 import '../models/status.dart';
 import '../theme.dart';
+import '../widgets/logo_spinner.dart';
 
 const String _kBlackoutSymbolKey = 'antigreed:blackoutSymbol';
 const String _kDefaultBlackoutSymbol = 'EURUSD';
@@ -248,7 +249,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: ListView(
           padding: const EdgeInsets.symmetric(vertical: 16),
           children: [
-            if (_loading) const Center(child: CircularProgressIndicator()),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 64),
+                child: Center(child: LogoSpinner(size: 88, label: 'LOADING')),
+              ),
             if (_error != null) _ErrorCard(message: _error!),
             if (_status != null)
               _StatusCard(

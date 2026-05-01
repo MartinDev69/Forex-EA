@@ -4,6 +4,7 @@ import 'api/config.dart';
 import 'screens/home.dart';
 import 'screens/lock.dart';
 import 'screens/login.dart';
+import 'screens/splash.dart';
 import 'services/quick_unlock.dart';
 import 'theme.dart';
 
@@ -46,18 +47,21 @@ class AntiGreedApp extends StatefulWidget {
 }
 
 class _AntiGreedAppState extends State<AntiGreedApp> with WidgetsBindingObserver {
-  // 'lock'  → biometric + PIN screen (quick unlock is enabled)
-  // 'login' → password screen (cold start or user opted out)
-  // 'home'  → main app (token live)
-  late String _route;
+  // 'splash' → animated logo intro on cold start
+  // 'lock'   → biometric + PIN screen (quick unlock is enabled)
+  // 'login'  → password screen (cold start or user opted out)
+  // 'home'   → main app (token live)
+  String _route = 'splash';
   DateTime? _backgroundedAt;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _route = widget.startWithQuickUnlock ? 'lock' : 'login';
   }
+
+  /// Where to land after the splash finishes its animation.
+  String get _postSplashRoute => widget.startWithQuickUnlock ? 'lock' : 'login';
 
   @override
   void dispose() {
@@ -114,6 +118,11 @@ class _AntiGreedAppState extends State<AntiGreedApp> with WidgetsBindingObserver
   Widget build(BuildContext context) {
     Widget body;
     switch (_route) {
+      case 'splash':
+        body = SplashScreen(
+          onDone: () => setState(() => _route = _postSplashRoute),
+        );
+        break;
       case 'lock':
         body = LockScreen(
           apiClient: widget.apiClient,

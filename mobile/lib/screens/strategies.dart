@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../models/status.dart';
+import '../widgets/logo_spinner.dart';
 
 class StrategiesScreen extends StatefulWidget {
   const StrategiesScreen({super.key, required this.apiClient});
@@ -64,7 +65,7 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: _loading
-            ? const Center(child: CircularProgressIndicator())
+            ? const Center(child: LogoSpinner(size: 80, label: 'LOADING'))
             : _error != null
                 ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text('Error: $_error'))])
                 : ListView(

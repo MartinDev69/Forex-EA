@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../models/broker.dart';
+import '../widgets/logo_spinner.dart';
 
 class BrokerScreen extends StatefulWidget {
   const BrokerScreen({super.key, required this.apiClient});
@@ -194,7 +195,7 @@ class _BrokerScreenState extends State<BrokerScreen> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: _loading
-            ? const Center(child: CircularProgressIndicator())
+            ? const Center(child: LogoSpinner(size: 80, label: 'LOADING'))
             : ListView(
                 padding: const EdgeInsets.all(12),
                 children: [

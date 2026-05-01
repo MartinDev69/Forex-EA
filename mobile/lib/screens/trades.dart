@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../api/client.dart';
 import '../models/explanation.dart';
 import '../models/status.dart';
+import '../widgets/logo_spinner.dart';
 
 class TradesScreen extends StatefulWidget {
   const TradesScreen({super.key, required this.apiClient});
@@ -65,7 +66,7 @@ class _TradesScreenState extends State<TradesScreen> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: _loading
-            ? const Center(child: CircularProgressIndicator())
+            ? const Center(child: LogoSpinner(size: 80, label: 'LOADING'))
             : _error != null
                 ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text('Error: $_error'))])
                 : (_trades!.isEmpty
@@ -183,7 +184,7 @@ class _ExplanationSheetState extends State<_ExplanationSheet> {
               if (_status == 'loading')
                 const Padding(
                   padding: EdgeInsets.all(24),
-                  child: Center(child: CircularProgressIndicator()),
+                  child: Center(child: LogoSpinner(size: 56)),
                 )
               else if (_status == 'missing')
                 Text(
