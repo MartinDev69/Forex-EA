@@ -11,9 +11,11 @@ class HomeScreen extends StatefulWidget {
     super.key,
     required this.apiClient,
     required this.onSignedOut,
+    required this.onForgetDevice,
   });
   final ApiClient apiClient;
   final VoidCallback onSignedOut;
+  final VoidCallback onForgetDevice;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -29,6 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
       DashboardScreen(
         apiClient: widget.apiClient,
         onSignedOut: widget.onSignedOut,
+        onForgetDevice: widget.onForgetDevice,
       ),
       BrokerScreen(apiClient: widget.apiClient),
       StrategiesScreen(apiClient: widget.apiClient),

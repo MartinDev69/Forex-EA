@@ -57,6 +57,15 @@ class _LoginScreenState extends State<LoginScreen> {
     required String username,
     required String password,
   }) async {
+    // Already set up on this device → just keep saved creds in sync (in
+    // case the password changed server-side) and skip the setup dialog.
+    if (await QuickUnlock.instance.isEnabled()) {
+      await QuickUnlock.instance.refreshCredentials(
+        username: username,
+        password: password,
+      );
+      return;
+    }
     if (!await QuickUnlock.instance.isDeviceSecure()) return;
     if (!mounted) return;
     final wantsIt = await showDialog<bool>(

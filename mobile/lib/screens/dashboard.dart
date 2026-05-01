@@ -20,9 +20,11 @@ class DashboardScreen extends StatefulWidget {
     super.key,
     required this.apiClient,
     required this.onSignedOut,
+    required this.onForgetDevice,
   });
   final ApiClient apiClient;
   final VoidCallback onSignedOut;
+  final VoidCallback onForgetDevice;
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -181,13 +183,63 @@ class _DashboardScreenState extends State<DashboardScreen> {
               onPressed: toggleThemeMode,
             ),
           ),
-          IconButton(
-            tooltip: 'Sign out',
-            icon: const Icon(Icons.logout),
-            onPressed: () {
-              widget.apiClient.logout();
-              widget.onSignedOut();
+          PopupMenuButton<String>(
+            tooltip: 'Account',
+            icon: const Icon(Icons.account_circle_outlined),
+            onSelected: (value) async {
+              if (value == 'sign_out') {
+                widget.onSignedOut();
+              } else if (value == 'forget_device') {
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Forget this device?'),
+                    content: const Text(
+                      'Removes the saved PIN and biometric. You\'ll need to '
+                      'sign in with your password and set up quick unlock again.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(false),
+                        child: const Text('Cancel'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.of(ctx).pop(true),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.red.shade700,
+                        ),
+                        child: const Text('Forget'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed == true) widget.onForgetDevice();
+              }
             },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'sign_out',
+                child: ListTile(
+                  leading: Icon(Icons.logout),
+                  title: Text('Sign out'),
+                  subtitle: Text('Quick unlock stays set up',
+                    style: TextStyle(fontSize: 11)),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'forget_device',
+                child: ListTile(
+                  leading: Icon(Icons.delete_outline),
+                  title: Text('Forget this device'),
+                  subtitle: Text('Wipes saved PIN + biometric',
+                    style: TextStyle(fontSize: 11)),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+              ),
+            ],
           ),
         ],
       ),

@@ -116,14 +116,29 @@ class QuickUnlock {
     await _storage.write(key: _kEnabled, value: '1');
   }
 
-  /// Wipe everything. Called on sign-out, on too many PIN failures, or when
-  /// the saved creds no longer authenticate against the server.
+  /// Wipe everything. Called on the user's "Forget this device" action,
+  /// after too many PIN failures, or when the saved creds no longer
+  /// authenticate. Sign-out alone does NOT call this — it preserves the
+  /// PIN/biometric setup so the next sign-in is one tap.
   Future<void> disable() async {
     try {
       await _storage.deleteAll();
     } catch (_) {
       // best-effort — secure storage might already be unavailable
     }
+  }
+
+  /// Update the saved username/password without touching PIN, biometric, or
+  /// the failed-attempts counter. Called after a fresh password sign-in
+  /// when quick unlock is already set up — keeps the saved creds in sync
+  /// if the user changed their password (admin reset, etc.).
+  Future<void> refreshCredentials({
+    required String username,
+    required String password,
+  }) async {
+    if (!await isEnabled()) return;
+    await _storage.write(key: _kUsername, value: username);
+    await _storage.write(key: _kPassword, value: password);
   }
 
   // ----- Unlock paths -------------------------------------------------------
