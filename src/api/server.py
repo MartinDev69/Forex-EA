@@ -364,10 +364,20 @@ def health() -> dict[str, str]:
 @app.get("/status", response_model=StatusResponse)
 def get_status(_user: dict = Depends(current_user)) -> StatusResponse:
     bs = broker_status_store.read()
+    # The bot writes a heartbeat each tick — if it's been written within the
+    # last 3 minutes, the bot is genuinely alive regardless of whether the
+    # operator pressed Start in the UI. Fall back to state.running only when
+    # we have no heartbeat yet (cold dashboard, bot hasn't ticked).
+    bot_hb = heartbeat_store.read("bot")
+    bot_running = state.running
+    bot_last_hb = state.last_heartbeat
+    if bot_hb is not None:
+        bot_last_hb = bot_hb.last_tick_at
+        bot_running = (datetime.now(timezone.utc) - bot_hb.last_tick_at).total_seconds() < 180
     return StatusResponse(
-        running=state.running,
+        running=bot_running,
         mt5_connected=bool(bs.connected) if bs else False,
-        last_heartbeat=state.last_heartbeat,
+        last_heartbeat=bot_last_hb,
         open_positions=_open_positions(),
     )
 
