@@ -180,6 +180,26 @@ def main() -> None:
         name: DEFAULT_STRATEGY_FLAGS.get(name, False) for name in STRATEGY_REGISTRY
     })
     notifier = build_notifier(settings.telegram_bot_token, settings.telegram_chat_id)
+    if hasattr(notifier, "startup") and use_mt5 and mt5_client is not None:
+        # Best-effort online ping. The notifier swallows network errors so
+        # this can never block the bot from starting.
+        try:
+            enabled_strategies = [
+                name for name, on in toggle_store.list().items() if on
+            ]
+            notifier.startup(
+                broker=broker_cfg.broker,
+                login=info.login,
+                server=info.server,
+                balance=info.balance,
+                currency=info.currency,
+                symbols=settings.symbols,
+                strategies=enabled_strategies,
+                risk_pct=settings.risk_per_trade,
+                max_daily_loss_pct=settings.max_daily_loss_pct,
+            )
+        except Exception:
+            log.exception("startup notification failed (continuing)")
 
     signal_filter: SignalFilter | None = None
     model_path = Path(os.getenv("ML_MODEL_PATH", "data/models/signal_filter.json"))

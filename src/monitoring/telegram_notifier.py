@@ -54,29 +54,124 @@ class TelegramNotifier:
             return False
 
     # Convenience helpers -------------------------------------------------
-    def trade_opened(self, symbol: str, side: str, lot_size: float, price: float) -> bool:
+    def startup(
+        self,
+        *,
+        broker: str,
+        login: int,
+        server: str,
+        balance: float,
+        currency: str,
+        symbols: list[str],
+        strategies: list[str],
+        risk_pct: float,
+        max_daily_loss_pct: float,
+    ) -> bool:
+        sym_str = ", ".join(symbols)
+        strat_str = ", ".join(s.replace("_", " ").title() for s in strategies) or "none"
         return self.send(
-            f"<b>🟢 {side} {symbol}</b>\n"
-            f"Lots: {lot_size}\n"
-            f"Price: {price}"
+            f"<b>🤖 AntiGreed online</b>\n"
+            f"Broker: {broker} #{login} ({server})\n"
+            f"Balance: {balance:.2f} {currency}\n"
+            f"Pairs: <code>{sym_str}</code>\n"
+            f"Strategies: {strat_str}\n"
+            f"Risk: {risk_pct:.1%}/trade · Daily cap {max_daily_loss_pct:.0%}"
         )
 
-    def trade_closed(self, symbol: str, side: str, pnl: float, reason: str) -> bool:
+    def trade_opened(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        lot_size: float,
+        price: float,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        sl_pips: float | None = None,
+        tp_pips: float | None = None,
+        risk_reward: float | None = None,
+        strategy: str | None = None,
+        regime: str | None = None,
+        reason: str | None = None,
+    ) -> bool:
+        emoji = "🟢" if side.upper() == "BUY" else "🔴"
+        lines = [f"<b>{emoji} {side.upper()} {symbol}</b>"]
+        if strategy:
+            lines.append(f"Strategy: {strategy.replace('_', ' ').title()}")
+        lines.append(f"Entry: {price:.5f} · {lot_size:.2f} lots")
+        if stop_loss is not None and take_profit is not None:
+            sl_text = f"{stop_loss:.5f}"
+            tp_text = f"{take_profit:.5f}"
+            if sl_pips is not None:
+                sl_text += f" ({sl_pips:.0f} pips)"
+            if tp_pips is not None:
+                tp_text += f" ({tp_pips:.0f} pips)"
+            lines.append(f"SL: {sl_text}")
+            lines.append(f"TP: {tp_text}")
+        if risk_reward is not None:
+            lines.append(f"R:R {risk_reward:.1f}")
+        if regime:
+            lines.append(f"Regime: {regime}")
+        if reason:
+            lines.append(f"<i>{reason}</i>")
+        return self.send("\n".join(lines))
+
+    def trade_closed(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        pnl: float,
+        reason: str,
+        exit_price: float | None = None,
+        hold_minutes: float | None = None,
+        strategy: str | None = None,
+        today_pnl: float | None = None,
+        today_trades: int | None = None,
+        today_wins: int | None = None,
+    ) -> bool:
         emoji = "✅" if pnl >= 0 else "❌"
-        return self.send(
-            f"<b>{emoji} CLOSED {side} {symbol}</b>\n"
-            f"P&L: {pnl:+.2f}\n"
-            f"Reason: {reason}"
-        )
+        lines = [f"<b>{emoji} {pnl:+.2f} · {side.upper()} {symbol}</b>"]
+        if strategy:
+            lines.append(f"Strategy: {strategy.replace('_', ' ').title()}")
+        if exit_price is not None:
+            lines.append(f"Exit: {exit_price:.5f} ({reason})")
+        else:
+            lines.append(f"Reason: {reason}")
+        if hold_minutes is not None:
+            lines.append(f"Held: {self._fmt_duration(hold_minutes)}")
+        if today_pnl is not None and today_trades is not None:
+            wr = (today_wins / today_trades) if today_trades and today_wins is not None else 0
+            wr_text = f" · {wr:.0%} WR" if today_wins is not None else ""
+            lines.append(f"Today: {today_pnl:+.2f} ({today_trades}{wr_text})")
+        return self.send("\n".join(lines))
 
-    def daily_summary(self, trades: int, wins: int, pnl: float, equity: float) -> bool:
+    def daily_summary(
+        self, *, trades: int, wins: int, pnl: float, equity: float,
+        best_pair: str | None = None, worst_pair: str | None = None,
+    ) -> bool:
         win_rate = wins / trades if trades else 0
-        return self.send(
-            f"<b>📊 Daily Summary</b>\n"
-            f"Trades: {trades} | Wins: {wins} ({win_rate:.0%})\n"
-            f"P&L: {pnl:+.2f}\n"
-            f"Equity: {equity:.2f}"
-        )
+        emoji = "📈" if pnl >= 0 else "📉"
+        lines = [
+            f"<b>{emoji} Daily Summary</b>",
+            f"Trades: {trades} · Wins: {wins} ({win_rate:.0%})",
+            f"P&L: {pnl:+.2f}",
+            f"Equity: {equity:.2f}",
+        ]
+        if best_pair:
+            lines.append(f"Best: {best_pair}")
+        if worst_pair and worst_pair != best_pair:
+            lines.append(f"Worst: {worst_pair}")
+        return self.send("\n".join(lines))
+
+    @staticmethod
+    def _fmt_duration(minutes: float) -> str:
+        if minutes < 60:
+            return f"{minutes:.0f} min"
+        hours = minutes / 60
+        if hours < 24:
+            return f"{hours:.1f}h"
+        return f"{hours / 24:.1f}d"
 
 
 def build_notifier(bot_token: str | None, chat_id: str | None) -> Notifier:

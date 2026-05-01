@@ -65,6 +65,10 @@ class BotState:
     # (strategy_name, symbol) -> (role, weight). Populated by the allocator.
     # Empty dict => allocator hasn't run yet, everything trades at 1.0.
     allocations: dict[tuple[str, str], tuple[str, float]] = field(default_factory=dict)
+    # ISO date string of the last UTC day we sent a daily-summary Telegram.
+    # Empty string = never sent — first eligible tick after the rollover hour
+    # publishes the previous day's digest.
+    last_daily_summary_date: str = ""
 
 
 class Bot:
@@ -185,6 +189,7 @@ class Bot:
 
         self._maybe_refresh_correlations()
         self._maybe_refresh_allocator()
+        self._maybe_send_daily_summary()
 
         for symbol, strategies in self.strategies.items():
             if not strategies:
@@ -305,6 +310,35 @@ class Bot:
         finally:
             self.state.last_correlation_refresh_tick = self.state.tick_count
 
+    def _maybe_send_daily_summary(self) -> None:
+        """Fire one daily_summary Telegram per UTC day, after 21:00 UTC.
+
+        Picked 21:00 UTC because that's after the NY close — the trading day
+        is effectively done. We dedupe by date so a restart inside the same
+        day doesn't re-send.
+        """
+        if not hasattr(self.notifier, "daily_summary"):
+            return
+        now = datetime.now(timezone.utc)
+        today_iso = now.date().isoformat()
+        if self.state.last_daily_summary_date == today_iso:
+            return
+        if now.hour < 21:
+            return
+        try:
+            today = self.journal.summary_today() if hasattr(self.journal, "summary_today") else {}
+            balance = float(self.executor.account_balance()) if hasattr(self.executor, "account_balance") else 0.0
+            self.notifier.daily_summary(
+                trades=today.get("total", 0),
+                wins=today.get("wins", 0),
+                pnl=today.get("pnl", 0.0),
+                equity=balance,
+            )
+            self.state.last_daily_summary_date = today_iso
+            log.info("daily summary sent for %s", today_iso)
+        except Exception:
+            log.exception("daily summary send failed (will retry next tick)")
+
     def _maybe_refresh_allocator(self) -> None:
         """Recompute per-(strategy, symbol) risk weights from recent trades.
 
@@ -422,10 +456,40 @@ class Bot:
                 self.risk.propfirm_guard.note_trade_opened()
             except Exception:
                 log.exception("propfirm note_trade_opened failed")
-        self.notifier.trade_opened(
-            symbol=order.symbol, side=order.side.value,
-            lot_size=order.lot_size, price=order.entry_price,
-        ) if hasattr(self.notifier, "trade_opened") else None
+        if hasattr(self.notifier, "trade_opened"):
+            sl_dist = abs(order.entry_price - order.stop_loss)
+            tp_dist = abs(order.take_profit - order.entry_price)
+            ps = pip_size(order.symbol)
+            sl_pips = sl_dist / ps if ps else None
+            tp_pips = tp_dist / ps if ps else None
+            rr = (tp_dist / sl_dist) if sl_dist > 0 else None
+            regime_text = None
+            if regime is not None:
+                vol = regime.volatility.value if regime.volatility else ""
+                trend = regime.trend.value if regime.trend else ""
+                regime_text = f"{trend} · vol {vol}".strip(" ·")
+            try:
+                self.notifier.trade_opened(
+                    symbol=order.symbol,
+                    side=order.side.value,
+                    lot_size=order.lot_size,
+                    price=order.entry_price,
+                    stop_loss=order.stop_loss,
+                    take_profit=order.take_profit,
+                    sl_pips=sl_pips,
+                    tp_pips=tp_pips,
+                    risk_reward=rr,
+                    strategy=strategy.name,
+                    regime=regime_text,
+                    reason=signal.reason,
+                )
+            except TypeError:
+                # Older notifier on the path — fall back to the basic shape so
+                # we don't crash the open path on a partial deploy.
+                self.notifier.trade_opened(
+                    symbol=order.symbol, side=order.side.value,
+                    lot_size=order.lot_size, price=order.entry_price,
+                )
 
         log.info("OPENED %s %s %.2f lots @ %.5f (SL %.5f, TP %.5f) — %s",
                  order.side.value, order.symbol, order.lot_size,
@@ -575,9 +639,27 @@ class Bot:
         weight = float(order.extra.get("risk_weight", 1.0)) if order.extra else 1.0
         self.risk.register_trade_closed(self.risk.limits.risk_per_trade * weight, closed.pnl)
         if hasattr(self.notifier, "trade_closed"):
-            self.notifier.trade_closed(
-                symbol=closed.symbol, side=closed.side.value,
-                pnl=closed.pnl, reason=closed.close_reason,
-            )
+            hold_minutes: float | None = None
+            if closed.opened_at and closed.closed_at:
+                hold_minutes = (closed.closed_at - closed.opened_at).total_seconds() / 60.0
+            today = self.journal.summary_today() if hasattr(self.journal, "summary_today") else {}
+            try:
+                self.notifier.trade_closed(
+                    symbol=closed.symbol,
+                    side=closed.side.value,
+                    pnl=closed.pnl,
+                    reason=closed.close_reason,
+                    exit_price=closed.exit_price,
+                    hold_minutes=hold_minutes,
+                    strategy=closed.strategy,
+                    today_pnl=today.get("pnl"),
+                    today_trades=today.get("total"),
+                    today_wins=today.get("wins"),
+                )
+            except TypeError:
+                self.notifier.trade_closed(
+                    symbol=closed.symbol, side=closed.side.value,
+                    pnl=closed.pnl, reason=closed.close_reason,
+                )
         log.info("CLOSED %s %s pnl=%+.2f reason=%s",
                  closed.side.value, closed.symbol, closed.pnl, closed.close_reason)
