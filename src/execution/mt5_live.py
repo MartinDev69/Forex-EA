@@ -186,6 +186,10 @@ class MT5Executor:
         # Success — MT5 gives back the deal; the resulting position ticket is
         # what we'll need later to close.
         order.broker_ticket = int(getattr(result, "order", 0)) or int(getattr(result, "deal", 0))
+        # Mirror the broker ticket into order.id so the journal's UNIQUE
+        # primary key sees a real value. Without this every MT5 trade tries
+        # to INSERT with id=0 and the second one fails with IntegrityError.
+        order.id = order.broker_ticket
         order.entry_price = float(getattr(result, "price", price))
         order.status = OrderStatus.OPEN
         if not order.opened_at:
