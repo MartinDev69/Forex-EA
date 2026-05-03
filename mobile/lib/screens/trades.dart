@@ -5,6 +5,20 @@ import '../models/explanation.dart';
 import '../models/status.dart';
 import '../widgets/logo_spinner.dart';
 
+/// Format a price using the broker's typical decimal precision per symbol
+/// class — keeps the trade row from leaking float artifacts like
+/// "1.1723000000000001" instead of "1.17230".
+String _fmtPrice(String symbol, double price) {
+  final s = symbol.toUpperCase();
+  if (s.contains('XAU') || s.contains('GOLD') || s.contains('OIL')) {
+    return price.toStringAsFixed(2);
+  }
+  if (s.endsWith('JPY') || s.endsWith('JPYM')) {
+    return price.toStringAsFixed(3);
+  }
+  return price.toStringAsFixed(5);
+}
+
 class TradesScreen extends StatefulWidget {
   const TradesScreen({super.key, required this.apiClient});
   final ApiClient apiClient;
@@ -93,14 +107,33 @@ class _TradesScreenState extends State<TradesScreen> {
                                 title: Text(t.symbol,
                                     style: const TextStyle(fontWeight: FontWeight.bold)),
                                 subtitle: Text(
-                                    '${dateFmt.format(t.openedAt.toLocal())} • entry ${t.entryPrice}'),
-                                trailing: Text(
-                                  fmt.format(t.pnl),
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: t.pnl >= 0 ? Colors.greenAccent : Colors.redAccent,
-                                  ),
+                                  '${dateFmt.format(t.openedAt.toLocal())} • entry ${_fmtPrice(t.symbol, t.entryPrice)}',
                                 ),
+                                trailing: t.closedAt == null
+                                    ? Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.amber.withValues(alpha: 0.15),
+                                          border: Border.all(color: Colors.amber.shade700),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: const Text(
+                                          'OPEN',
+                                          style: TextStyle(
+                                            color: Colors.amber,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 11,
+                                            letterSpacing: 1.5,
+                                          ),
+                                        ),
+                                      )
+                                    : Text(
+                                        fmt.format(t.pnl),
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: t.pnl >= 0 ? Colors.greenAccent : Colors.redAccent,
+                                        ),
+                                      ),
                               ),
                             ),
                         ],
