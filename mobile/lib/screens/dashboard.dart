@@ -457,17 +457,18 @@ class _AccountCard extends StatelessWidget {
     final fmt = NumberFormat.currency(symbol: '\$', decimalDigits: 2);
     final pnlPositive = account.dailyPnl >= 0;
     final pnlTone = pnlPositive ? TickerTone.win : TickerTone.loss;
+    final muted = mutedColor(context);
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
       padding: const EdgeInsets.all(18),
-      decoration: glowPanel(glow: pnlPositive ? kNeonGreen : kNeonRed),
+      decoration: glowPanel(context, tone: pnlTone),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             'ACCOUNT',
             style: TextStyle(
-              color: kMuted,
+              color: muted,
               fontSize: 10,
               letterSpacing: 3,
               fontWeight: FontWeight.w600,
@@ -479,7 +480,7 @@ class _AccountCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             'EQUITY',
-            style: TextStyle(color: kMuted, fontSize: 9, letterSpacing: 3),
+            style: TextStyle(color: muted, fontSize: 9, letterSpacing: 3),
           ),
           const SizedBox(height: 16),
           Row(
@@ -530,7 +531,7 @@ class _AccountStat extends StatelessWidget {
       children: [
         Text(
           label,
-          style: const TextStyle(color: kMuted, fontSize: 9, letterSpacing: 2),
+          style: TextStyle(color: mutedColor(context), fontSize: 9, letterSpacing: 2),
         ),
         const SizedBox(height: 4),
         TickerText(value, tone: tone, size: 14),

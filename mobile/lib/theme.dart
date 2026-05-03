@@ -138,19 +138,113 @@ ThemeData darkTheme() {
   );
 }
 
+// Light-mode tokens — printed-paper feel rather than glowing LED. Uses the
+// same neon green/red as accent colors so light and dark stay siblings.
+const Color kLightInk      = Color(0xFFF5F7FA);   // page background
+const Color kLightSurface  = Color(0xFFFFFFFF);   // cards
+const Color kLightSurface2 = Color(0xFFF1F5F9);   // pressed / inset
+const Color kLightEdge     = Color(0xFFE2E8F0);   // hairline borders
+const Color kLightText     = Color(0xFF0F172A);   // body text
+const Color kLightMuted    = Color(0xFF64748B);   // labels
+const Color kLightWin      = Color(0xFF059669);   // print-friendly green
+const Color kLightLoss     = Color(0xFFDC2626);   // print-friendly red
+
 ThemeData lightTheme() {
-  final scheme = ColorScheme.fromSeed(
-    seedColor: const Color(0xFF0E7C42),
-    brightness: Brightness.light,
+  final scheme = const ColorScheme.light(
+    primary: kLightWin,
+    onPrimary: Colors.white,
+    secondary: kLightWin,
+    onSecondary: Colors.white,
+    error: kLightLoss,
+    onError: Colors.white,
+    surface: kLightSurface,
+    onSurface: kLightText,
+    surfaceContainerHighest: kLightSurface2,
+    outline: kLightEdge,
   );
   return ThemeData(
     colorScheme: scheme,
+    brightness: Brightness.light,
     useMaterial3: true,
-    scaffoldBackgroundColor: const Color(0xFFF5F7FA),
+    scaffoldBackgroundColor: kLightInk,
+    canvasColor: kLightInk,
     cardTheme: const CardThemeData(
       elevation: 0,
-      color: Colors.white,
+      color: kLightSurface,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        side: BorderSide(color: kLightEdge, width: 1),
+        borderRadius: BorderRadius.all(Radius.circular(14)),
+      ),
       margin: EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+    ),
+    appBarTheme: const AppBarTheme(
+      backgroundColor: kLightInk,
+      foregroundColor: kLightText,
+      elevation: 0,
+      surfaceTintColor: Colors.transparent,
+    ),
+    navigationBarTheme: NavigationBarThemeData(
+      backgroundColor: kLightInk,
+      indicatorColor: kLightWin.withValues(alpha: 0.12),
+      surfaceTintColor: Colors.transparent,
+      labelTextStyle: WidgetStateProperty.resolveWith((states) {
+        final selected = states.contains(WidgetState.selected);
+        return TextStyle(
+          fontSize: 11,
+          fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+          color: selected ? kLightWin : kLightMuted,
+          letterSpacing: 0.5,
+        );
+      }),
+      iconTheme: WidgetStateProperty.resolveWith((states) {
+        final selected = states.contains(WidgetState.selected);
+        return IconThemeData(
+          color: selected ? kLightWin : kLightMuted,
+          size: 22,
+        );
+      }),
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      filled: true,
+      fillColor: kLightSurface,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: kLightEdge),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: kLightEdge),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: kLightWin, width: 1.4),
+      ),
+      labelStyle: const TextStyle(color: kLightMuted),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        backgroundColor: kLightWin,
+        foregroundColor: Colors.white,
+        textStyle: const TextStyle(fontWeight: FontWeight.w700, letterSpacing: 0.4),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: kLightWin,
+        side: const BorderSide(color: kLightEdge),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(foregroundColor: kLightWin),
+    ),
+    dividerTheme: const DividerThemeData(color: kLightEdge, thickness: 1, space: 1),
+    snackBarTheme: const SnackBarThemeData(
+      backgroundColor: kLightSurface,
+      contentTextStyle: TextStyle(color: kLightText),
+      behavior: SnackBarBehavior.floating,
     ),
   );
 }
@@ -205,17 +299,43 @@ enum TickerTone { neutral, win, loss }
 /// Decorative card surface that picks up the trading-floor neon glow on
 /// dark mode and prints flat on light. Use instead of a raw Card for the
 /// "live" panels (Account, Status, Regime, Open positions).
-BoxDecoration glowPanel({Color glow = kNeonGreen}) {
+///
+/// Pass [tone] in if the card should hint at win/loss (e.g. flips border
+/// to red when the day is in the red).
+BoxDecoration glowPanel(BuildContext context, {TickerTone tone = TickerTone.win}) {
+  final isDark = Theme.of(context).brightness == Brightness.dark;
+  if (isDark) {
+    final glow = tone == TickerTone.loss ? kNeonRed : kNeonGreen;
+    return BoxDecoration(
+      color: kSurface,
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: glow.withValues(alpha: 0.16)),
+      boxShadow: [
+        BoxShadow(
+          color: glow.withValues(alpha: 0.18),
+          blurRadius: 24,
+          spreadRadius: -8,
+        ),
+      ],
+    );
+  }
+  // Light mode — flat printed-paper feel. Hairline border tinted by tone.
+  final accent = tone == TickerTone.loss ? kLightLoss : kLightWin;
   return BoxDecoration(
-    color: kSurface,
+    color: kLightSurface,
     borderRadius: BorderRadius.circular(14),
-    border: Border.all(color: glow.withValues(alpha: 0.16)),
+    border: Border.all(color: accent.withValues(alpha: 0.20)),
     boxShadow: [
       BoxShadow(
-        color: glow.withValues(alpha: 0.18),
-        blurRadius: 24,
-        spreadRadius: -8,
+        color: Colors.black.withValues(alpha: 0.04),
+        blurRadius: 6,
+        offset: const Offset(0, 1),
       ),
     ],
   );
 }
+
+/// Theme-aware muted text color — same intent as `kMuted` on dark and
+/// `kLightMuted` on light. Used for tiny KPI labels.
+Color mutedColor(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark ? kMuted : kLightMuted;
