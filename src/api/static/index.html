@@ -38,7 +38,9 @@
             mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
           },
           boxShadow: {
-            glow: '0 0 0 1px rgb(34 211 238 / 0.35), 0 0 24px rgb(34 211 238 / 0.15)',
+            glow:     '0 0 0 1px rgb(34 238 136 / 0.45), 0 0 32px rgb(34 238 136 / 0.22)',
+            glowWin:  '0 0 0 1px rgb(34 238 136 / 0.35), 0 0 28px rgb(34 238 136 / 0.20)',
+            glowLoss: '0 0 0 1px rgb(255 51 85 / 0.35),  0 0 28px rgb(255 51 85 / 0.20)',
           },
           keyframes: {
             pulseDot: {
@@ -67,17 +69,19 @@
        Tailwind's custom color utilities (bg-panel, border-edge, …) read these,
        so most of the UI re-themes automatically. */
     :root {
-      --c-bg:      #0b0f1a;
-      --c-panel:   #111827;
-      --c-panel2: #0f1523;
-      --c-edge:    #1e293b;
-      --c-accent:  #22d3ee;
-      --c-win:     #10b981;
-      --c-loss:    #ef4444;
-      --c-warn:    #f59e0b;
-      --c-text:    #e2e8f0;  /* body default */
-      --c-grid-a:  rgba(148,163,184,0.08);
-      --c-grid-b:  rgba(148,163,184,0.05);
+      /* Trading-floor LED ticker palette: pure black canvas, neon green
+         for life/wins, neon red for loss, subtle phosphor grid. */
+      --c-bg:      #000000;
+      --c-panel:   #08090f;
+      --c-panel2:  #050608;
+      --c-edge:    #161a25;
+      --c-accent:  #22ee88;   /* neon green — primary action */
+      --c-win:     #22ee88;   /* same green — gains glow */
+      --c-loss:    #ff3355;   /* neon red — losses glow */
+      --c-warn:    #ffc73a;   /* amber for blackouts / drift */
+      --c-text:    #e6efe9;   /* very slightly green-tinted off-white */
+      --c-grid-a:  rgba(34, 238, 136, 0.10);
+      --c-grid-b:  rgba(34, 238, 136, 0.04);
     }
     html.theme-light {
       --c-bg:      #f4f6fb;
@@ -125,6 +129,70 @@
     .confetti-piece {
       position: fixed; top: -20px; width: 8px; height: 14px;
       pointer-events: none; z-index: 9999; border-radius: 1px;
+    }
+
+    /* ---------- Trading-floor neon glow utilities ---------- */
+    /* Apply to the BIG numbers — balance, equity, P&L. Gives them the
+       LED bloom of a Times Square ticker without any extra DOM. */
+    .ticker {
+      font-feature-settings: "tnum", "lnum", "ss01";
+      letter-spacing: 0.02em;
+    }
+    .ticker-win {
+      color: var(--c-win);
+      text-shadow:
+        0 0 8px rgba(34, 238, 136, 0.55),
+        0 0 22px rgba(34, 238, 136, 0.30);
+    }
+    .ticker-loss {
+      color: var(--c-loss);
+      text-shadow:
+        0 0 8px rgba(255, 51, 85, 0.55),
+        0 0 22px rgba(255, 51, 85, 0.30);
+    }
+    .ticker-neutral {
+      color: var(--c-text);
+      text-shadow: 0 0 6px rgba(230, 239, 233, 0.18);
+    }
+    /* Card with a subtle colored hairline + ambient glow. Used on the
+       Account / Status / Regime cards so they read as live panels rather
+       than flat tiles. */
+    .panel-glow {
+      background: var(--c-panel);
+      border: 1px solid rgba(34, 238, 136, 0.10);
+      box-shadow:
+        inset 0 0 0 1px rgba(34, 238, 136, 0.04),
+        0 0 24px -8px rgba(34, 238, 136, 0.18);
+    }
+    .panel-glow-loss {
+      background: var(--c-panel);
+      border: 1px solid rgba(255, 51, 85, 0.16);
+      box-shadow:
+        inset 0 0 0 1px rgba(255, 51, 85, 0.04),
+        0 0 24px -8px rgba(255, 51, 85, 0.22);
+    }
+    /* Pulsing live dot — green when bot ticking, red when down. */
+    @keyframes ledPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(34, 238, 136, 0.55), 0 0 12px rgba(34, 238, 136, 0.45); }
+      50%      { box-shadow: 0 0 0 6px rgba(34, 238, 136, 0.00), 0 0 18px rgba(34, 238, 136, 0.80); }
+    }
+    .led-pulse-win  { animation: ledPulse 1.6s ease-in-out infinite; }
+    @keyframes ledPulseLoss {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255, 51, 85, 0.55), 0 0 12px rgba(255, 51, 85, 0.45); }
+      50%      { box-shadow: 0 0 0 6px rgba(255, 51, 85, 0.00), 0 0 18px rgba(255, 51, 85, 0.80); }
+    }
+    .led-pulse-loss { animation: ledPulseLoss 1.6s ease-in-out infinite; }
+
+    /* Light mode keeps the bones but drops the glow — printed-paper feel
+       for users who hate dark mode. */
+    html.theme-light .ticker-win    { text-shadow: none; }
+    html.theme-light .ticker-loss   { text-shadow: none; }
+    html.theme-light .ticker-neutral{ text-shadow: none; }
+    html.theme-light .panel-glow,
+    html.theme-light .panel-glow-loss {
+      background: var(--c-panel);
+      border: 1px solid var(--c-edge);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
     }
   </style>
 </head>
@@ -279,11 +347,13 @@
     <!-- KPI row -->
     <section class="grid grid-cols-2 lg:grid-cols-4 gap-4">
       <template x-for="k in kpis()" :key="k.label">
-        <div class="bg-panel border border-edge rounded-xl p-5 relative overflow-hidden
-                    hover:border-accent/40 transition animate-slideIn">
+        <div class="panel-glow rounded-xl p-5 relative overflow-hidden
+                    hover:border-accent/40 transition animate-slideIn"
+             :class="k.tone === 'text-loss' ? 'panel-glow-loss' : ''">
           <div class="text-[10px] uppercase tracking-widest text-slate-400" x-text="k.label"></div>
-          <div class="text-2xl font-semibold mt-2 tabular-nums"
-               :class="k.tone"
+          <div class="text-3xl font-bold mt-2 ticker"
+               :class="k.tone === 'text-loss' ? 'ticker-loss'
+                     : (k.tone === 'text-win' ? 'ticker-win' : 'ticker-neutral')"
                x-text="k.value"></div>
           <div class="text-xs text-slate-500 mt-1" x-text="k.sub"></div>
           <div class="absolute -right-6 -bottom-6 w-24 h-24 rounded-full"
@@ -300,13 +370,10 @@
           <div class="text-xs text-slate-500">Credentials are AES-encrypted at rest with a key derived from <code>AUTH_SECRET</code>.</div>
         </div>
         <div class="flex items-center gap-2 text-xs">
-          <span class="relative flex h-2 w-2">
-            <span class="absolute inline-flex h-full w-full rounded-full opacity-75 animate-pulseDot"
-                  :class="status?.connected ? 'bg-win' : 'bg-slate-600'"></span>
-            <span class="relative inline-flex rounded-full h-2 w-2"
-                  :class="status?.connected ? 'bg-win' : 'bg-loss'"></span>
-          </span>
-          <span x-text="statusLabel" class="uppercase tracking-widest"></span>
+          <span class="inline-block h-2 w-2 rounded-full"
+                :class="status?.connected ? 'bg-win led-pulse-win' : 'bg-loss led-pulse-loss'"></span>
+          <span x-text="statusLabel" class="uppercase tracking-widest"
+                :class="status?.connected ? 'text-win' : 'text-slate-400'"></span>
           <span x-show="status?.updated_at" class="text-slate-500" x-text="staleLabel"></span>
         </div>
       </div>

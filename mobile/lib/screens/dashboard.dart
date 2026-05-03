@@ -376,35 +376,95 @@ class _AccountCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fmt = NumberFormat.currency(symbol: '\$', decimalDigits: 2);
-    final pnlColor = account.dailyPnl >= 0 ? Colors.greenAccent : Colors.redAccent;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Account', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            _Row(label: 'Balance', value: fmt.format(account.balance)),
-            _Row(label: 'Equity', value: fmt.format(account.equity)),
-            _Row(
-              label: 'Today P&L',
-              value: fmt.format(account.dailyPnl),
-              valueColor: pnlColor,
+    final pnlPositive = account.dailyPnl >= 0;
+    final pnlTone = pnlPositive ? TickerTone.win : TickerTone.loss;
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+      padding: const EdgeInsets.all(18),
+      decoration: glowPanel(glow: pnlPositive ? kNeonGreen : kNeonRed),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'ACCOUNT',
+            style: TextStyle(
+              color: kMuted,
+              fontSize: 10,
+              letterSpacing: 3,
+              fontWeight: FontWeight.w600,
             ),
-            _Row(label: 'Open positions', value: '${account.openPositions}'),
-          ],
-        ),
+          ),
+          const SizedBox(height: 10),
+          // Hero number — equity, the one a trader actually watches.
+          TickerText(fmt.format(account.equity), size: 34),
+          const SizedBox(height: 4),
+          Text(
+            'EQUITY',
+            style: TextStyle(color: kMuted, fontSize: 9, letterSpacing: 3),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _AccountStat(
+                  label: 'BALANCE',
+                  value: fmt.format(account.balance),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _AccountStat(
+                  label: 'TODAY P&L',
+                  value: fmt.format(account.dailyPnl),
+                  tone: pnlTone,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _AccountStat(
+                  label: 'OPEN',
+                  value: '${account.openPositions}',
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 }
 
-class _Row extends StatelessWidget {
-  const _Row({required this.label, required this.value, this.valueColor});
+class _AccountStat extends StatelessWidget {
+  const _AccountStat({
+    required this.label,
+    required this.value,
+    this.tone = TickerTone.neutral,
+  });
   final String label;
   final String value;
-  final Color? valueColor;
+  final TickerTone tone;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(color: kMuted, fontSize: 9, letterSpacing: 2),
+        ),
+        const SizedBox(height: 4),
+        TickerText(value, tone: tone, size: 14),
+      ],
+    );
+  }
+}
+
+class _Row extends StatelessWidget {
+  const _Row({required this.label, required this.value});
+  final String label;
+  final String value;
+  final Color? valueColor = null;
 
   @override
   Widget build(BuildContext context) {
