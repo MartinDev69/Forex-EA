@@ -111,6 +111,18 @@ def main() -> None:
             info = mt5_client.account_info()
             log.info("MT5 connected: login=%s server=%s balance=%.2f %s",
                      info.login, info.server, info.balance, info.currency)
+            # Hand the same MetaTrader5 module the client uses to the pip
+            # resolver — pip_size/pip_value calls now query symbol_info on
+            # the live terminal instead of guessing from the symbol name.
+            # Critical for Deriv synthetics, indices, crypto — anything
+            # outside the small hardcoded fallback table.
+            try:
+                import MetaTrader5 as _mt5  # noqa: PLC0415 — runtime import on Windows VPS
+                from src.risk.position_sizing import PipResolver, set_resolver
+                set_resolver(PipResolver(_mt5))
+                log.info("Pip resolver installed — pip math now driven by MT5 symbol_info.")
+            except Exception:
+                log.exception("Could not install live pip resolver; falling back to hardcoded table.")
             status_store.write(
                 connected=True,
                 broker=broker_cfg.broker,
