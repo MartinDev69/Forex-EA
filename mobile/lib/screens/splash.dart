@@ -78,25 +78,49 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: AnimatedBuilder(
-          animation: Listenable.merge([_entry, _pulse]),
-          builder: (_, _) {
-            // Pulse adds a tiny ±2% scale on top of the entry scale.
-            final pulseScale = 1.0 + (_pulse.value * 0.04);
-            return Opacity(
-              opacity: _fade.value,
-              child: Transform.scale(
-                scale: _scale.value * pulseScale,
-                child: Image.asset(
-                  'assets/antigreed-logo.png',
-                  width: 240,
-                  fit: BoxFit.contain,
-                ),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Robot in starting blocks behind a dark scrim — gives the splash
+          // a "ready to trade" feel rather than just a logo on black.
+          Image.asset(
+            'assets/img/robot-ready.jpg',
+            fit: BoxFit.cover,
+            color: Colors.black.withValues(alpha: 0.55),
+            colorBlendMode: BlendMode.darken,
+          ),
+          Container(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment.center,
+                radius: 0.9,
+                colors: [
+                  Colors.transparent,
+                  Colors.black.withValues(alpha: 0.65),
+                ],
               ),
-            );
-          },
-        ),
+            ),
+          ),
+          Center(
+            child: AnimatedBuilder(
+              animation: Listenable.merge([_entry, _pulse]),
+              builder: (_, _) {
+                final pulseScale = 1.0 + (_pulse.value * 0.04);
+                return Opacity(
+                  opacity: _fade.value,
+                  child: Transform.scale(
+                    scale: _scale.value * pulseScale,
+                    child: Image.asset(
+                      'assets/antigreed-logo.png',
+                      width: 240,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

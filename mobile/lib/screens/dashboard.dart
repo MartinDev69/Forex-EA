@@ -249,6 +249,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: ListView(
           padding: const EdgeInsets.symmetric(vertical: 16),
           children: [
+            // Robot hero strip — same trading-floor energy the web dashboard
+            // got. Keeps the visual hierarchy: hero → KPI → account → trades.
+            const _HeroStrip(),
             if (_loading)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 64),
@@ -281,6 +284,82 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 }
+
+class _HeroStrip extends StatelessWidget {
+  const _HeroStrip();
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (!isDark) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+      height: 140,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: kEdge),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Image.asset(
+            'assets/img/robot-trading-floor.jpg',
+            fit: BoxFit.cover,
+          ),
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [Color(0xEE000000), Color(0x66000000), Color(0x00000000)],
+              ),
+            ),
+          ),
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.bottomCenter,
+                end: Alignment.topCenter,
+                colors: [Color(0xCC000000), Color(0x00000000)],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                Text(
+                  'ANTIGREED',
+                  style: TextStyle(
+                    color: kNeonGreen.withValues(alpha: 0.85),
+                    fontSize: 10,
+                    letterSpacing: 4,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const TickerText(
+                  'Trading on autopilot.',
+                  tone: TickerTone.win,
+                  size: 18,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'M15 setups · regime-gated · risk-capped',
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 10),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 
 class _RolePill extends StatelessWidget {
   const _RolePill({required this.role});
