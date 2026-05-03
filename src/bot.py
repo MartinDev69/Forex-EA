@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+from src.api.broker_status import BrokerStatusStore
 from src.allocator.allocator import ChampionChallengerAllocator
 from src.allocator.score import score_pairs
 from src.allocator.store import AllocationStore
@@ -77,6 +78,9 @@ class BotState:
     # (strategy, symbol) -> UTC datetime of the last setup-alert we sent.
     # Throttles "near miss" pings to one per pair-strategy per hour.
     last_setup_alert: dict[tuple[str, str], datetime] = field(default_factory=dict)
+    # Last tick on which the broker_status_store was refreshed with live
+    # equity. -1 means we haven't pushed yet — first eligible tick will.
+    last_broker_status_refresh_tick: int = -1
 
 
 class Bot:
@@ -109,6 +113,9 @@ class Bot:
         narrator: NarratorComposer | None = None,
         path_recorder: PathRecorder | None = None,
         kill_switch_flag: KillSwitchFlag | None = None,
+        broker_status_store: BrokerStatusStore | None = None,
+        broker_id: str = "",
+        broker_status_refresh_ticks: int = 5,
     ) -> None:
         self.config = config
         self.strategies = strategies
@@ -160,6 +167,12 @@ class Bot:
         # at the top of each tick and halts cleanly if an operator has
         # tripped it from the API.
         self.kill_switch_flag = kill_switch_flag
+        # None = the bot won't refresh broker_status periodically. main.py
+        # passes a store + the broker id so the API can read live equity
+        # without owning its own MT5 connection.
+        self.broker_status_store = broker_status_store
+        self.broker_id = broker_id
+        self.broker_status_refresh_ticks = max(1, broker_status_refresh_ticks)
         self.state = BotState()
 
     # ------------------------------------------------------------------ core
@@ -197,6 +210,7 @@ class Bot:
 
         self._maybe_refresh_correlations()
         self._maybe_refresh_allocator()
+        self._maybe_refresh_broker_status()
         self._maybe_send_daily_summary()
         self._maybe_send_weekly_digest()
         self._maybe_warn_blackouts()
@@ -355,6 +369,45 @@ class Bot:
             log.info("daily summary sent for %s", today_iso)
         except Exception:
             log.exception("daily summary send failed (will retry next tick)")
+
+    def _maybe_refresh_broker_status(self) -> None:
+        """Push the executor's live account snapshot into broker_status_store
+        every N ticks so the API can show fresh equity + floating P&L
+        without holding its own MT5 connection (only one process can attach
+        to a given MT5 session at a time).
+        """
+        if self.broker_status_store is None:
+            return
+        last = self.state.last_broker_status_refresh_tick
+        if last >= 0 and (self.state.tick_count - last) < self.broker_status_refresh_ticks:
+            return
+        try:
+            info = self.executor.account_info() if hasattr(self.executor, "account_info") else None
+        except Exception:
+            log.exception("broker_status refresh: account_info failed")
+            self.state.last_broker_status_refresh_tick = self.state.tick_count
+            return
+        if not info:
+            self.state.last_broker_status_refresh_tick = self.state.tick_count
+            return
+        # Read the existing row so we don't blow away server/login that
+        # main.py wrote at startup — write() does a full upsert.
+        try:
+            existing = self.broker_status_store.read()
+        except Exception:
+            existing = None
+        try:
+            self.broker_status_store.write(
+                connected=True,
+                broker=self.broker_id or (existing.broker if existing else None),
+                server=existing.server if existing else None,
+                login=existing.login if existing else None,
+                account_info=info,
+            )
+        except Exception:
+            log.exception("broker_status refresh: store write failed")
+        finally:
+            self.state.last_broker_status_refresh_tick = self.state.tick_count
 
     def _maybe_send_weekly_digest(self) -> None:
         """One weekly_digest per ISO week, fired Sunday after 21:00 UTC.

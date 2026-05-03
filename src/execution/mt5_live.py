@@ -141,6 +141,25 @@ class MT5Executor:
             raise RuntimeError(f"account_info failed: {self._mt5.last_error()}")
         return float(info.balance)
 
+    def account_info(self) -> dict:
+        """Live snapshot of balance + equity + floating P&L. Equity already
+        includes unrealized P&L from open positions, so floating works out
+        to equity - balance. Used by the bot tick to keep
+        broker_status_store fresh so the API doesn't need its own MT5
+        connection."""
+        info = self._mt5.account_info()
+        if info is None:
+            raise RuntimeError(f"account_info failed: {self._mt5.last_error()}")
+        balance = float(info.balance)
+        equity = float(info.equity)
+        return {
+            "balance": balance,
+            "equity": equity,
+            "floating": equity - balance,
+            "currency": getattr(info, "currency", "USD"),
+            "leverage": int(getattr(info, "leverage", 0) or 0),
+        }
+
     # -------------------------------------------------------------- orders
 
     def place(self, order: Order) -> Order:

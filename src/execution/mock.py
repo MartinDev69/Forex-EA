@@ -60,6 +60,16 @@ class MockExecutor:
     def account_balance(self) -> float:
         return self.balance
 
+    def account_info(self) -> dict:
+        # Mock has no concept of unrealized P&L — equity == balance, floating = 0.
+        return {
+            "balance": self.balance,
+            "equity": self.balance,
+            "floating": 0.0,
+            "currency": "USD",
+            "leverage": 100,
+        }
+
     def place(self, order: Order) -> Order:
         order.id = next(self._ids)
         order.status = OrderStatus.OPEN

@@ -389,11 +389,23 @@ def account(_user: dict = Depends(current_user)) -> AccountResponse:
     info = status.account_info if status and status.connected else None
     balance = info["balance"] if info and "balance" in info else state.balance
     equity = info["equity"] if info and "equity" in info else balance + today["pnl"]
+    # Today P&L = realized closed-trade pnl from the journal + floating
+    # unrealized from currently open positions. The bot tick keeps
+    # broker_status_store fresh with equity, so floating = equity - balance.
+    # Falls back to realized-only when we don't have a live snapshot yet
+    # (cold start, MT5 disconnected).
+    realized = float(today.get("pnl") or 0.0)
+    floating = 0.0
+    if info and "balance" in info and "equity" in info:
+        try:
+            floating = float(info["equity"]) - float(info["balance"])
+        except (TypeError, ValueError):
+            floating = 0.0
     return AccountResponse(
         balance=balance,
         equity=equity,
         open_positions=_open_positions(),
-        daily_pnl=today["pnl"],
+        daily_pnl=realized + floating,
     )
 
 

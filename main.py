@@ -321,6 +321,11 @@ def main() -> None:
             if os.getenv("VOICE_KILLSWITCH_ENABLED", "0").strip() not in ("0", "false", "False", "")
             else None
         ),
+        # Tick refreshes broker_status_store with live equity + floating P&L
+        # so the API can compute Today P&L (realized + open) without owning
+        # its own MT5 connection (only one Python process can attach).
+        broker_status_store=status_store if use_mt5 else None,
+        broker_id=broker_cfg.broker if use_mt5 else "",
     )
 
     log.info("Strategy toggles: %s", toggle_store.list())
