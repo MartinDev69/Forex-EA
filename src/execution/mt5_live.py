@@ -331,15 +331,50 @@ class MT5Executor:
         return self._mt5.ORDER_FILLING_FOK
 
     def _compute_pnl(self, order: Order) -> float:
-        # For a live account MT5 itself reports realized P&L on the position,
-        # but we've already sent the close — re-query to get the deal's profit.
-        # Fall back to an estimated calc if the broker response doesn't include it.
+        # Ask MT5 what it actually paid: pulls the close deal(s) for this
+        # position and sums profit + swap + commission. The earlier
+        # estimation formula assumed every symbol was a 4-decimal FX pair,
+        # which made it 100× wrong on USOIL/XAU and any other non-FX
+        # instrument — see the +$3,930 phantom that turned out to be $39.30.
+        if order.exit_price is None:
+            return 0.0
+        if order.broker_ticket is None:
+            return self._estimate_pnl_from_pip(order)
+        try:
+            deals = self._mt5.history_deals_get(position=int(order.broker_ticket))
+        except Exception as exc:  # API can be flaky right after a close
+            log.warning("history_deals_get failed for %s: %s", order.symbol, exc)
+            return self._estimate_pnl_from_pip(order)
+        if not deals:
+            return self._estimate_pnl_from_pip(order)
+        out_entries = (self._mt5.DEAL_ENTRY_OUT, self._mt5.DEAL_ENTRY_INOUT)
+        close_deals = [d for d in deals if d.entry in out_entries]
+        if not close_deals:
+            return self._estimate_pnl_from_pip(order)
+        return float(sum(
+            float(d.profit) + float(d.swap) + float(d.commission)
+            for d in close_deals
+        ))
+
+    def _estimate_pnl_from_pip(self, order: Order) -> float:
+        """Last-resort PnL estimate when MT5 history isn't available yet.
+
+        Uses the live PipResolver so symbols with non-standard pip math
+        (USOIL, XAU, JPY pairs) get sized correctly — the previous
+        `diff * 10_000 * 10 * lot_size` heuristic only worked for
+        4-decimal FX pairs and silently mis-priced everything else.
+        """
         if order.exit_price is None:
             return 0.0
         diff = order.exit_price - order.entry_price
         if order.side == SignalType.SELL:
             diff = -diff
-        # Rough 4-decimal-pair approximation — matches MockExecutor, good enough
-        # for dashboards. For accounting, rely on MT5's history_deals_get().
-        pip_value = 10.0 * order.lot_size
-        return diff * 10_000 * pip_value
+        try:
+            from src.risk.position_sizing import pip_size, pip_value as pv
+            ps = pip_size(order.symbol)
+            if ps <= 0:
+                return 0.0
+            pips = diff / ps
+            return pips * pv(order.symbol, order.lot_size)
+        except Exception:
+            return 0.0
