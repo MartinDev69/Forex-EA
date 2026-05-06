@@ -10,11 +10,92 @@ import json
 import logging
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 log = logging.getLogger(__name__)
 
 API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+
+# Emoji glossary — kept consistent so a glance distinguishes
+# operational alerts from trade events from informational chatter.
+EMOJI = {
+    "online":   "🤖",
+    "offline":  "💤",
+    "buy":      "🟢",
+    "sell":     "🔴",
+    "win":      "✅",
+    "loss":     "❌",
+    "scratch":  "➖",
+    "heat":     "🛡️",   # risk-manager / heat-cap gates
+    "blackout": "🚫",   # calendar / news blackouts
+    "regime":   "🌫️",   # regime mismatch
+    "cooldown": "⏳",   # cooldown / re-entry locks
+    "calendar": "📅",
+    "warn":     "⚠️",
+    "win_day":  "📈",
+    "loss_day": "📉",
+    "trophy":   "🏆",
+    "broom":    "🧹",
+}
+
+# Gates with a known severity get distinct icons. Anything we don't
+# recognise falls back to 🛡️ so the message is still readable.
+GATE_ICONS = {
+    "risk manager":     EMOJI["heat"],
+    "portfolio heat":   EMOJI["heat"],
+    "calendar":         EMOJI["blackout"],
+    "blackout":         EMOJI["blackout"],
+    "regime":           EMOJI["regime"],
+    "cooldown":         EMOJI["cooldown"],
+    "kill switch":      "🛑",
+}
+
+
+def _decimals_for(symbol: str) -> int:
+    """Pick a sensible decimal count for the given instrument so a EURUSD
+    price doesn't show as 1.16800 next to a gold price as 4559.36000.
+    """
+    s = (symbol or "").upper()
+    if "XAU" in s or "GOLD" in s:
+        return 2
+    if "OIL" in s or "WTI" in s or "BRENT" in s:
+        return 2
+    if s.endswith("JPY") or s.endswith("JPYM"):
+        return 3
+    if "BTC" in s or "ETH" in s:
+        return 1
+    if any(idx in s for idx in ("US30", "US500", "NAS", "GER", "UK100", "JP225")):
+        return 1
+    return 5
+
+
+def _fmt_price(symbol: str, price: float | None) -> str:
+    if price is None:
+        return "—"
+    return f"{price:.{_decimals_for(symbol)}f}"
+
+
+def _fmt_money(amount: float, currency: str = "USD") -> str:
+    sign = "+" if amount >= 0 else "−"
+    return f"{sign}{abs(amount):.2f} {currency}".rstrip()
+
+
+def _gate_icon(gate: str) -> str:
+    g = (gate or "").lower()
+    for key, icon in GATE_ICONS.items():
+        if key in g:
+            return icon
+    return EMOJI["heat"]
+
+
+@dataclass
+class _ThrottleEntry:
+    first_at: datetime
+    last_at: datetime
+    count: int = 0
+    suppressed: int = 0  # number of repeats since the last send
 
 
 class Notifier(Protocol):
@@ -28,12 +109,23 @@ class NoOpNotifier:
 
 
 class TelegramNotifier:
-    def __init__(self, bot_token: str, chat_id: str, timeout_s: float = 10.0) -> None:
+    def __init__(
+        self,
+        bot_token: str,
+        chat_id: str,
+        timeout_s: float = 10.0,
+        setup_alert_window_min: int = 30,
+    ) -> None:
         if not bot_token or not chat_id:
             raise ValueError("bot_token and chat_id required")
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.timeout_s = timeout_s
+        # How long a setup_alert key stays throttled before we'll send
+        # another one. Repeats during this window are counted and
+        # surfaced as "(+N similar)" on the next message.
+        self.setup_alert_window = timedelta(minutes=setup_alert_window_min)
+        self._setup_throttle: dict[tuple[str, str, str], _ThrottleEntry] = {}
 
     def send(self, text: str) -> bool:
         url = API_URL.format(token=self.bot_token)
@@ -41,6 +133,7 @@ class TelegramNotifier:
             "chat_id": self.chat_id,
             "text": text,
             "parse_mode": "HTML",
+            "disable_web_page_preview": "true",
         }).encode("utf-8")
         try:
             with urllib.request.urlopen(url, data=data, timeout=self.timeout_s) as resp:
@@ -53,7 +146,7 @@ class TelegramNotifier:
             log.exception("telegram error: %s", exc)
             return False
 
-    # Convenience helpers -------------------------------------------------
+    # --------------------------------------------------------------- startup
     def startup(
         self,
         *,
@@ -70,14 +163,19 @@ class TelegramNotifier:
         sym_str = ", ".join(symbols)
         strat_str = ", ".join(s.replace("_", " ").title() for s in strategies) or "none"
         return self.send(
-            f"<b>🤖 AntiGreed online</b>\n"
-            f"Broker: {broker} #{login} ({server})\n"
-            f"Balance: {balance:.2f} {currency}\n"
+            f"<b>{EMOJI['online']} AntiGreed online</b>\n"
+            f"Broker: <code>{broker} #{login}</code>\n"
+            f"Server: <code>{server}</code>\n"
+            f"Balance: <code>{balance:,.2f} {currency}</code>\n"
             f"Pairs: <code>{sym_str}</code>\n"
             f"Strategies: {strat_str}\n"
-            f"Risk: {risk_pct:.1%}/trade · Daily cap {max_daily_loss_pct:.0%}"
+            f"Risk: <b>{risk_pct:.1%}</b>/trade · Daily cap <b>{max_daily_loss_pct:.0%}</b>"
         )
 
+    def shutdown(self, *, reason: str = "manual stop") -> bool:
+        return self.send(f"<b>{EMOJI['offline']} AntiGreed offline</b>\n<i>{reason}</i>")
+
+    # --------------------------------------------------------------- trades
     def trade_opened(
         self,
         *,
@@ -94,24 +192,26 @@ class TelegramNotifier:
         regime: str | None = None,
         reason: str | None = None,
     ) -> bool:
-        emoji = "🟢" if side.upper() == "BUY" else "🔴"
-        lines = [f"<b>{emoji} {side.upper()} {symbol}</b>"]
-        if strategy:
-            lines.append(f"Strategy: {strategy.replace('_', ' ').title()}")
-        lines.append(f"Entry: {price:.5f} · {lot_size:.2f} lots")
+        side_u = side.upper()
+        emoji = EMOJI["buy"] if side_u == "BUY" else EMOJI["sell"]
+        lines = [f"{emoji} <b>OPEN {side_u} {symbol}</b> · <code>{lot_size:.2f}</code> lot"]
+        lines.append(f"Entry <code>{_fmt_price(symbol, price)}</code>")
         if stop_loss is not None and take_profit is not None:
-            sl_text = f"{stop_loss:.5f}"
-            tp_text = f"{take_profit:.5f}"
-            if sl_pips is not None:
-                sl_text += f" ({sl_pips:.0f} pips)"
-            if tp_pips is not None:
-                tp_text += f" ({tp_pips:.0f} pips)"
-            lines.append(f"SL: {sl_text}")
-            lines.append(f"TP: {tp_text}")
+            sl_extra = f" ({sl_pips:.0f}p)" if sl_pips is not None else ""
+            tp_extra = f" ({tp_pips:.0f}p)" if tp_pips is not None else ""
+            lines.append(
+                f"SL <code>{_fmt_price(symbol, stop_loss)}</code>{sl_extra}  ·  "
+                f"TP <code>{_fmt_price(symbol, take_profit)}</code>{tp_extra}"
+            )
+        meta_bits: list[str] = []
         if risk_reward is not None:
-            lines.append(f"R:R {risk_reward:.1f}")
+            meta_bits.append(f"R:R <b>{risk_reward:.2f}</b>")
+        if strategy:
+            meta_bits.append(f"<i>{strategy.replace('_', ' ').title()}</i>")
         if regime:
-            lines.append(f"Regime: {regime}")
+            meta_bits.append(f"regime <code>{regime}</code>")
+        if meta_bits:
+            lines.append(" · ".join(meta_bits))
         if reason:
             lines.append(f"<i>{reason}</i>")
         return self.send("\n".join(lines))
@@ -130,73 +230,67 @@ class TelegramNotifier:
         today_trades: int | None = None,
         today_wins: int | None = None,
     ) -> bool:
-        emoji = "✅" if pnl >= 0 else "❌"
-        lines = [f"<b>{emoji} {pnl:+.2f} · {side.upper()} {symbol}</b>"]
-        if strategy:
-            lines.append(f"Strategy: {strategy.replace('_', ' ').title()}")
-        if exit_price is not None:
-            lines.append(f"Exit: {exit_price:.5f} ({reason})")
+        side_u = side.upper()
+        if abs(pnl) < 0.01:
+            emoji = EMOJI["scratch"]
+        elif pnl > 0:
+            emoji = EMOJI["win"]
         else:
-            lines.append(f"Reason: {reason}")
+            emoji = EMOJI["loss"]
+        sign = "+" if pnl >= 0 else "−"
+        amount = f"<code>{sign}{abs(pnl):.2f}</code>"
+
+        lines = [f"{emoji} <b>CLOSE {side_u} {symbol}</b> · {amount}"]
+        if exit_price is not None:
+            lines.append(
+                f"Exit <code>{_fmt_price(symbol, exit_price)}</code> · {reason}"
+            )
+        else:
+            lines.append(f"Reason: <i>{reason}</i>")
+
+        meta: list[str] = []
         if hold_minutes is not None:
-            lines.append(f"Held: {self._fmt_duration(hold_minutes)}")
+            meta.append(f"held {self._fmt_duration(hold_minutes)}")
+        if strategy:
+            meta.append(f"<i>{strategy.replace('_', ' ').title()}</i>")
+        if meta:
+            lines.append(" · ".join(meta))
+
         if today_pnl is not None and today_trades is not None:
             wr = (today_wins / today_trades) if today_trades and today_wins is not None else 0
             wr_text = f" · {wr:.0%} WR" if today_wins is not None else ""
-            lines.append(f"Today: {today_pnl:+.2f} ({today_trades}{wr_text})")
+            today_sign = "+" if today_pnl >= 0 else "−"
+            lines.append(
+                f"<i>Today: <code>{today_sign}{abs(today_pnl):.2f}</code> "
+                f"on {today_trades} trade(s){wr_text}</i>"
+            )
         return self.send("\n".join(lines))
 
+    # --------------------------------------------------------------- daily / weekly
     def daily_summary(
-        self, *, trades: int, wins: int, pnl: float, equity: float,
-        best_pair: str | None = None, worst_pair: str | None = None,
+        self,
+        *,
+        trades: int,
+        wins: int,
+        pnl: float,
+        equity: float,
+        best_pair: str | None = None,
+        worst_pair: str | None = None,
     ) -> bool:
         win_rate = wins / trades if trades else 0
-        emoji = "📈" if pnl >= 0 else "📉"
+        emoji = EMOJI["win_day"] if pnl >= 0 else EMOJI["loss_day"]
+        sign = "+" if pnl >= 0 else "−"
         lines = [
-            f"<b>{emoji} Daily Summary</b>",
-            f"Trades: {trades} · Wins: {wins} ({win_rate:.0%})",
-            f"P&L: {pnl:+.2f}",
-            f"Equity: {equity:.2f}",
+            f"{emoji} <b>Daily summary</b>",
+            f"Trades <b>{trades}</b> · Wins <b>{wins}</b> ({win_rate:.0%})",
+            f"P&amp;L <code>{sign}{abs(pnl):.2f}</code>",
+            f"Equity <code>{equity:,.2f}</code>",
         ]
         if best_pair:
-            lines.append(f"Best: {best_pair}")
+            lines.append(f"Best <code>{best_pair}</code>")
         if worst_pair and worst_pair != best_pair:
-            lines.append(f"Worst: {worst_pair}")
+            lines.append(f"Worst <code>{worst_pair}</code>")
         return self.send("\n".join(lines))
-
-    def blackout_warning(
-        self,
-        *,
-        title: str,
-        currency: str,
-        minutes_until: float,
-        affected_pairs: list[str],
-        before_min: int,
-        after_min: int,
-    ) -> bool:
-        pairs = ", ".join(affected_pairs) if affected_pairs else "—"
-        return self.send(
-            f"<b>⚠️ {title}</b> · <b>{currency}</b>\n"
-            f"Event in {self._fmt_duration(minutes_until)} · "
-            f"blackout {before_min}m before → {after_min}m after\n"
-            f"New entries paused on: <code>{pairs}</code>"
-        )
-
-    def setup_alert(
-        self,
-        *,
-        symbol: str,
-        side: str,
-        strategy: str,
-        gate: str,
-        detail: str,
-    ) -> bool:
-        emoji = "👀"
-        return self.send(
-            f"<b>{emoji} Setup spotted: {side.upper()} {symbol}</b>\n"
-            f"Strategy: {strategy.replace('_', ' ').title()}\n"
-            f"Gated by {gate}: <i>{detail}</i>"
-        )
 
     def weekly_digest(
         self,
@@ -210,23 +304,115 @@ class TelegramNotifier:
         best_strategy: str | None,
     ) -> bool:
         win_rate = wins / trades if trades else 0
-        emoji = "🏆" if pnl >= 0 else "🧹"
+        emoji = EMOJI["trophy"] if pnl >= 0 else EMOJI["broom"]
+        sign = "+" if pnl >= 0 else "−"
         lines = [
-            f"<b>{emoji} Weekly Digest</b>",
-            f"Trades: {trades} · Wins: {wins} ({win_rate:.0%})",
-            f"P&L: {pnl:+.2f}",
-            f"Equity: {equity:.2f}",
+            f"{emoji} <b>Weekly digest</b>",
+            f"Trades <b>{trades}</b> · Wins <b>{wins}</b> ({win_rate:.0%})",
+            f"P&amp;L <code>{sign}{abs(pnl):.2f}</code>",
+            f"Equity <code>{equity:,.2f}</code>",
         ]
         if best_strategy:
-            lines.append(f"Top strategy: {best_strategy.replace('_', ' ').title()}")
+            lines.append(f"Top strategy: <i>{best_strategy.replace('_', ' ').title()}</i>")
         if best_symbol:
-            lines.append(f"Best pair: {best_symbol}")
+            lines.append(f"Best <code>{best_symbol}</code>")
         if worst_symbol and worst_symbol != best_symbol:
-            lines.append(f"Worst pair: {worst_symbol}")
+            lines.append(f"Worst <code>{worst_symbol}</code>")
+        return self.send("\n".join(lines))
+
+    # --------------------------------------------------------------- alerts
+    def blackout_warning(
+        self,
+        *,
+        title: str,
+        currency: str,
+        minutes_until: float,
+        affected_pairs: list[str],
+        before_min: int,
+        after_min: int,
+    ) -> bool:
+        pairs = ", ".join(affected_pairs) if affected_pairs else "—"
+        return self.send(
+            f"{EMOJI['calendar']} <b>{title}</b> · <code>{currency}</code>\n"
+            f"In <b>{self._fmt_duration(minutes_until)}</b>"
+            f" · pause <b>{before_min}m</b> before → <b>{after_min}m</b> after\n"
+            f"Affects: <code>{pairs}</code>"
+        )
+
+    def setup_alert(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        strategy: str,
+        gate: str,
+        detail: str,
+        price: float | None = None,
+    ) -> bool:
+        """Send a "setup gated" alert with throttling.
+
+        Repeated alerts for the same (symbol, side, gate) are debounced
+        to one every `setup_alert_window` (default 30 min). Repeats
+        within the window are counted and surfaced on the next send as
+        "<i>+N similar suppressed</i>" so the user sees activity without
+        being spammed.
+        """
+        now = datetime.now(timezone.utc)
+        gate_key = self._gate_key(gate)
+        key = (symbol.upper(), side.upper(), gate_key)
+        entry = self._setup_throttle.get(key)
+        if entry is not None and (now - entry.last_at) < self.setup_alert_window:
+            entry.last_at = now
+            entry.count += 1
+            entry.suppressed += 1
+            return True  # silent: hit telegram quota / spam ceiling
+
+        suppressed_before = entry.suppressed if entry else 0
+        self._setup_throttle[key] = _ThrottleEntry(
+            first_at=entry.first_at if entry else now,
+            last_at=now,
+            count=(entry.count + 1) if entry else 1,
+            suppressed=0,
+        )
+
+        side_u = side.upper()
+        side_emoji = EMOJI["buy"] if side_u == "BUY" else EMOJI["sell"]
+        gate_emoji = _gate_icon(gate)
+        lines = [
+            f"{gate_emoji} <b>Skipped {side_emoji} {side_u} {symbol}</b>"
+            f" — <code>{_fmt_price(symbol, price)}</code>"
+            if price is not None
+            else f"{gate_emoji} <b>Skipped {side_emoji} {side_u} {symbol}</b>",
+            f"<i>{strategy.replace('_', ' ').title()}</i>"
+            f" · gated by <b>{gate}</b>",
+            f"<i>{detail}</i>",
+        ]
+        if suppressed_before > 0:
+            window_min = int(self.setup_alert_window.total_seconds() // 60)
+            lines.append(
+                f"<i>+{suppressed_before} similar suppressed in last {window_min}m</i>"
+            )
         return self.send("\n".join(lines))
 
     @staticmethod
+    def _gate_key(gate: str) -> str:
+        """Bucket gate strings into stable keys for throttling.
+
+        Avoids treating "portfolio heat 12.3%" and "portfolio heat 14.7%"
+        as different reasons — they're the same gate firing twice.
+        """
+        g = (gate or "").lower()
+        for token in ("portfolio heat", "risk manager", "blackout",
+                      "calendar", "regime", "cooldown", "kill switch"):
+            if token in g:
+                return token
+        return g.split(":")[0].strip()
+
+    # --------------------------------------------------------------- helpers
+    @staticmethod
     def _fmt_duration(minutes: float) -> str:
+        if minutes < 1:
+            return "<1 min"
         if minutes < 60:
             return f"{minutes:.0f} min"
         hours = minutes / 60

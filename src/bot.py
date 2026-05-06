@@ -272,6 +272,7 @@ class Bot:
                         side=signal.type.value,
                         gate="ML filter",
                         detail=signal.reason or "below confidence threshold",
+                        price=signal.price,
                     )
                     continue
                 if self._handle_signal(signal, strategy, regime):
@@ -546,10 +547,12 @@ class Bot:
         side: str,
         gate: str,
         detail: str,
+        price: float | None = None,
     ) -> None:
         """Fire a 'setup spotted but gated' Telegram, throttled to one per
-        (strategy, symbol) per hour. Lets the user feel the bot is watching
-        even when nothing is opening, without spamming every minute.
+        (strategy, symbol) per hour. The notifier additionally throttles
+        per (symbol, side, gate-key) — together they avoid spamming the
+        chat when the same heat-cap gate fires on every tick.
         """
         if not hasattr(self.notifier, "setup_alert"):
             return
@@ -565,6 +568,7 @@ class Bot:
                 strategy=strategy_name,
                 gate=gate,
                 detail=detail,
+                price=price,
             )
         except Exception:
             log.exception("setup alert send failed for %s %s", strategy_name, symbol)
@@ -655,6 +659,7 @@ class Bot:
                 side=signal.type.value,
                 gate="risk manager",
                 detail=decision.reason or "rejected",
+                price=signal.price,
             )
             return False
 
