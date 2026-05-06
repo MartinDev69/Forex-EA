@@ -227,9 +227,15 @@ document.addEventListener("alpine:init", () => {
         .filter(t => t.closed_at)
         .sort((a, b) => new Date(a.closed_at) - new Date(b.closed_at));
       const labels = closed.map((_, i) => i + 1);
-      let running = this.account?.balance ?? 10000;
+      // The /account endpoint reports the *current* balance — i.e. after every
+      // closed trade has already settled. Walking forward from that anchor
+      // ends the curve at current+totalPnl, which is the wrong direction.
+      // Instead, derive the historical starting balance and walk forward from
+      // there so the curve ends at today's balance.
+      const total = closed.reduce((s, t) => s + (t.pnl || 0), 0);
+      const starting = (this.account?.balance ?? 10000) - total;
+      let running = starting;
       const series = closed.map(t => (running += (t.pnl || 0)));
-      const starting = this.account?.balance ?? 10000;
 
       const ctx = document.getElementById("equity-chart");
       if (!ctx) return;
