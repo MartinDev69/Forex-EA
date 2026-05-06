@@ -34,14 +34,15 @@ async function api(path, { method = "GET", body, token } = {}) {
 document.addEventListener("alpine:init", () => {
 
   // ---------- THEME ----------
-  // The pre-hydration script in index.html has already applied `theme-light` to
-  // <html> if needed; this store just keeps Alpine in sync for the toggle UI.
+  // Pre-hydration script in index.html has already applied data-theme to <html>;
+  // this store keeps Alpine in sync for the toggle UI.
   Alpine.store("theme", {
-    isLight: document.documentElement.classList.contains("theme-light"),
+    isLight: document.documentElement.getAttribute("data-theme") === "light",
     toggle() {
       this.isLight = !this.isLight;
-      document.documentElement.classList.toggle("theme-light", this.isLight);
-      try { localStorage.setItem("antigreed:theme", this.isLight ? "light" : "dark"); } catch (_) {}
+      const next = this.isLight ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", next);
+      try { localStorage.setItem("antigreed:theme", next); } catch (_) {}
     },
   });
 
@@ -184,34 +185,35 @@ document.addEventListener("alpine:init", () => {
       const wins = this.trades.filter(t => t.closed_at && (t.pnl || 0) > 0).length;
       const closed = this.trades.filter(t => t.closed_at).length;
       const wr = closed ? Math.round((wins / closed) * 100) : 0;
+      const equityUp = (acc.equity ?? 0) >= (acc.balance ?? 0);
       return [
         {
           label: "Balance",
           value: this.fmtMoney(acc.balance ?? 0),
           sub: "starting equity",
-          tone: "text-slate-100",
-          halo: "bg-accent/10",
+          cls: "neutral",
+          glow: "",
         },
         {
           label: "Equity",
           value: this.fmtMoney(acc.equity ?? 0),
           sub: "balance + open PnL",
-          tone: (acc.equity ?? 0) >= (acc.balance ?? 0) ? "text-win" : "text-loss",
-          halo: "bg-win/10",
+          cls: equityUp ? "green" : "red",
+          glow: equityUp ? "glow-green" : "glow-red",
         },
         {
-          label: "Daily PnL",
+          label: "Today PnL",
           value: this.fmtPnl(pnl),
-          sub: "closed today (UTC)",
-          tone: pnl >= 0 ? "text-win" : "text-loss",
-          halo: pnl >= 0 ? "bg-win/10" : "bg-loss/10",
+          sub: "realized + floating",
+          cls: pnl >= 0 ? "green" : "red",
+          glow: pnl >= 0 ? "glow-green" : "glow-red",
         },
         {
           label: "Win rate",
           value: `${wr}%`,
           sub: `${wins} / ${closed} closed`,
-          tone: "text-accent",
-          halo: "bg-accent/10",
+          cls: wr >= 50 ? "green" : "neutral",
+          glow: "",
         },
       ];
     },
@@ -231,24 +233,26 @@ document.addEventListener("alpine:init", () => {
 
       const ctx = document.getElementById("equity-chart");
       if (!ctx) return;
+      const isLight = document.documentElement.getAttribute("data-theme") === "light";
+      const lineColor = isLight ? "#059669" : "#22ee88";
       if (!this._chart) {
         const grad = ctx.getContext("2d").createLinearGradient(0, 0, 0, 256);
-        grad.addColorStop(0, "rgba(34,211,238,0.35)");
-        grad.addColorStop(1, "rgba(34,211,238,0.00)");
+        grad.addColorStop(0, isLight ? "rgba(5,150,105,0.28)" : "rgba(34,238,136,0.32)");
+        grad.addColorStop(1, "rgba(34,238,136,0.00)");
         this._chart = new Chart(ctx, {
           type: "line",
           data: {
             labels,
             datasets: [{
               data: series,
-              borderColor: "#22d3ee",
+              borderColor: lineColor,
               backgroundColor: grad,
-              borderWidth: 2,
+              borderWidth: 2.5,
               fill: true,
               tension: 0.28,
               pointRadius: 0,
               pointHoverRadius: 4,
-              pointHoverBackgroundColor: "#22d3ee",
+              pointHoverBackgroundColor: lineColor,
             }],
           },
           options: {
@@ -718,7 +722,7 @@ document.addEventListener("alpine:init", () => {
 
 // -------- Confetti (vanilla, no dep) --------
 function confetti() {
-  const colors = ["#22d3ee", "#10b981", "#f59e0b", "#a78bfa", "#f472b6"];
+  const colors = ["#22ee88", "#ffc73a", "#d8e8e0", "#22ee88", "#ff3355"];
   const n = 60;
   for (let i = 0; i < n; i++) {
     const piece = document.createElement("div");

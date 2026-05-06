@@ -40,6 +40,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   DriftResponse? _drift;
   FillStatsResponse? _fillStats;
   AllocatorResponse? _allocator;
+  List<Trade> _trades = const [];
   String _blackoutSymbol = _kDefaultBlackoutSymbol;
   bool _loading = true;
   String? _error;
@@ -81,6 +82,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         widget.apiClient.drift(),
         widget.apiClient.fillStats(),
         widget.apiClient.allocator(),
+        widget.apiClient.trades(limit: 50),
       ]);
       if (!mounted) return;
       setState(() {
@@ -92,6 +94,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _drift = results[5] as DriftResponse;
         _fillStats = results[6] as FillStatsResponse;
         _allocator = results[7] as AllocatorResponse;
+        _trades = results[8] as List<Trade>;
         _loading = false;
         _error = null;
       });
@@ -258,12 +261,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 child: Center(child: LogoSpinner(size: 88, label: 'LOADING')),
               ),
             if (_error != null) _ErrorCard(message: _error!),
+            if (_account != null) _AccountCard(account: _account!),
+            if (_account != null && _status != null)
+              _KpiGrid(account: _account!, status: _status!, trades: _trades),
             if (_status != null)
               _StatusCard(
                 status: _status!,
                 onToggle: _toggleBot,
               ),
-            if (_account != null) _AccountCard(account: _account!),
             if (_blackout != null)
               _BlackoutCard(
                 status: _blackout!,
@@ -291,67 +296,138 @@ class _HeroStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    if (!isDark) return const SizedBox.shrink();
+    final edge = isDark ? kEdge : kLightEdge;
+    final overlayDark = isDark ? Colors.black : Colors.white;
+    final eyebrowColor = isDark ? kNeonGreen : kLightWin;
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 6, 12, 12),
-      height: 140,
+      height: 132,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: kEdge),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: edge),
       ),
       clipBehavior: Clip.antiAlias,
-      child: Stack(
-        fit: StackFit.expand,
+      child: Row(
         children: [
-          Image.asset(
-            'assets/img/robot-trading-floor.jpg',
-            fit: BoxFit.cover,
-          ),
-          Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: [Color(0xEE000000), Color(0x66000000), Color(0x00000000)],
-              ),
-            ),
-          ),
-          Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.bottomCenter,
-                end: Alignment.topCenter,
-                colors: [Color(0xCC000000), Color(0x00000000)],
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.end,
+          // Main: trading floor, with copy.
+          Expanded(
+            flex: 7,
+            child: Stack(
+              fit: StackFit.expand,
               children: [
-                Text(
-                  'ANTIGREED',
-                  style: TextStyle(
-                    color: kNeonGreen.withValues(alpha: 0.85),
-                    fontSize: 10,
-                    letterSpacing: 4,
-                    fontWeight: FontWeight.w700,
+                ColorFiltered(
+                  colorFilter: ColorFilter.mode(
+                    overlayDark.withValues(alpha: isDark ? 0.20 : 0.10),
+                    BlendMode.darken,
+                  ),
+                  child: Image.asset(
+                    'assets/img/robot-trading-floor.jpg',
+                    fit: BoxFit.cover,
                   ),
                 ),
-                const SizedBox(height: 4),
-                const TickerText(
-                  'Trading on autopilot.',
-                  tone: TickerTone.win,
-                  size: 18,
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.centerLeft,
+                      end: Alignment.centerRight,
+                      colors: [
+                        overlayDark.withValues(alpha: isDark ? 0.85 : 0.78),
+                        overlayDark.withValues(alpha: isDark ? 0.45 : 0.35),
+                        overlayDark.withValues(alpha: 0),
+                      ],
+                    ),
+                  ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'M15 setups · regime-gated · risk-capped',
-                  style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 10),
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [
+                        overlayDark.withValues(alpha: isDark ? 0.7 : 0.55),
+                        overlayDark.withValues(alpha: 0),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Text(
+                        'ANTIGREED',
+                        style: TextStyle(
+                          color: eyebrowColor.withValues(alpha: 0.85),
+                          fontSize: 9,
+                          letterSpacing: 4,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      const TickerText(
+                        'Trading on autopilot.',
+                        tone: TickerTone.win,
+                        size: 16,
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        'M15 · regime-gated',
+                        style: TextStyle(
+                          color: (isDark ? Colors.white : Colors.black87)
+                              .withValues(alpha: 0.55),
+                          fontSize: 10,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
+            ),
+          ),
+          // Accent: iridescent robot.
+          Expanded(
+            flex: 3,
+            child: Container(
+              decoration: BoxDecoration(border: Border(left: BorderSide(color: edge))),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.asset(
+                    'assets/img/robot-iridescent.jpg',
+                    fit: BoxFit.cover,
+                    alignment: Alignment.center,
+                  ),
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          overlayDark.withValues(alpha: 0),
+                          overlayDark.withValues(alpha: isDark ? 0.7 : 0.5),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    bottom: 8,
+                    left: 0,
+                    right: 0,
+                    child: Text(
+                      'AI BOT',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: eyebrowColor.withValues(alpha: 0.9),
+                        fontSize: 8,
+                        letterSpacing: 3,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -360,6 +436,130 @@ class _HeroStrip extends StatelessWidget {
   }
 }
 
+
+class _KpiGrid extends StatelessWidget {
+  const _KpiGrid({required this.account, required this.status, required this.trades});
+  final Account account;
+  final BotStatus status;
+  final List<Trade> trades;
+
+  @override
+  Widget build(BuildContext context) {
+    final closed = trades.where((t) => t.closedAt != null).toList();
+    final wins = closed.where((t) => t.pnl > 0).length;
+    final wr = closed.isEmpty ? 0 : ((wins / closed.length) * 100).round();
+    final sessionPnl = trades.fold<double>(0, (s, t) => s + t.pnl);
+    final sessionPnlSign = sessionPnl >= 0 ? '+' : '';
+    final pnlTone = sessionPnl >= 0 ? TickerTone.win : TickerTone.loss;
+    final hb = status.lastHeartbeat == null
+        ? '—'
+        : DateFormat('HH:mm:ss').format(status.lastHeartbeat!.toLocal());
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: GridView.count(
+        shrinkWrap: true,
+        crossAxisCount: 2,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 8,
+        physics: const NeverScrollableScrollPhysics(),
+        childAspectRatio: 1.85,
+        children: [
+          _KpiTile(
+            label: 'WIN RATE',
+            value: '$wr%',
+            sub: '$wins / ${closed.length} closed',
+            tone: wr >= 50 ? TickerTone.win : TickerTone.neutral,
+          ),
+          _KpiTile(
+            label: 'SESSION P&L',
+            value: '$sessionPnlSign\$${sessionPnl.abs().toStringAsFixed(0)}',
+            sub: '${trades.length} trades',
+            tone: pnlTone,
+          ),
+          _KpiTile(
+            label: 'OPEN POS.',
+            value: '${status.openPositions}',
+            sub: 'live trades',
+            tone: TickerTone.neutral,
+          ),
+          _KpiTile(
+            label: 'HEARTBEAT',
+            value: hb,
+            valueSize: 14,
+            sub: 'last tick',
+            tone: TickerTone.neutral,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _KpiTile extends StatelessWidget {
+  const _KpiTile({
+    required this.label,
+    required this.value,
+    required this.sub,
+    this.tone = TickerTone.neutral,
+    this.valueSize = 20,
+  });
+  final String label;
+  final String value;
+  final String sub;
+  final TickerTone tone;
+  final double valueSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final glow = tone == TickerTone.loss
+        ? (isDark ? kNeonRed : kLightLoss)
+        : (isDark ? kNeonGreen : kLightWin);
+    final hasGlow = tone != TickerTone.neutral;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+      decoration: BoxDecoration(
+        color: isDark ? kSurface : kLightSurface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: hasGlow
+              ? glow.withValues(alpha: isDark ? 0.22 : 0.30)
+              : (isDark ? kEdge : kLightEdge),
+        ),
+        boxShadow: hasGlow && isDark
+            ? [
+                BoxShadow(
+                  color: glow.withValues(alpha: 0.18),
+                  blurRadius: 18,
+                  spreadRadius: -8,
+                ),
+              ]
+            : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: mutedColor(context),
+              fontSize: 9,
+              letterSpacing: 2.4,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          TickerText(value, tone: tone, size: valueSize),
+          Text(
+            sub,
+            style: TextStyle(color: mutedColor(context), fontSize: 10),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _RolePill extends StatelessWidget {
   const _RolePill({required this.role});

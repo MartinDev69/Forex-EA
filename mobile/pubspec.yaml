@@ -30,6 +30,8 @@ flutter:
     - assets/img/robot-ready.jpg
     - assets/img/robot-tablet.jpg
     - assets/img/robot-trading-floor.jpg
+    - assets/img/robot-iridescent.jpg
+    - assets/img/led-ticker.jpg
 
 # Generates iOS + Android launcher icons from the AntiGreed logo.
 # Run once after editing:  dart run flutter_launcher_icons

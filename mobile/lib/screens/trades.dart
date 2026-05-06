@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../api/client.dart';
 import '../models/explanation.dart';
 import '../models/status.dart';
+import '../theme.dart';
 import '../widgets/logo_spinner.dart';
 
 /// Format a price using the broker's typical decimal precision per symbol
@@ -90,54 +91,162 @@ class _TradesScreenState extends State<TradesScreen> {
                           child: Center(child: Text('No trades yet.')),
                         )
                       ])
-                    : ListView(
-                        children: [
-                          for (final t in _trades!)
-                            Card(
-                              child: ListTile(
-                                onTap: () => _showExplanation(t),
-                                leading: CircleAvatar(
-                                  backgroundColor:
-                                      t.side == 'BUY' ? Colors.green.shade700 : Colors.red.shade700,
-                                  child: Text(
-                                    t.side == 'BUY' ? 'B' : 'S',
-                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                                  ),
-                                ),
-                                title: Text(t.symbol,
-                                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                                subtitle: Text(
-                                  '${dateFmt.format(t.openedAt.toLocal())} • entry ${_fmtPrice(t.symbol, t.entryPrice)}',
-                                ),
-                                trailing: t.closedAt == null
-                                    ? Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: Colors.amber.withValues(alpha: 0.15),
-                                          border: Border.all(color: Colors.amber.shade700),
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: const Text(
-                                          'OPEN',
-                                          style: TextStyle(
-                                            color: Colors.amber,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 11,
-                                            letterSpacing: 1.5,
-                                          ),
-                                        ),
-                                      )
-                                    : Text(
-                                        fmt.format(t.pnl),
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: t.pnl >= 0 ? Colors.greenAccent : Colors.redAccent,
-                                        ),
-                                      ),
-                              ),
-                            ),
-                        ],
+                    : ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+                        itemCount: _trades!.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 7),
+                        itemBuilder: (ctx, i) {
+                          final t = _trades![i];
+                          return _TradeTile(
+                            trade: t,
+                            fmt: fmt,
+                            dateFmt: dateFmt,
+                            onTap: () => _showExplanation(t),
+                          );
+                        },
                       )),
+      ),
+    );
+  }
+}
+
+class _TradeTile extends StatelessWidget {
+  const _TradeTile({
+    required this.trade,
+    required this.fmt,
+    required this.dateFmt,
+    required this.onTap,
+  });
+  final Trade trade;
+  final NumberFormat fmt;
+  final DateFormat dateFmt;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isBuy = trade.side == 'BUY';
+    final sideColor = isBuy
+        ? (isDark ? kNeonGreen : kLightWin)
+        : (isDark ? kNeonRed : kLightLoss);
+    final muted = mutedColor(context);
+    final pnlPositive = trade.pnl >= 0;
+    final pnlColor = pnlPositive
+        ? (isDark ? kNeonGreen : kLightWin)
+        : (isDark ? kNeonRed : kLightLoss);
+    final pnlShadow = isDark
+        ? <Shadow>[Shadow(color: pnlColor.withValues(alpha: 0.5), blurRadius: 8)]
+        : const <Shadow>[];
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
+        decoration: BoxDecoration(
+          color: isDark ? kSurface : kLightSurface,
+          border: Border.all(color: isDark ? kEdge : kLightEdge),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          children: [
+            // Side badge — rounded square, neon-tinted.
+            Container(
+              width: 36,
+              height: 36,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: sideColor.withValues(alpha: isDark ? 0.10 : 0.08),
+                border: Border.all(color: sideColor.withValues(alpha: 0.30)),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                isBuy ? 'B' : 'S',
+                style: TextStyle(
+                  color: sideColor,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    trade.symbol,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                      color: isDark ? kText : kLightText,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${dateFmt.format(trade.openedAt.toLocal())} · ${_fmtPrice(trade.symbol, trade.entryPrice)}',
+                    style: TextStyle(color: muted, fontSize: 10),
+                  ),
+                ],
+              ),
+            ),
+            // Right cluster — pnl OR open pill, plus status pill.
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                if (trade.closedAt == null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: kAmber.withValues(alpha: isDark ? 0.10 : 0.10),
+                      border: Border.all(color: kAmber.withValues(alpha: 0.4)),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Text(
+                      'OPEN',
+                      style: TextStyle(
+                        color: kAmber,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 9,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  )
+                else ...[
+                  Text(
+                    '${pnlPositive ? '+' : ''}${trade.pnl.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      color: pnlColor,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                      shadows: pnlShadow,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: (isDark ? kSurface2 : kLightSurface2),
+                      border: Border.all(color: isDark ? kEdge : kLightEdge),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      'CLOSED',
+                      style: TextStyle(
+                        color: muted,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 8,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

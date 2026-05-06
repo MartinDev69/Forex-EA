@@ -150,10 +150,10 @@ class _LoginScreenState extends State<LoginScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Robot-with-tablet hero behind a black/green vignette so the
-          // form is the focus but the page reads as a trading product.
+          // Iridescent robot hero behind a vignette — matches the design
+          // and reads as a trading product, not a generic form.
           Image.asset(
-            'assets/img/robot-tablet.jpg',
+            'assets/img/robot-iridescent.jpg',
             fit: BoxFit.cover,
             color: Colors.black.withValues(alpha: 0.55),
             colorBlendMode: BlendMode.darken,
