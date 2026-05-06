@@ -459,6 +459,19 @@ document.addEventListener("alpine:init", () => {
         : d.toLocaleDateString();
     },
 
+    formatIndicator(value) {
+      if (value === null || value === undefined) return "—";
+      if (typeof value === "boolean") return value ? "yes" : "no";
+      if (typeof value === "number") {
+        const abs = Math.abs(value);
+        if (Number.isInteger(value) && abs < 1000) return String(value);
+        if (abs < 10) return value.toFixed(2);
+        if (abs < 100) return value.toFixed(1);
+        return value.toFixed(4);
+      }
+      return String(value);
+    },
+
     // --- Calendar blackout pill ---
     // Returns { text, tone } where tone is used to colorize the pill:
     //   'muted' = no upcoming event / calendar disabled,

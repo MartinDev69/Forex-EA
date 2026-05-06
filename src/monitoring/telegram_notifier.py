@@ -77,6 +77,23 @@ def _fmt_price(symbol: str, price: float | None) -> str:
     return f"{price:.{_decimals_for(symbol)}f}"
 
 
+def _fmt_indicator(value: object) -> str:
+    """Compact indicator value for inline lists. Floats get 4 decimals
+    so prices round cleanly; small numbers show 2 decimals so RSI/ADX
+    don't smear into noise."""
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (int,)):
+        return str(value)
+    if isinstance(value, float):
+        if abs(value) < 10:
+            return f"{value:.2f}"
+        if abs(value) < 100:
+            return f"{value:.1f}"
+        return f"{value:.4f}"
+    return str(value)
+
+
 def _fmt_money(amount: float, currency: str = "USD") -> str:
     sign = "+" if amount >= 0 else "−"
     return f"{sign}{abs(amount):.2f} {currency}".rstrip()
@@ -353,6 +370,7 @@ class TelegramNotifier:
         risk_reward: float | None = None,
         regime: str | None = None,
         reason: str | None = None,
+        indicators: dict | None = None,
     ) -> bool:
         """Trade idea to act on manually — strategy is in 'signal' mode,
         so the bot is not placing this. Visually distinct from auto-open
@@ -379,6 +397,11 @@ class TelegramNotifier:
             lines.append(" · ".join(meta))
         if reason:
             lines.append(f"<i>{reason}</i>")
+        if indicators:
+            ind_str = ", ".join(
+                f"{k}={_fmt_indicator(v)}" for k, v in list(indicators.items())[:5]
+            )
+            lines.append(f"<i>Saw: {ind_str}</i>")
         lines.append("<i>Manual — bot is not placing this.</i>")
         return self.send("\n".join(lines))
 

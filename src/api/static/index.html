@@ -513,6 +513,10 @@
     .explain-cell { background: var(--surface2); border: 1px solid var(--edge); border-radius: 8px; padding: 10px 12px; }
     .explain-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--muted); }
     .explain-val { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--text); margin-top: 4px; }
+    .indicator-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
+    .indicator-cell { background: rgba(34,238,136,0.06); border: 1px solid var(--gglow); border-radius: 7px; padding: 7px 10px; }
+    .indicator-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.18em; color: var(--green); opacity: 0.85; }
+    .indicator-val { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--text); margin-top: 2px; }
 
     /* Users */
     .users-table { width: 100%; border-collapse: collapse; }
@@ -1139,12 +1143,23 @@
                     <div x-show="explainStatus[t.id] === 'missing'" style="font-size:11px;color:var(--muted)">No explanation captured for this trade.</div>
                     <div x-show="explainStatus[t.id] === 'error'" style="font-size:11px;color:var(--red)">Could not load explanation.</div>
                     <div x-show="explanations[t.id]">
-                      <div style="margin-bottom:8px;font-size:11px;color:var(--muted)" x-text="explanations[t.id]?.strategy ? ('Why ' + explanations[t.id].strategy + '?') : 'Why this trade?'"></div>
+                      <div style="margin-bottom:8px;font-size:11px;color:var(--muted)" x-text="explanations[t.id]?.strategy ? ('Why ' + explanations[t.id].strategy.replace(/_/g,' ') + '?') : 'Why this trade?'"></div>
                       <div class="explain-grid">
-                        <div class="explain-cell"><div class="explain-label">signal price</div><div class="explain-val" x-text="((explanations[t.id]?.signal_price ?? t.entry_price ?? 0)).toFixed(t.symbol?.includes('XAU') ? 2 : 5)"></div></div>
-                        <div class="explain-cell"><div class="explain-label">stop / target</div><div class="explain-val"><span x-text="(explanations[t.id]?.stop_price ?? 0).toFixed(t.symbol?.includes('XAU') ? 2 : 5)"></span> / <span x-text="(explanations[t.id]?.target_price ?? 0).toFixed(t.symbol?.includes('XAU') ? 2 : 5)"></span></div></div>
-                        <div class="explain-cell"><div class="explain-label">R:R · stop dist</div><div class="explain-val"><span x-text="(explanations[t.id]?.rr ?? 0).toFixed(2)"></span> · <span x-text="(explanations[t.id]?.stop_distance_pips ?? 0).toFixed(1)"></span>p</div></div>
-                        <div class="explain-cell"><div class="explain-label">lot · regime</div><div class="explain-val"><span x-text="(explanations[t.id]?.lot ?? 0).toFixed(2)"></span> · <span x-text="explanations[t.id]?.regime || '—'"></span></div></div>
+                        <div class="explain-cell"><div class="explain-label">signal price</div><div class="explain-val" x-text="((explanations[t.id]?.signal_price ?? t.entry_price ?? 0)).toFixed(t.symbol?.includes('XAU') || t.symbol?.includes('OIL') ? 2 : 5)"></div></div>
+                        <div class="explain-cell"><div class="explain-label">stop / target</div><div class="explain-val"><span x-text="(explanations[t.id]?.signal_stop ?? 0).toFixed(t.symbol?.includes('XAU') || t.symbol?.includes('OIL') ? 2 : 5)"></span> / <span x-text="(explanations[t.id]?.signal_target ?? 0).toFixed(t.symbol?.includes('XAU') || t.symbol?.includes('OIL') ? 2 : 5)"></span></div></div>
+                        <div class="explain-cell"><div class="explain-label">R:R · stop dist</div><div class="explain-val"><span x-text="(explanations[t.id]?.risk_reward ?? 0).toFixed(2)"></span> · <span x-text="(explanations[t.id]?.stop_distance_pips ?? 0).toFixed(1)"></span>p</div></div>
+                        <div class="explain-cell"><div class="explain-label">lot · regime</div><div class="explain-val"><span x-text="(explanations[t.id]?.lot_size ?? 0).toFixed(2)"></span> · <span x-text="explanations[t.id]?.regime_label || '—'"></span></div></div>
+                      </div>
+                      <div x-show="explanations[t.id]?.indicators && Object.keys(explanations[t.id].indicators).length" style="margin-top:12px">
+                        <div style="font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">📊 What the strategy saw</div>
+                        <div class="indicator-grid">
+                          <template x-for="[k, v] in Object.entries(explanations[t.id]?.indicators || {})" :key="k">
+                            <div class="indicator-cell">
+                              <div class="indicator-label" x-text="k.replace(/_/g, ' ')"></div>
+                              <div class="indicator-val" x-text="formatIndicator(v)"></div>
+                            </div>
+                          </template>
+                        </div>
                       </div>
                     </div>
                   </td>

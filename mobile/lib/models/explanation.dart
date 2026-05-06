@@ -20,6 +20,9 @@ class TradeExplanation {
   final double? allocatorWeight;
   final bool? mlFilterPassed;
   final String notes;
+  // Indicator snapshot — what the strategy "saw". Free-form per
+  // strategy: e.g. {'rsi': 28.5, 'ema_fast': 1.0852}.
+  final Map<String, dynamic> indicators;
 
   TradeExplanation({
     required this.tradeId,
@@ -43,6 +46,7 @@ class TradeExplanation {
     this.allocatorWeight,
     this.mlFilterPassed,
     this.notes = '',
+    this.indicators = const {},
   });
 
   factory TradeExplanation.fromJson(Map<String, dynamic> json) => TradeExplanation(
@@ -67,5 +71,6 @@ class TradeExplanation {
         allocatorWeight: (json['allocator_weight'] as num?)?.toDouble(),
         mlFilterPassed: json['ml_filter_passed'] as bool?,
         notes: (json['notes'] as String?) ?? '',
+        indicators: (json['indicators'] as Map<String, dynamic>?) ?? const {},
       );
 }

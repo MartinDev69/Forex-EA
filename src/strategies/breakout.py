@@ -53,6 +53,8 @@ class DonchianBreakoutStrategy(Strategy):
         ts = ohlc.index[-1]
         last_atr = atr(ohlc["high"], ohlc["low"], ohlc["close"], self.atr_period).iloc[-1]
 
+        ind = {"channel_high": float(upper), "channel_low": float(lower),
+               "atr": float(last_atr)}
         if high > upper:
             return Signal(
                 type=SignalType.BUY,
@@ -62,6 +64,7 @@ class DonchianBreakoutStrategy(Strategy):
                 stop_loss=close - self.atr_sl_mult * last_atr,
                 take_profit=close + self.atr_tp_mult * last_atr,
                 reason=f"Close broke above {self.channel_period}-bar high ({upper:.5f})",
+                indicators=ind,
             )
         if low < lower:
             return Signal(
@@ -72,15 +75,17 @@ class DonchianBreakoutStrategy(Strategy):
                 stop_loss=close + self.atr_sl_mult * last_atr,
                 take_profit=close - self.atr_tp_mult * last_atr,
                 reason=f"Close broke below {self.channel_period}-bar low ({lower:.5f})",
+                indicators=ind,
             )
 
-        return self._hold(ohlc, f"inside channel [{lower:.5f}, {upper:.5f}]")
+        return self._hold(ohlc, f"inside channel [{lower:.5f}, {upper:.5f}]", ind)
 
-    def _hold(self, ohlc: pd.DataFrame, reason: str) -> Signal:
+    def _hold(self, ohlc: pd.DataFrame, reason: str, indicators: dict | None = None) -> Signal:
         return Signal(
             type=SignalType.HOLD,
             symbol=self.symbol,
             timestamp=ohlc.index[-1] if len(ohlc) else pd.Timestamp.now(),
             price=float(ohlc["close"].iloc[-1]) if len(ohlc) else 0.0,
             reason=reason,
+            indicators=indicators or {},
         )

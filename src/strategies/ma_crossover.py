@@ -55,6 +55,11 @@ class MACrossoverStrategy(Strategy):
 
         crossed_up = prev_fast <= prev_slow and last_fast > last_slow
         crossed_down = prev_fast >= prev_slow and last_fast < last_slow
+        ind = {
+            "ema_fast": float(last_fast),
+            "ema_slow": float(last_slow),
+            "atr": float(last_atr),
+        }
 
         if crossed_up:
             return Signal(
@@ -65,6 +70,7 @@ class MACrossoverStrategy(Strategy):
                 stop_loss=last_close - self.atr_sl_mult * last_atr,
                 take_profit=last_close + self.atr_tp_mult * last_atr,
                 reason=f"EMA{self.fast_period} crossed above EMA{self.slow_period}",
+                indicators=ind,
             )
         if crossed_down:
             return Signal(
@@ -75,15 +81,17 @@ class MACrossoverStrategy(Strategy):
                 stop_loss=last_close + self.atr_sl_mult * last_atr,
                 take_profit=last_close - self.atr_tp_mult * last_atr,
                 reason=f"EMA{self.fast_period} crossed below EMA{self.slow_period}",
+                indicators=ind,
             )
 
-        return self._hold(ohlc, "no crossover")
+        return self._hold(ohlc, "no crossover", ind)
 
-    def _hold(self, ohlc: pd.DataFrame, reason: str) -> Signal:
+    def _hold(self, ohlc: pd.DataFrame, reason: str, indicators: dict | None = None) -> Signal:
         return Signal(
             type=SignalType.HOLD,
             symbol=self.symbol,
             timestamp=ohlc.index[-1] if len(ohlc) else pd.Timestamp.now(),
             price=float(ohlc["close"].iloc[-1]) if len(ohlc) else 0.0,
             reason=reason,
+            indicators=indicators or {},
         )

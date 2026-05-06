@@ -30,13 +30,23 @@ CREATE TABLE IF NOT EXISTS strategy_toggles (
 """
 
 DEFAULT_STRATEGY_FLAGS: dict[str, bool] = {
-    # All three on by default so a fresh deploy has *some* strategy eligible
-    # in every regime: ma_crossover for trends, rsi_mean_reversion for ranges,
-    # donchian_breakout as the all-regime fallback. Each is still gated by
-    # its preferred_regimes — they don't all fire on the same bar.
+    # The original three default to enabled+execute so a fresh deploy
+    # behaves like before. The nine new strategies start disarmed so the
+    # user opts each one in deliberately rather than waking up to twelve
+    # strategies all firing at once. They're still in the toggle store so
+    # they show up in the UI ready to be turned on.
     "ma_crossover": True,
     "rsi_mean_reversion": True,
     "donchian_breakout": True,
+    "macd_cross": False,
+    "bollinger_bounce": False,
+    "bollinger_squeeze": False,
+    "stochastic_reversal": False,
+    "triple_ma_alignment": False,
+    "inside_bar_breakout": False,
+    "engulfing_pattern": False,
+    "ema_pullback": False,
+    "adx_breakout": False,
 }
 
 

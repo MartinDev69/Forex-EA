@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
@@ -25,6 +25,11 @@ class Signal:
     stop_loss: float | None = None
     take_profit: float | None = None
     reason: str = ""
+    # Indicator snapshot at the bar that triggered the signal — what the
+    # strategy "saw" when it decided. Persisted with the trade so the
+    # dashboard can show the user how the bot reached the conclusion.
+    # Keys are short (e.g. "rsi", "ema_fast"); values are floats or strings.
+    indicators: dict = field(default_factory=dict)
 
 
 class Strategy(ABC):

@@ -38,9 +38,18 @@ from src.regime import RegimeClassifier, RegimeConfig, RegimeStore
 from src.risk.risk_manager import RiskLimits, RiskManager
 from src.strategies import (
     STRATEGY_REGISTRY,
+    ADXBreakoutStrategy,
+    BollingerBounceStrategy,
+    BollingerSqueezeStrategy,
     DonchianBreakoutStrategy,
+    EMAPullbackStrategy,
+    EngulfingPatternStrategy,
+    InsideBarBreakoutStrategy,
+    MACDCrossStrategy,
     MACrossoverStrategy,
     RSIMeanReversionStrategy,
+    StochasticReversalStrategy,
+    TripleMAStrategy,
 )
 from src.narrator import NarrativeStore, NarratorComposer, build_provider
 from src.propfirm import PropFirmGuard, PropFirmStore, policy_from_env
@@ -51,13 +60,24 @@ from src.watchdog import HeartbeatStore
 
 
 def build_strategies(symbols: list[str]) -> dict:
-    """One instance of each strategy per symbol. The toggle store decides which fire."""
+    """One instance of each strategy per symbol. The toggle store decides
+    which actually fire and in what mode (execute vs signal).
+    """
     out = {}
     for symbol in symbols:
         out[symbol] = [
             MACrossoverStrategy(symbol),
             RSIMeanReversionStrategy(symbol),
             DonchianBreakoutStrategy(symbol),
+            MACDCrossStrategy(symbol),
+            BollingerBounceStrategy(symbol),
+            BollingerSqueezeStrategy(symbol),
+            StochasticReversalStrategy(symbol),
+            TripleMAStrategy(symbol),
+            InsideBarBreakoutStrategy(symbol),
+            EngulfingPatternStrategy(symbol),
+            EMAPullbackStrategy(symbol),
+            ADXBreakoutStrategy(symbol),
         ]
     return out
 

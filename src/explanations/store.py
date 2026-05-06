@@ -15,8 +15,9 @@ that gives a complete picture.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -42,7 +43,8 @@ CREATE TABLE IF NOT EXISTS trade_explanations (
     allocator_weight    REAL,
     ml_filter_passed    INTEGER,
     notes               TEXT,
-    opened_at           TEXT NOT NULL
+    opened_at           TEXT NOT NULL,
+    indicators_json     TEXT
 );
 """
 
@@ -72,6 +74,10 @@ class TradeExplanation:
     # normally land here, but recorded for debugging), None = no filter wired.
     ml_filter_passed: bool | None = None
     notes: str = ""
+    # Indicator snapshot — what the strategy "saw" when it decided.
+    # Free-form per strategy: e.g. {"rsi": 28.5, "ema_fast": 1.0852,
+    # "atr": 0.00074}. Empty when the strategy doesn't expose any.
+    indicators: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -96,6 +102,7 @@ class TradeExplanation:
             "ml_filter_passed": self.ml_filter_passed,
             "notes": self.notes,
             "opened_at": self.opened_at,
+            "indicators": dict(self.indicators or {}),
         }
 
 
@@ -106,6 +113,11 @@ class TradeExplanationStore:
         with self._conn() as c:
             c.execute("PRAGMA journal_mode=WAL")
             c.executescript(_SCHEMA)
+            # Backwards-compat: pre-existing tables won't have the
+            # indicators_json column. ALTER TABLE adds it once.
+            cols = {r["name"] for r in c.execute("PRAGMA table_info(trade_explanations)")}
+            if "indicators_json" not in cols:
+                c.execute("ALTER TABLE trade_explanations ADD COLUMN indicators_json TEXT")
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -123,8 +135,8 @@ class TradeExplanationStore:
                     regime_trend, regime_volatility, regime_label,
                     regime_adx, regime_atr_pct,
                     allocator_role, allocator_weight, ml_filter_passed,
-                    notes, opened_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    notes, opened_at, indicators_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     exp.trade_id, exp.strategy, exp.symbol, exp.side,
@@ -136,6 +148,7 @@ class TradeExplanationStore:
                     exp.allocator_role, exp.allocator_weight,
                     None if exp.ml_filter_passed is None else int(exp.ml_filter_passed),
                     exp.notes, exp.opened_at,
+                    json.dumps(exp.indicators) if exp.indicators else None,
                 ),
             )
 
@@ -149,7 +162,7 @@ class TradeExplanationStore:
                        regime_trend, regime_volatility, regime_label,
                        regime_adx, regime_atr_pct,
                        allocator_role, allocator_weight, ml_filter_passed,
-                       notes, opened_at
+                       notes, opened_at, indicators_json
                 FROM trade_explanations
                 WHERE trade_id = ?
                 """,
@@ -182,4 +195,7 @@ class TradeExplanationStore:
             ),
             notes=row["notes"] or "",
             opened_at=row["opened_at"],
+            indicators=(
+                json.loads(row["indicators_json"]) if row["indicators_json"] else {}
+            ),
         )

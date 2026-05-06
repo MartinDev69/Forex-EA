@@ -59,6 +59,8 @@ class RSIMeanReversionStrategy(Strategy):
 
         crossed_up_from_oversold = prev_rsi <= self.oversold < last_rsi
         crossed_down_from_overbought = prev_rsi >= self.overbought > last_rsi
+        ind = {"rsi": float(last_rsi), "rsi_prev": float(prev_rsi),
+               "atr": float(last_atr)}
 
         if crossed_up_from_oversold:
             return Signal(
@@ -69,6 +71,7 @@ class RSIMeanReversionStrategy(Strategy):
                 stop_loss=last_close - self.atr_sl_mult * last_atr,
                 take_profit=last_close + self.atr_tp_mult * last_atr,
                 reason=f"RSI crossed up through {self.oversold} ({prev_rsi:.1f}→{last_rsi:.1f})",
+                indicators=ind,
             )
         if crossed_down_from_overbought:
             return Signal(
@@ -79,15 +82,17 @@ class RSIMeanReversionStrategy(Strategy):
                 stop_loss=last_close + self.atr_sl_mult * last_atr,
                 take_profit=last_close - self.atr_tp_mult * last_atr,
                 reason=f"RSI crossed down through {self.overbought} ({prev_rsi:.1f}→{last_rsi:.1f})",
+                indicators=ind,
             )
 
-        return self._hold(ohlc, f"RSI at {last_rsi:.1f}")
+        return self._hold(ohlc, f"RSI at {last_rsi:.1f}", ind)
 
-    def _hold(self, ohlc: pd.DataFrame, reason: str) -> Signal:
+    def _hold(self, ohlc: pd.DataFrame, reason: str, indicators: dict | None = None) -> Signal:
         return Signal(
             type=SignalType.HOLD,
             symbol=self.symbol,
             timestamp=ohlc.index[-1] if len(ohlc) else pd.Timestamp.now(),
             price=float(ohlc["close"].iloc[-1]) if len(ohlc) else 0.0,
             reason=reason,
+            indicators=indicators or {},
         )

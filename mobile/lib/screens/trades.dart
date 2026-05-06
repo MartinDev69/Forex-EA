@@ -729,6 +729,10 @@ class _ExplanationBody extends StatelessWidget {
             ),
           ),
         ],
+        if (exp.indicators.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          _IndicatorPanel(indicators: exp.indicators),
+        ],
       ],
     );
   }
@@ -745,6 +749,93 @@ class _ExplanationBody extends StatelessWidget {
       default:
         return Colors.grey;
     }
+  }
+}
+
+class _IndicatorPanel extends StatelessWidget {
+  const _IndicatorPanel({required this.indicators});
+  final Map<String, dynamic> indicators;
+
+  String _fmt(Object? v) {
+    if (v == null) return '—';
+    if (v is bool) return v ? 'yes' : 'no';
+    if (v is int) return v.toString();
+    if (v is num) {
+      final d = v.toDouble();
+      final a = d.abs();
+      if (a < 10) return d.toStringAsFixed(2);
+      if (a < 100) return d.toStringAsFixed(1);
+      return d.toStringAsFixed(4);
+    }
+    return v.toString();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final accent = isDark ? kNeonGreen : kLightWin;
+    final entries = indicators.entries.toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.insights_outlined, size: 14, color: accent),
+            const SizedBox(width: 6),
+            Text(
+              'WHAT THE STRATEGY SAW',
+              style: TextStyle(
+                fontSize: 10,
+                letterSpacing: 2.0,
+                fontWeight: FontWeight.w700,
+                color: accent,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final entry in entries)
+              Container(
+                padding: const EdgeInsets.fromLTRB(10, 6, 10, 7),
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: isDark ? 0.08 : 0.06),
+                  border: Border.all(color: accent.withValues(alpha: 0.32)),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      entry.key.replaceAll('_', ' '),
+                      style: TextStyle(
+                        color: accent.withValues(alpha: 0.85),
+                        fontSize: 9,
+                        letterSpacing: 1.4,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _fmt(entry.value),
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? kText : kLightText,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
   }
 }
 

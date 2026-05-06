@@ -591,6 +591,7 @@ class Bot:
                 risk_reward=rr,
                 regime=regime_label,
                 reason=signal.reason,
+                indicators=signal.indicators,
             )
         except Exception:
             log.exception("signal alert send failed for %s %s", strategy.name, signal.symbol)
@@ -888,6 +889,7 @@ class Bot:
                 # before this. None = no filter wired at all.
                 ml_filter_passed=(True if self.signal_filter is not None else None),
                 notes=signal.reason or "",
+                indicators=dict(signal.indicators or {}),
             ))
         except Exception:
             log.exception("explanation_store.record failed for trade %s", order.id)

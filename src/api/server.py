@@ -1231,6 +1231,7 @@ class TradeExplanationModel(BaseModel):
     allocator_weight: float | None = None
     ml_filter_passed: bool | None = None
     notes: str = ""
+    indicators: dict = Field(default_factory=dict)
 
 
 @app.get("/trades/{trade_id}/explain", response_model=TradeExplanationModel)
