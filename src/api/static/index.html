@@ -467,6 +467,38 @@
     .sec-hd::after { content:''; flex:1; height:1px; background: var(--edge); }
 
     .section { margin-bottom: 28px; }
+
+    /* Trade tabs */
+    .trade-tabs {
+      display: flex; gap: 4px;
+      background: var(--surface); border: 1px solid var(--edge);
+      border-radius: 10px; padding: 3px;
+    }
+    .trade-tab {
+      padding: 6px 14px; border-radius: 7px; font-size: 11px; font-weight: 600;
+      letter-spacing: 0.05em; color: var(--muted);
+      background: transparent; border: none; cursor: pointer;
+      font-family: 'Space Grotesk', sans-serif; transition: all 0.15s;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .trade-tab:hover { color: var(--text2); }
+    .trade-tab.active {
+      background: var(--surface2); color: var(--text);
+    }
+    .trade-tab-count {
+      font-family: var(--mono); font-size: 10px; padding: 1px 6px;
+      border-radius: 10px; background: var(--surface3); color: var(--muted);
+      min-width: 18px; text-align: center;
+    }
+    .trade-tab.active .trade-tab-count { background: var(--gdim); color: var(--green); }
+    .date-picker {
+      background: var(--surface2); border: 1px solid var(--edge2);
+      border-radius: 8px; padding: 6px 10px; color: var(--text);
+      font-family: var(--mono); font-size: 11px; outline: none;
+      color-scheme: dark; transition: border-color 0.15s;
+    }
+    [data-theme="light"] .date-picker { color-scheme: light; }
+    .date-picker:focus { border-color: var(--green); }
     .empty { color: var(--muted); font-size: 13px; padding: 24px; text-align: center; }
     .err-flash { color: var(--red); }
     .ok-flash  { color: var(--green); }
@@ -848,18 +880,114 @@
 
       <!-- Trades -->
       <div class="section">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-          <div class="sec-hd" style="margin-bottom:0;flex:1">Recent trades</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:14px;flex-wrap:wrap">
+          <div class="sec-hd" style="margin-bottom:0;flex:1;min-width:140px">Recent trades</div>
+          <div class="trade-tabs">
+            <button class="trade-tab" :class="{ active: tradeTab === 'open' }" @click="tradeTab = 'open'">
+              Open <span class="trade-tab-count" x-text="tradeCounts.open"></span>
+            </button>
+            <button class="trade-tab" :class="{ active: tradeTab === 'pending' }" @click="tradeTab = 'pending'">
+              Pending <span class="trade-tab-count" x-text="tradeCounts.pending"></span>
+            </button>
+            <button class="trade-tab" :class="{ active: tradeTab === 'closed' }" @click="tradeTab = 'closed'">
+              Closed <span class="trade-tab-count" x-text="tradeCounts.closed"></span>
+            </button>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <input type="date" x-model="tradeDate" class="date-picker" />
+            <button x-show="tradeDate" class="btn-ol-g" style="padding:6px 10px;font-size:11px" @click="tradeDate = ''">Clear</button>
+          </div>
           <span style="font-size:12px;color:var(--muted)">
             Session PnL&nbsp;
             <span style="font-family:var(--mono);font-weight:700" :style="sessionPnl >= 0 ? 'color:var(--green)' : 'color:var(--red)'" x-text="(sessionPnl >= 0 ? '+' : '') + sessionPnl.toFixed(2)"></span>
           </span>
         </div>
         <div class="panel">
-          <template x-if="trades.length === 0">
-            <div class="empty">No trades yet — waiting for the bot's first setup.</div>
+          <!-- OPEN tab -->
+          <template x-if="tradeTab === 'open'">
+            <div>
+              <template x-if="filteredOpen.length === 0">
+                <div class="empty" x-text="tradeDate ? 'No open trades on that day.' : 'No open positions right now.'"></div>
+              </template>
+              <table class="trades-table" x-show="filteredOpen.length">
+                <thead>
+                  <tr>
+                    <th>Symbol</th><th>Side</th>
+                    <th style="text-align:right">Entry</th>
+                    <th style="text-align:right">Lot</th>
+                    <th style="text-align:right">SL / TP</th>
+                    <th style="text-align:right">Opened</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="t in filteredOpen" :key="t.id">
+                    <tr>
+                      <td><div class="sym-cell"><span x-text="t.symbol"></span></div></td>
+                      <td><span class="side-chip" :class="t.side === 'BUY' ? 'side-buy' : 'side-sell'" x-text="t.side"></span></td>
+                      <td style="text-align:right;font-family:var(--mono)" x-text="(t.entry_price ?? 0).toFixed(t.symbol?.includes('XAU') || t.symbol?.includes('OIL') ? 2 : 5)"></td>
+                      <td style="text-align:right;font-family:var(--mono);color:var(--muted)" x-text="(t.lot_size ?? 0).toFixed(2)"></td>
+                      <td style="text-align:right;font-family:var(--mono);color:var(--muted);font-size:11px">
+                        <span x-text="(t.stop_loss ?? 0).toFixed(t.symbol?.includes('XAU') || t.symbol?.includes('OIL') ? 2 : 5)"></span>
+                        /
+                        <span x-text="(t.take_profit ?? 0).toFixed(t.symbol?.includes('XAU') || t.symbol?.includes('OIL') ? 2 : 5)"></span>
+                      </td>
+                      <td style="text-align:right;font-family:var(--mono);color:var(--muted);font-size:12px" x-text="fmtTime(t.opened_at)"></td>
+                      <td><span class="status-chip open-chip">open</span></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
           </template>
-          <table class="trades-table" x-show="trades.length">
+
+          <!-- PENDING tab -->
+          <template x-if="tradeTab === 'pending'">
+            <div>
+              <template x-if="filteredPending.length === 0">
+                <div class="empty" x-text="tradeDate ? 'No pending orders placed on that day.' : 'No pending orders right now.'"></div>
+              </template>
+              <table class="trades-table" x-show="filteredPending.length">
+                <thead>
+                  <tr>
+                    <th>Symbol</th><th>Type</th>
+                    <th style="text-align:right">Price</th>
+                    <th style="text-align:right">Lot</th>
+                    <th style="text-align:right">SL / TP</th>
+                    <th style="text-align:right">Placed</th>
+                    <th>Ticket</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="o in filteredPending" :key="o.ticket">
+                    <tr>
+                      <td><div class="sym-cell"><span x-text="o.symbol"></span></div></td>
+                      <td>
+                        <span class="side-chip" :class="o.order_type?.startsWith('buy') ? 'side-buy' : 'side-sell'" x-text="(o.order_type || '').replace('_',' ').toUpperCase()"></span>
+                      </td>
+                      <td style="text-align:right;font-family:var(--mono)" x-text="(o.price ?? 0).toFixed(o.symbol?.includes('XAU') || o.symbol?.includes('OIL') ? 2 : 5)"></td>
+                      <td style="text-align:right;font-family:var(--mono);color:var(--muted)" x-text="(o.volume ?? 0).toFixed(2)"></td>
+                      <td style="text-align:right;font-family:var(--mono);color:var(--muted);font-size:11px">
+                        <span x-text="o.sl ? o.sl.toFixed(o.symbol?.includes('XAU') || o.symbol?.includes('OIL') ? 2 : 5) : '—'"></span>
+                        /
+                        <span x-text="o.tp ? o.tp.toFixed(o.symbol?.includes('XAU') || o.symbol?.includes('OIL') ? 2 : 5) : '—'"></span>
+                      </td>
+                      <td style="text-align:right;font-family:var(--mono);color:var(--muted);font-size:12px" x-text="fmtTime(o.placed_at)"></td>
+                      <td style="font-family:var(--mono);font-size:11px;color:var(--muted)" x-text="'#' + o.ticket"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </template>
+
+          <!-- CLOSED tab -->
+          <template x-if="tradeTab === 'closed'">
+            <div>
+              <template x-if="filteredClosed.length === 0">
+                <div class="empty" x-text="tradeDate ? 'No closed trades on that day.' : 'No closed trades yet.'"></div>
+              </template>
+              <table class="trades-table" x-show="filteredClosed.length">
             <thead>
               <tr>
                 <th>Symbol</th><th>Side</th>
@@ -870,7 +998,7 @@
                 <th>Status</th>
               </tr>
             </thead>
-            <template x-for="t in trades" :key="t.id">
+            <template x-for="t in filteredClosed" :key="t.id">
               <tbody>
                 <tr @click="toggleExplain(t.id)">
                   <td><div class="sym-cell"><span class="xarr" x-text="explainOpenId === t.id ? '▾' : '▸'"></span><span x-text="t.symbol"></span></div></td>
@@ -900,6 +1028,8 @@
               </tbody>
             </template>
           </table>
+            </div>
+          </template>
         </div>
       </div>
 

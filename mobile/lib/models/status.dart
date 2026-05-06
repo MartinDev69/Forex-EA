@@ -90,3 +90,41 @@ class Trade {
             : DateTime.parse(json['closed_at'] as String),
       );
 }
+
+class PendingOrder {
+  final int ticket;
+  final String symbol;
+  final String orderType; // buy_limit | sell_limit | buy_stop | sell_stop
+  final double price;
+  final double volume;
+  final double? sl;
+  final double? tp;
+  final String? comment;
+  final DateTime placedAt;
+
+  PendingOrder({
+    required this.ticket,
+    required this.symbol,
+    required this.orderType,
+    required this.price,
+    required this.volume,
+    required this.sl,
+    required this.tp,
+    required this.comment,
+    required this.placedAt,
+  });
+
+  factory PendingOrder.fromJson(Map<String, dynamic> json) => PendingOrder(
+        ticket: json['ticket'] as int,
+        symbol: json['symbol'] as String,
+        orderType: json['order_type'] as String,
+        price: (json['price'] as num).toDouble(),
+        volume: (json['volume'] as num).toDouble(),
+        sl: json['sl'] == null ? null : (json['sl'] as num).toDouble(),
+        tp: json['tp'] == null ? null : (json['tp'] as num).toDouble(),
+        comment: json['comment'] as String?,
+        placedAt: DateTime.parse(json['placed_at'] as String),
+      );
+
+  bool get isBuy => orderType.startsWith('buy');
+}

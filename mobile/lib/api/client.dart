@@ -89,6 +89,13 @@ class ApiClient {
     return list.map((e) => Trade.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  Future<List<PendingOrder>> pendingOrders() async {
+    final r = await http.get(_u('/orders/pending'), headers: _headers);
+    _check(r);
+    final list = json.decode(r.body) as List<dynamic>;
+    return list.map((e) => PendingOrder.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
   Future<void> startBot() async {
     final r = await http.post(_u('/bot/start'), headers: _headers);
     _check(r);

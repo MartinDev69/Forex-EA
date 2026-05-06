@@ -57,6 +57,7 @@ from src.api.auth import (
 from src.api.ad_id import ADMIN_AD_ID, is_user_ad_id
 from src.api.broker_config import BrokerConfig, BrokerConfigStore
 from src.api.broker_status import BrokerStatusStore
+from src.api.pending_orders import PendingOrderStore
 from src.api.mailer import send_setup_email
 from src.api.setup_tokens import SETUP_TTL_S, create_setup_token, decode_setup_token
 from src.api.totp import generate_secret, provisioning_uri, verify_code
@@ -128,6 +129,7 @@ toggle_store.initialize_defaults({
 })
 user_store = UserStore(_DB)
 broker_status_store = BrokerStatusStore(_DB)
+pending_orders_store = PendingOrderStore(_DB)
 calendar_store = EventStore(_DB)
 calendar_policy = BlackoutPolicy.from_env()
 calendar_checker = BlackoutChecker(calendar_store, calendar_policy)
@@ -554,6 +556,30 @@ def test_broker(
             client.disconnect()
         except Exception:
             pass
+
+
+@app.get("/orders/pending")
+def list_pending_orders(_user: dict = Depends(current_user)) -> list[dict]:
+    """Pending limit/stop orders the bot has snapshotted from MT5.
+
+    Empty if the bot is in mock mode or hasn't ticked yet. Each item:
+    `{ ticket, symbol, order_type, price, volume, sl, tp, comment, placed_at }`.
+    """
+    rows = pending_orders_store.read()
+    return [
+        {
+            "ticket": r.ticket,
+            "symbol": r.symbol,
+            "order_type": r.order_type,
+            "price": r.price,
+            "volume": r.volume,
+            "sl": r.sl,
+            "tp": r.tp,
+            "comment": r.comment,
+            "placed_at": r.placed_at.isoformat(),
+        }
+        for r in rows
+    ]
 
 
 @app.get("/broker/status", response_model=BrokerStatusResponse)

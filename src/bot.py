@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from src.api.broker_status import BrokerStatusStore
+from src.api.pending_orders import PendingOrder, PendingOrderStore
 from src.allocator.allocator import ChampionChallengerAllocator
 from src.allocator.score import score_pairs
 from src.allocator.store import AllocationStore
@@ -114,6 +115,7 @@ class Bot:
         path_recorder: PathRecorder | None = None,
         kill_switch_flag: KillSwitchFlag | None = None,
         broker_status_store: BrokerStatusStore | None = None,
+        pending_orders_store: PendingOrderStore | None = None,
         broker_id: str = "",
         broker_status_refresh_ticks: int = 5,
     ) -> None:
@@ -171,6 +173,7 @@ class Bot:
         # passes a store + the broker id so the API can read live equity
         # without owning its own MT5 connection.
         self.broker_status_store = broker_status_store
+        self.pending_orders_store = pending_orders_store
         self.broker_id = broker_id
         self.broker_status_refresh_ticks = max(1, broker_status_refresh_ticks)
         self.state = BotState()
@@ -211,6 +214,7 @@ class Bot:
         self._maybe_refresh_correlations()
         self._maybe_refresh_allocator()
         self._maybe_refresh_broker_status()
+        self._maybe_refresh_pending_orders()
         self._maybe_send_daily_summary()
         self._maybe_send_weekly_digest()
         self._maybe_warn_blackouts()
@@ -408,6 +412,39 @@ class Bot:
             log.exception("broker_status refresh: store write failed")
         finally:
             self.state.last_broker_status_refresh_tick = self.state.tick_count
+
+    def _maybe_refresh_pending_orders(self) -> None:
+        """Snapshot MT5's pending orders into the SQLite store so the
+        API can list buy_limit/sell_limit/buy_stop/sell_stop without its
+        own MT5 connection. Cheap call; runs every tick.
+        """
+        if self.pending_orders_store is None:
+            return
+        list_pending = getattr(self.executor, "list_pending_orders", None)
+        if list_pending is None:
+            return
+        try:
+            raw = list_pending() or []
+        except Exception:
+            log.exception("pending_orders refresh: list_pending_orders failed")
+            return
+        try:
+            self.pending_orders_store.replace_all([
+                PendingOrder(
+                    ticket=int(o["ticket"]),
+                    symbol=str(o["symbol"]),
+                    order_type=str(o.get("order_type", "unknown")),
+                    price=float(o["price"]),
+                    volume=float(o["volume"]),
+                    sl=float(o["sl"]) if o.get("sl") else None,
+                    tp=float(o["tp"]) if o.get("tp") else None,
+                    comment=o.get("comment"),
+                    placed_at=o["placed_at"],
+                )
+                for o in raw
+            ])
+        except Exception:
+            log.exception("pending_orders refresh: store write failed")
 
     def _maybe_send_weekly_digest(self) -> None:
         """One weekly_digest per ISO week, fired Sunday after 21:00 UTC.

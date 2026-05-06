@@ -311,6 +311,44 @@ class MT5Executor:
             ))
         return out
 
+    def list_pending_orders(self) -> list[dict]:
+        """Snapshot of MT5 pending orders (buy_limit/sell_limit/buy_stop/
+        sell_stop) — passed up to the bot which writes them to SQLite for
+        the API to serve. Filtered to this bot's magic when it's set.
+        """
+        orders = self._mt5.orders_get()
+        if not orders:
+            return []
+        type_map = {
+            self._mt5.ORDER_TYPE_BUY_LIMIT: "buy_limit",
+            self._mt5.ORDER_TYPE_SELL_LIMIT: "sell_limit",
+            self._mt5.ORDER_TYPE_BUY_STOP: "buy_stop",
+            self._mt5.ORDER_TYPE_SELL_STOP: "sell_stop",
+            self._mt5.ORDER_TYPE_BUY_STOP_LIMIT: "buy_stop_limit",
+            self._mt5.ORDER_TYPE_SELL_STOP_LIMIT: "sell_stop_limit",
+        }
+        out: list[dict] = []
+        for o in orders:
+            kind = type_map.get(o.type)
+            if kind is None:
+                continue  # market orders are positions, not pending
+            if self.magic and o.magic and o.magic != self.magic:
+                # Other strategies / hand orders — keep listing them so
+                # the dashboard reflects the full broker state.
+                pass
+            out.append({
+                "ticket": int(o.ticket),
+                "symbol": o.symbol,
+                "order_type": kind,
+                "price": float(o.price_open),
+                "volume": float(o.volume_initial),
+                "sl": float(o.sl) if o.sl else None,
+                "tp": float(o.tp) if o.tp else None,
+                "comment": o.comment or None,
+                "placed_at": datetime.fromtimestamp(o.time_setup, tz=timezone.utc),
+            })
+        return out
+
     # -------------------------------------------------------------- helpers
 
     def _resolve_filling_mode(self, symbol: str) -> int:

@@ -93,6 +93,9 @@ document.addEventListener("alpine:init", () => {
     account: null,
     strategies: [],
     trades: [],
+    pending: [],
+    tradeTab: 'open',     // 'open' | 'pending' | 'closed'
+    tradeDate: '',        // 'YYYY-MM-DD' or '' for any
     heartbeat: "—",
     blackout: null,  // { blackout, current_event, next_event, minutes_until_next, ... }
     blackoutSymbol: localStorage.getItem("antigreed:blackoutSymbol") || "EURUSD",
@@ -135,7 +138,7 @@ document.addEventListener("alpine:init", () => {
 
     async tick() {
       try {
-        const [status, account, strategies, trades, blackout, regime, correlation, drift, fillStats, allocator] = await Promise.all([
+        const [status, account, strategies, trades, blackout, regime, correlation, drift, fillStats, allocator, pending] = await Promise.all([
           api("/status",     { token: this.token }),
           api("/account",    { token: this.token }),
           api("/strategies", { token: this.token }),
@@ -148,6 +151,7 @@ document.addEventListener("alpine:init", () => {
           api("/drift", { token: this.token }).catch(() => null),
           api("/fills/stats?window_hours=24", { token: this.token }).catch(() => null),
           api("/allocator", { token: this.token }).catch(() => null),
+          api("/orders/pending", { token: this.token }).catch(() => []),
         ]);
         this.status = status;
         this.account = account;
@@ -167,6 +171,7 @@ document.addEventListener("alpine:init", () => {
         }
         this._prevTradeCount = newCount;
         this.trades = trades;
+        this.pending = Array.isArray(pending) ? pending : [];
 
         this.heartbeat = status?.last_heartbeat
           ? `heartbeat · ${this.fmtTime(status.last_heartbeat)}`
@@ -220,6 +225,39 @@ document.addEventListener("alpine:init", () => {
 
     get sessionPnl() {
       return this.trades.reduce((s, t) => s + (t.pnl || 0), 0);
+    },
+
+    // ---- Trade filtering (tab + date) ----
+    _matchesDate(iso) {
+      if (!this.tradeDate || !iso) return true;
+      // iso is the full ISO timestamp (UTC); take the YYYY-MM-DD prefix in the
+      // user's local timezone so a trade opened at 23:30 doesn't fall on the
+      // wrong day.
+      const d = new Date(iso);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}` === this.tradeDate;
+    },
+    get tradeCounts() {
+      const open   = this.trades.filter(t => !t.closed_at).length;
+      const closed = this.trades.filter(t =>  t.closed_at).length;
+      return { open, closed, pending: this.pending.length };
+    },
+    get filteredOpen() {
+      return this.trades
+        .filter(t => !t.closed_at && this._matchesDate(t.opened_at))
+        .sort((a, b) => new Date(b.opened_at) - new Date(a.opened_at));
+    },
+    get filteredClosed() {
+      return this.trades
+        .filter(t =>  t.closed_at && this._matchesDate(t.opened_at))
+        .sort((a, b) => new Date(b.closed_at) - new Date(a.closed_at));
+    },
+    get filteredPending() {
+      return this.pending
+        .filter(o => this._matchesDate(o.placed_at))
+        .sort((a, b) => new Date(b.placed_at) - new Date(a.placed_at));
     },
 
     renderChart() {

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from src.api.broker_config import BrokerConfig, BrokerConfigStore
 from src.api.broker_status import BrokerStatusStore
+from src.api.pending_orders import PendingOrderStore
 from src.bot import Bot, BotConfig
 from src.config import load_settings
 from src.connection.mt5_client import MT5Client
@@ -96,6 +97,7 @@ def main() -> None:
     executor: Executor
     mt5_client: MT5Client | None = None
     status_store = BrokerStatusStore(Path("data/trades.db"))
+    pending_store = PendingOrderStore(Path("data/trades.db"))
     if use_mt5:
         broker_cfg, source = _resolve_broker_config(settings)
         log.info("Loading broker config from %s (broker=%s, login=%s, server=%s)",
@@ -325,6 +327,7 @@ def main() -> None:
         # so the API can compute Today P&L (realized + open) without owning
         # its own MT5 connection (only one Python process can attach).
         broker_status_store=status_store if use_mt5 else None,
+        pending_orders_store=pending_store if use_mt5 else None,
         broker_id=broker_cfg.broker if use_mt5 else "",
     )
 

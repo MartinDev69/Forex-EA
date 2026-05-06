@@ -28,10 +28,15 @@ class TradesScreen extends StatefulWidget {
   State<TradesScreen> createState() => _TradesScreenState();
 }
 
+enum _TradeTab { open, pending, closed }
+
 class _TradesScreenState extends State<TradesScreen> {
   List<Trade>? _trades;
+  List<PendingOrder> _pending = const [];
   String? _error;
   bool _loading = true;
+  _TradeTab _tab = _TradeTab.open;
+  DateTime? _date; // filter by opened_at / placed_at date (local)
 
   @override
   void initState() {
@@ -41,10 +46,14 @@ class _TradesScreenState extends State<TradesScreen> {
 
   Future<void> _load() async {
     try {
-      final t = await widget.apiClient.trades();
+      final results = await Future.wait([
+        widget.apiClient.trades(limit: 50),
+        widget.apiClient.pendingOrders().catchError((_) => <PendingOrder>[]),
+      ]);
       if (!mounted) return;
       setState(() {
-        _trades = t;
+        _trades = results[0] as List<Trade>;
+        _pending = results[1] as List<PendingOrder>;
         _loading = false;
         _error = null;
       });
@@ -55,6 +64,25 @@ class _TradesScreenState extends State<TradesScreen> {
         _error = e.toString();
       });
     }
+  }
+
+  bool _matchesDate(DateTime ts) {
+    if (_date == null) return true;
+    final local = ts.toLocal();
+    return local.year == _date!.year &&
+        local.month == _date!.month &&
+        local.day == _date!.day;
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date ?? now,
+      firstDate: DateTime(now.year - 1),
+      lastDate: now,
+    );
+    if (picked != null) setState(() => _date = picked);
   }
 
   void _showExplanation(Trade t) {
@@ -76,35 +104,324 @@ class _TradesScreenState extends State<TradesScreen> {
   Widget build(BuildContext context) {
     final fmt = NumberFormat.currency(symbol: '\$', decimalDigits: 2);
     final dateFmt = DateFormat('MM-dd HH:mm');
+    final allTrades = _trades ?? const <Trade>[];
+    final openTrades = allTrades
+        .where((t) => t.closedAt == null && _matchesDate(t.openedAt))
+        .toList()
+      ..sort((a, b) => b.openedAt.compareTo(a.openedAt));
+    final closedTrades = allTrades
+        .where((t) => t.closedAt != null && _matchesDate(t.openedAt))
+        .toList()
+      ..sort((a, b) => b.closedAt!.compareTo(a.closedAt!));
+    final pendingFiltered = _pending
+        .where((p) => _matchesDate(p.placedAt))
+        .toList()
+      ..sort((a, b) => b.placedAt.compareTo(a.placedAt));
+
+    final openCount = allTrades.where((t) => t.closedAt == null).length;
+    final closedCount = allTrades.where((t) => t.closedAt != null).length;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Trades')),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: _loading
-            ? const Center(child: LogoSpinner(size: 80, label: 'LOADING'))
-            : _error != null
-                ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text('Error: $_error'))])
-                : (_trades!.isEmpty
-                    ? ListView(children: const [
-                        Padding(
-                          padding: EdgeInsets.all(40),
-                          child: Center(child: Text('No trades yet.')),
-                        )
-                      ])
-                    : ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-                        itemCount: _trades!.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 7),
-                        itemBuilder: (ctx, i) {
-                          final t = _trades![i];
-                          return _TradeTile(
-                            trade: t,
-                            fmt: fmt,
-                            dateFmt: dateFmt,
-                            onTap: () => _showExplanation(t),
-                          );
-                        },
-                      )),
+      appBar: AppBar(
+        title: const Text('Trades'),
+        actions: [
+          IconButton(
+            tooltip: _date == null ? 'Filter by date' : 'Clear date filter',
+            icon: Icon(_date == null ? Icons.calendar_today_outlined : Icons.event_busy),
+            onPressed: _date == null ? _pickDate : () => setState(() => _date = null),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          _TradeTabBar(
+            current: _tab,
+            counts: (open: openCount, pending: _pending.length, closed: closedCount),
+            onChange: (t) => setState(() => _tab = t),
+          ),
+          if (_date != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: kAmber.withValues(alpha: 0.10),
+                  border: Border.all(color: kAmber.withValues(alpha: 0.3)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.event, size: 14, color: kAmber),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        DateFormat('EEE, MMM d, y').format(_date!),
+                        style: const TextStyle(
+                          color: kAmber, fontSize: 12, fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    InkWell(
+                      onTap: () => setState(() => _date = null),
+                      child: const Icon(Icons.close, size: 14, color: kAmber),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _load,
+              child: _loading
+                  ? const Center(child: LogoSpinner(size: 80, label: 'LOADING'))
+                  : _error != null
+                      ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text('Error: $_error'))])
+                      : _buildBody(
+                          openTrades: openTrades,
+                          closedTrades: closedTrades,
+                          pendingFiltered: pendingFiltered,
+                          fmt: fmt,
+                          dateFmt: dateFmt,
+                        ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBody({
+    required List<Trade> openTrades,
+    required List<Trade> closedTrades,
+    required List<PendingOrder> pendingFiltered,
+    required NumberFormat fmt,
+    required DateFormat dateFmt,
+  }) {
+    final List<Widget> children;
+    String emptyText;
+    final filterSuffix = _date == null ? '' : ' on that day';
+
+    switch (_tab) {
+      case _TradeTab.open:
+        emptyText = 'No open positions$filterSuffix.';
+        children = openTrades
+            .map((t) => _TradeTile(
+                  trade: t,
+                  fmt: fmt,
+                  dateFmt: dateFmt,
+                  onTap: () => _showExplanation(t),
+                ))
+            .toList();
+        break;
+      case _TradeTab.pending:
+        emptyText = 'No pending orders$filterSuffix.';
+        children = pendingFiltered.map((p) => _PendingTile(order: p, dateFmt: dateFmt)).toList();
+        break;
+      case _TradeTab.closed:
+        emptyText = 'No closed trades$filterSuffix.';
+        children = closedTrades
+            .map((t) => _TradeTile(
+                  trade: t,
+                  fmt: fmt,
+                  dateFmt: dateFmt,
+                  onTap: () => _showExplanation(t),
+                ))
+            .toList();
+        break;
+    }
+
+    if (children.isEmpty) {
+      return ListView(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(40),
+            child: Center(
+              child: Text(emptyText, style: TextStyle(color: mutedColor(context))),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+      itemCount: children.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 7),
+      itemBuilder: (_, i) => children[i],
+    );
+  }
+}
+
+typedef _TabCounts = ({int open, int pending, int closed});
+
+class _TradeTabBar extends StatelessWidget {
+  const _TradeTabBar({
+    required this.current,
+    required this.counts,
+    required this.onChange,
+  });
+  final _TradeTab current;
+  final _TabCounts counts;
+  final ValueChanged<_TradeTab> onChange;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Container(
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          color: isDark ? kSurface : kLightSurface,
+          border: Border.all(color: isDark ? kEdge : kLightEdge),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            _tab(context, _TradeTab.open, 'Open', counts.open),
+            _tab(context, _TradeTab.pending, 'Pending', counts.pending),
+            _tab(context, _TradeTab.closed, 'Closed', counts.closed),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tab(BuildContext context, _TradeTab tab, String label, int count) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final active = current == tab;
+    final activeBg = isDark ? const Color(0xFF12151F) : const Color(0xFFE8EDF4);
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => onChange(tab),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: active ? activeBg : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                  color: active
+                      ? (isDark ? kText : kLightText)
+                      : mutedColor(context),
+                  letterSpacing: 0.4,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                  color: active
+                      ? (isDark ? kNeonGreen : kLightWin).withValues(alpha: 0.12)
+                      : (isDark ? const Color(0xFF181C2A) : const Color(0xFFE8EDF4)),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '$count',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: active
+                        ? (isDark ? kNeonGreen : kLightWin)
+                        : mutedColor(context),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PendingTile extends StatelessWidget {
+  const _PendingTile({required this.order, required this.dateFmt});
+  final PendingOrder order;
+  final DateFormat dateFmt;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isBuy = order.isBuy;
+    final color = isBuy
+        ? (isDark ? kNeonGreen : kLightWin)
+        : (isDark ? kNeonRed : kLightLoss);
+    final muted = mutedColor(context);
+    final label = order.orderType.replaceAll('_', ' ').toUpperCase();
+    return Container(
+      padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
+      decoration: BoxDecoration(
+        color: isDark ? kSurface : kLightSurface,
+        border: Border.all(color: isDark ? kEdge : kLightEdge),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: isDark ? 0.10 : 0.08),
+              border: Border.all(color: color.withValues(alpha: 0.30)),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              isBuy ? Icons.arrow_upward : Icons.arrow_downward,
+              size: 16,
+              color: color,
+            ),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  order.symbol,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                    color: isDark ? kText : kLightText,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$label · ${dateFmt.format(order.placedAt.toLocal())}',
+                  style: TextStyle(color: muted, fontSize: 10),
+                ),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                _fmtPrice(order.symbol, order.price),
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  fontFamily: 'monospace',
+                  color: isDark ? kText : kLightText,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'lot ${order.volume.toStringAsFixed(2)}',
+                style: TextStyle(color: muted, fontSize: 10),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
