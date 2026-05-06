@@ -971,16 +971,58 @@ class _RegimeCard extends StatelessWidget {
   }
 }
 
+enum _CorrTier { strong, moderate, low }
+
+({_CorrTier tier, Color color, String label}) _classifyCorrelation(
+  BuildContext context, double value,
+) {
+  final isDark = Theme.of(context).brightness == Brightness.dark;
+  final mag = value.abs();
+  final dir = value >= 0 ? 'same direction' : 'inverse';
+  if (mag >= 0.60) {
+    return (
+      tier: _CorrTier.strong,
+      color: isDark ? kNeonRed : kLightLoss,
+      label: 'Strong · $dir — same trade twice',
+    );
+  }
+  if (mag >= 0.30) {
+    return (
+      tier: _CorrTier.moderate,
+      color: kAmber,
+      label: 'Moderate · $dir — throttled near heat cap',
+    );
+  }
+  return (
+    tier: _CorrTier.low,
+    color: isDark ? kMuted : kLightMuted,
+    label: 'Low · $dir — independent enough to stack',
+  );
+}
+
 class _CorrelationCard extends StatelessWidget {
   const _CorrelationCard({required this.data});
   final CorrelationResponse data;
 
   @override
   Widget build(BuildContext context) {
-    // Show top 8 by absolute value — that's where the concentration risk lives.
     final pairs = [...data.pairs]
       ..sort((a, b) => b.value.abs().compareTo(a.value.abs()));
     final top = pairs.take(8).toList();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final accentTop = isDark ? kNeonGreen : kLightWin;
+
+    int strong = 0, moderate = 0, low = 0;
+    for (final p in pairs) {
+      final m = p.value.abs();
+      if (m >= 0.60) {
+        strong++;
+      } else if (m >= 0.30) {
+        moderate++;
+      } else {
+        low++;
+      }
+    }
 
     return Card(
       child: Padding(
@@ -990,29 +1032,98 @@ class _CorrelationCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                const Icon(Icons.hub_outlined, color: Colors.cyanAccent),
+                Icon(Icons.hub_outlined, color: accentTop),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Correlation',
+                    'Correlations',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
                 Text(
                   '${data.count} pairs',
-                  style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                  style: TextStyle(color: mutedColor(context), fontSize: 11),
                 ),
               ],
             ),
             const SizedBox(height: 4),
             Text(
-              'Top correlated pairs · throttle blocks pile-ons above the heat cap.',
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+              'Pairs that move together — taking both same-side stacks the same bet.',
+              style: TextStyle(color: mutedColor(context), fontSize: 11),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _SummaryPill(count: strong,  label: 'strong',
+                    color: isDark ? kNeonRed : kLightLoss),
+                _SummaryPill(count: moderate, label: 'moderate', color: kAmber),
+                _SummaryPill(count: low,     label: 'low',
+                    color: isDark ? kNeonGreen : kLightWin),
+                const SizedBox(width: 4),
+                Text(
+                  '⇈ same · ⇅ inverse',
+                  style: TextStyle(
+                    fontSize: 10, color: mutedColor(context),
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
             ...top.map((p) => _CorrelationRow(pair: p)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _SummaryPill extends StatelessWidget {
+  const _SummaryPill({
+    required this.count,
+    required this.label,
+    required this.color,
+  });
+  final int count;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.10 : 0.10),
+        border: Border.all(color: color.withValues(alpha: 0.36)),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$count',
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 9,
+              letterSpacing: 1.2,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1024,36 +1135,93 @@ class _CorrelationRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final v = pair.value;
-    final mag = v.abs();
-    final color = mag >= 0.60
-        ? (v >= 0 ? Colors.redAccent : Colors.greenAccent)
-        : mag >= 0.30
-            ? Colors.amber
-            : Colors.grey;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
+    final c = _classifyCorrelation(context, pair.value);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final mag = (pair.value.abs() * 100).round();
+    final arrow = pair.value >= 0 ? '⇈' : '⇅';
+    final isStrong = c.tier != _CorrTier.low;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      padding: const EdgeInsets.fromLTRB(11, 9, 11, 9),
+      decoration: BoxDecoration(
+        color: isStrong
+            ? c.color.withValues(alpha: isDark ? 0.10 : 0.07)
+            : (isDark ? kSurface2 : kLightSurface2),
+        border: Border.all(
+          color: isStrong
+              ? c.color.withValues(alpha: isDark ? 0.32 : 0.30)
+              : (isDark ? kEdge : kLightEdge),
+        ),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Text(
-              '${pair.symbolA} ↔ ${pair.symbolB}',
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
+          Row(
+            children: [
+              Text(
+                arrow,
+                style: TextStyle(
+                  color: c.color,
+                  fontSize: 14,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: pair.symbolA,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      TextSpan(
+                        text: pair.value >= 0 ? '  ↔  ' : '  ↮  ',
+                        style: TextStyle(color: mutedColor(context)),
+                      ),
+                      TextSpan(
+                        text: pair.symbolB,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ],
+                  ),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontFamily: 'monospace',
+                    color: isDark ? kText : kLightText,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: c.color.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '$mag%',
+                  style: TextStyle(
+                    color: c.color,
+                    fontWeight: FontWeight.w700,
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+            ],
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.15),
-              border: Border.all(color: color.withValues(alpha: 0.6)),
-              borderRadius: BorderRadius.circular(6),
-            ),
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.only(left: 22),
             child: Text(
-              v.toStringAsFixed(2),
+              c.label,
               style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.w700,
-                fontFeatures: const [FontFeature.tabularFigures()],
+                color: isStrong ? c.color.withValues(alpha: 0.9) : mutedColor(context),
+                fontSize: 10,
               ),
             ),
           ),

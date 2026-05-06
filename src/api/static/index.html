@@ -366,15 +366,60 @@
     .robot-ready-text { position: absolute; bottom: 12px; left: 14px; font-size: 9px; letter-spacing: 0.35em; text-transform: uppercase; color: var(--green); font-weight: 700; }
     .robot-ready-sub { position: absolute; bottom: 12px; right: 14px; font-size: 9px; color: var(--muted); letter-spacing: 0.1em; }
 
-    /* Correlations */
-    .corr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .corr-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border-radius: 9px; border: 1px solid var(--edge); font-family: var(--mono); font-size: 12px; }
-    .corr-pair { color: var(--text2); }
-    .corr-val { font-weight: 700; padding: 2px 10px; border-radius: 5px; font-size: 12px; }
-    .cv-green { color: var(--green); background: var(--gdim); }
-    .cv-red   { color: var(--red);   background: var(--rdim); }
-    .cv-amber { color: var(--amber); background: var(--adim); }
-    .cv-muted { color: var(--muted); background: var(--surface2); }
+    /* Correlations — magnitude-coloured cards. Strong = high absolute ρ
+       (concentrated risk, bot will throttle); moderate = watch; low =
+       safely diversified. Sign is shown via arrow icon, not colour, so
+       "+0.91" doesn't get coloured red purely because the number is +. */
+    .corr-summary {
+      display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+      margin-bottom: 12px; padding-bottom: 12px;
+      border-bottom: 1px dashed var(--edge);
+    }
+    .corr-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 20px;
+      font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+      font-weight: 600;
+    }
+    .corr-pill-num { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+    .corr-pill-lbl { color: inherit; opacity: 0.85; }
+    .corr-pill.corr-strong { background: var(--rdim); color: var(--red); border: 1px solid var(--rglow); }
+    .corr-pill.corr-mod    { background: var(--adim); color: var(--amber); border: 1px solid rgba(217,119,6,0.32); }
+    .corr-pill.corr-low    { background: var(--gdim); color: var(--green); border: 1px solid var(--gglow); }
+    .corr-legend { font-size: 10px; color: var(--muted); margin-left: auto; letter-spacing: 0.05em; }
+    .corr-arrow { font-family: var(--mono); font-weight: 700; }
+
+    .corr-cards { display: flex; flex-direction: column; gap: 6px; }
+    .corr-card {
+      border: 1px solid var(--edge); border-radius: 10px;
+      padding: 9px 12px; transition: border-color 0.15s, background 0.15s;
+    }
+    .corr-card.tier-strong { border-color: var(--rglow); background: var(--rdim); }
+    .corr-card.tier-mod    { border-color: rgba(217,119,6,0.3); background: var(--adim); }
+    .corr-card.tier-low    { background: var(--surface2); }
+    .corr-card-head {
+      display: flex; align-items: center; gap: 8px;
+      font-family: var(--mono); font-size: 12px;
+    }
+    .corr-card .corr-arrow { font-size: 14px; opacity: 0.85; }
+    .corr-card.tier-strong .corr-arrow { color: var(--red); }
+    .corr-card.tier-mod .corr-arrow    { color: var(--amber); }
+    .corr-card.tier-low .corr-arrow    { color: var(--muted); }
+    .corr-card-pair { flex: 1; color: var(--text); font-weight: 600; }
+    .corr-card-sep  { color: var(--muted); margin: 0 4px; }
+    .corr-card-mag  {
+      font-family: var(--mono); font-weight: 700; font-size: 13px;
+      padding: 2px 8px; border-radius: 5px;
+    }
+    .corr-card.tier-strong .corr-card-mag { color: var(--red);   background: rgba(255,51,85,0.14); }
+    .corr-card.tier-mod    .corr-card-mag { color: var(--amber); background: rgba(217,119,6,0.14); }
+    .corr-card.tier-low    .corr-card-mag { color: var(--muted); background: var(--surface3); }
+    .corr-card-status {
+      font-size: 10px; color: var(--muted); letter-spacing: 0.04em;
+      margin-top: 4px; padding-left: 22px;
+    }
+    .corr-card.tier-strong .corr-card-status { color: var(--red); opacity: 0.9; }
+    .corr-card.tier-mod    .corr-card-status { color: var(--amber); opacity: 0.9; }
 
     /* Drift */
     .drift-card { border-radius: 11px; border: 1px solid var(--edge); padding: 14px; }
@@ -807,7 +852,7 @@
           <div class="panel-head">
             <div>
               <div class="panel-title">Portfolio correlations</div>
-              <div class="panel-sub">|ρ| ≥ 0.30 throttles signals on the same side</div>
+              <div class="panel-sub">Pairs that move together — taking both same-side stacks the same bet</div>
             </div>
             <span style="font-size:11px;color:var(--muted)" x-text="correlation?.pairs?.[0]?.computed_at ? fmtTime(correlation.pairs[0].computed_at) : ''"></span>
           </div>
@@ -815,11 +860,39 @@
             <template x-if="!correlation?.pairs || correlation.pairs.length === 0">
               <div class="empty">No correlations yet — bot needs more bars.</div>
             </template>
-            <div class="corr-grid">
+
+            <div class="corr-summary" x-show="correlation?.pairs?.length">
+              <div class="corr-pill corr-strong">
+                <span class="corr-pill-num" x-text="correlationCounts.strong"></span>
+                <span class="corr-pill-lbl">strong</span>
+              </div>
+              <div class="corr-pill corr-mod">
+                <span class="corr-pill-num" x-text="correlationCounts.moderate"></span>
+                <span class="corr-pill-lbl">moderate</span>
+              </div>
+              <div class="corr-pill corr-low">
+                <span class="corr-pill-num" x-text="correlationCounts.low"></span>
+                <span class="corr-pill-lbl">low</span>
+              </div>
+              <span class="corr-legend">
+                <span class="corr-arrow">⇈</span> same direction
+                · <span class="corr-arrow">⇅</span> inverse
+              </span>
+            </div>
+
+            <div class="corr-cards" x-show="correlation?.pairs?.length">
               <template x-for="c in (correlation?.pairs || [])" :key="c.symbol_a + c.symbol_b">
-                <div class="corr-row">
-                  <span class="corr-pair" x-text="c.symbol_a + ' · ' + c.symbol_b"></span>
-                  <span class="corr-val" :class="Math.abs(c.value) >= 0.6 ? (c.value > 0 ? 'cv-red' : 'cv-green') : (Math.abs(c.value) >= 0.3 ? 'cv-amber' : 'cv-muted')" x-text="(c.value > 0 ? '+' : '') + c.value.toFixed(2)"></span>
+                <div class="corr-card" :class="correlationTier(c.value)">
+                  <div class="corr-card-head">
+                    <span class="corr-arrow" x-text="c.value >= 0 ? '⇈' : '⇅'"></span>
+                    <span class="corr-card-pair">
+                      <span x-text="c.symbol_a"></span>
+                      <span class="corr-card-sep" x-text="c.value >= 0 ? '↔' : '↮'"></span>
+                      <span x-text="c.symbol_b"></span>
+                    </span>
+                    <span class="corr-card-mag" x-text="Math.round(Math.abs(c.value) * 100) + '%'"></span>
+                  </div>
+                  <div class="corr-card-status" x-text="correlationLabel(c.value)"></div>
                 </div>
               </template>
             </div>

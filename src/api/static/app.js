@@ -227,6 +227,32 @@ document.addEventListener("alpine:init", () => {
       return this.trades.reduce((s, t) => s + (t.pnl || 0), 0);
     },
 
+    // ---- Correlations: magnitude → tier, sign → direction phrasing ----
+    correlationTier(value) {
+      const m = Math.abs(value || 0);
+      if (m >= 0.6) return "tier-strong";
+      if (m >= 0.3) return "tier-mod";
+      return "tier-low";
+    },
+    correlationLabel(value) {
+      const m = Math.abs(value || 0);
+      const direction = value >= 0 ? "same direction" : "inverse";
+      if (m >= 0.6) return `Strong · ${direction} — same trade twice if both same-side`;
+      if (m >= 0.3) return `Moderate · ${direction} — bot will throttle pile-ons`;
+      return `Low · ${direction} — independent enough to stack`;
+    },
+    get correlationCounts() {
+      const pairs = this.correlation?.pairs || [];
+      let strong = 0, moderate = 0, low = 0;
+      for (const p of pairs) {
+        const m = Math.abs(p.value || 0);
+        if (m >= 0.6) strong++;
+        else if (m >= 0.3) moderate++;
+        else low++;
+      }
+      return { strong, moderate, low };
+    },
+
     // ---- Trade filtering (tab + date) ----
     _matchesDate(iso) {
       if (!this.tradeDate || !iso) return true;
