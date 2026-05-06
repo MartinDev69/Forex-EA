@@ -339,6 +339,49 @@ class TelegramNotifier:
             f"Affects: <code>{pairs}</code>"
         )
 
+    def signal_alert(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        strategy: str,
+        price: float,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        sl_pips: float | None = None,
+        tp_pips: float | None = None,
+        risk_reward: float | None = None,
+        regime: str | None = None,
+        reason: str | None = None,
+    ) -> bool:
+        """Trade idea to act on manually — strategy is in 'signal' mode,
+        so the bot is not placing this. Visually distinct from auto-open
+        alerts so the user can tell them apart at a glance.
+        """
+        side_u = side.upper()
+        side_emoji = EMOJI["buy"] if side_u == "BUY" else EMOJI["sell"]
+        lines = [f"📡 <b>SIGNAL · {side_emoji} {side_u} {symbol}</b>"]
+        lines.append(f"Entry <code>{_fmt_price(symbol, price)}</code>")
+        if stop_loss is not None and take_profit is not None:
+            sl_extra = f" ({sl_pips:.0f}p)" if sl_pips is not None else ""
+            tp_extra = f" ({tp_pips:.0f}p)" if tp_pips is not None else ""
+            lines.append(
+                f"SL <code>{_fmt_price(symbol, stop_loss)}</code>{sl_extra}  ·  "
+                f"TP <code>{_fmt_price(symbol, take_profit)}</code>{tp_extra}"
+            )
+        meta: list[str] = []
+        if risk_reward is not None:
+            meta.append(f"R:R <b>{risk_reward:.2f}</b>")
+        meta.append(f"<i>{strategy.replace('_', ' ').title()}</i>")
+        if regime:
+            meta.append(f"regime <code>{regime}</code>")
+        if meta:
+            lines.append(" · ".join(meta))
+        if reason:
+            lines.append(f"<i>{reason}</i>")
+        lines.append("<i>Manual — bot is not placing this.</i>")
+        return self.send("\n".join(lines))
+
     def setup_alert(
         self,
         *,

@@ -45,13 +45,17 @@ class Account {
 class Strategy {
   final String name;
   final bool enabled;
+  final String mode; // 'execute' (bot trades) | 'signal' (alerts only)
 
-  Strategy({required this.name, required this.enabled});
+  Strategy({required this.name, required this.enabled, required this.mode});
 
   factory Strategy.fromJson(Map<String, dynamic> json) => Strategy(
         name: json['name'] as String,
         enabled: json['enabled'] as bool,
+        mode: (json['mode'] as String?) ?? 'execute',
       );
+
+  bool get isSignalOnly => mode == 'signal';
 }
 
 class Trade {

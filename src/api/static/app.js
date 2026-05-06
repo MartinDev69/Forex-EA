@@ -348,6 +348,23 @@ document.addEventListener("alpine:init", () => {
       } catch (_) { /* swallow, next tick will reconcile */ }
     },
 
+    async setStrategyMode(name, mode) {
+      if (!this.isAdmin) return;
+      try {
+        const updated = await api(`/strategies/${encodeURIComponent(name)}/mode`,
+          { method: "POST", token: this.token, body: { mode } });
+        const i = this.strategies.findIndex(s => s.name === updated.name);
+        if (i >= 0) this.strategies[i] = updated;
+      } catch (_) { /* next tick will reconcile */ }
+    },
+
+    get executeStrategies() {
+      return this.strategies.filter(s => (s.mode || 'execute') === 'execute');
+    },
+    get signalStrategies() {
+      return this.strategies.filter(s => s.mode === 'signal');
+    },
+
     async toggleBot() {
       if (!this.isAdmin) return;
       const path = this.status?.running ? "/bot/stop" : "/bot/start";

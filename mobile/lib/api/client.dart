@@ -76,6 +76,16 @@ class ApiClient {
         .toList();
   }
 
+  Future<Strategy> setStrategyMode(String name, String mode) async {
+    final r = await http.post(
+      _u('/strategies/${Uri.encodeComponent(name)}/mode'),
+      headers: _headers,
+      body: json.encode({'mode': mode}),
+    );
+    _check(r);
+    return Strategy.fromJson(json.decode(r.body) as Map<String, dynamic>);
+  }
+
   Future<Strategy> toggleStrategy(String name) async {
     final r = await http.post(_u('/strategies/$name/toggle'), headers: _headers);
     _check(r);

@@ -79,6 +79,9 @@ class BotState:
     # (strategy, symbol) -> UTC datetime of the last setup-alert we sent.
     # Throttles "near miss" pings to one per pair-strategy per hour.
     last_setup_alert: dict[tuple[str, str], datetime] = field(default_factory=dict)
+    # (strategy, symbol, side) -> last signal-mode alert timestamp; throttles
+    # signal-only strategies so a persistent setup doesn't spam every tick.
+    last_signal_alert: dict[tuple[str, str, str], datetime] = field(default_factory=dict)
     # Last tick on which the broker_status_store was refreshed with live
     # equity. -1 means we haven't pushed yet — first eligible tick will.
     last_broker_status_refresh_tick: int = -1
@@ -539,6 +542,59 @@ class Bot:
             # will catch any other event that needs announcing.
             return
 
+    def _strategy_mode(self, name: str) -> str:
+        """'execute' | 'signal'. Defaults to 'execute' if the toggle store
+        isn't wired or the strategy doesn't have a row yet.
+        """
+        if self.toggle_store is None or not hasattr(self.toggle_store, "get_mode"):
+            return "execute"
+        try:
+            return self.toggle_store.get_mode(name)
+        except Exception:
+            log.exception("get_mode failed for %s", name)
+            return "execute"
+
+    def _send_signal_alert(
+        self, signal: Signal, strategy: Strategy, regime: RegimeSnapshot | None = None,
+    ) -> None:
+        """Telegram-only signal for strategies in signal mode. Throttled
+        per (strategy, symbol, side) so a persistent setup across an M15
+        candle doesn't spam the chat.
+        """
+        if not hasattr(self.notifier, "signal_alert"):
+            return
+        key = (strategy.name, signal.symbol, signal.type.value)
+        now = datetime.now(timezone.utc)
+        last = self.state.last_signal_alert.get(key)
+        if last is not None and (now - last).total_seconds() < 1800:  # 30 min
+            return
+        self.state.last_signal_alert[key] = now
+        sl_pips = tp_pips = rr = None
+        if signal.stop_loss is not None and signal.take_profit is not None:
+            ps = pip_size(signal.symbol)
+            if ps > 0:
+                sl_pips = abs(signal.price - signal.stop_loss) / ps
+                tp_pips = abs(signal.take_profit - signal.price) / ps
+                if sl_pips > 0:
+                    rr = tp_pips / sl_pips
+        regime_label = regime.label if regime is not None else None
+        try:
+            self.notifier.signal_alert(
+                symbol=signal.symbol,
+                side=signal.type.value,
+                strategy=strategy.name,
+                price=signal.price,
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit,
+                sl_pips=sl_pips,
+                tp_pips=tp_pips,
+                risk_reward=rr,
+                regime=regime_label,
+                reason=signal.reason,
+            )
+        except Exception:
+            log.exception("signal alert send failed for %s %s", strategy.name, signal.symbol)
+
     def _maybe_send_setup_alert(
         self,
         *,
@@ -633,6 +689,15 @@ class Bot:
     ) -> bool:
         if signal.stop_loss is None or signal.take_profit is None:
             log.warning("signal from %s missing SL/TP — skipping", strategy.name)
+            return False
+
+        # If the strategy is in signal-only mode, fire a Telegram alert
+        # and skip placement. We pass the same SL/TP/RR data the user
+        # would see if the bot were taking the trade so they can mirror
+        # it manually.
+        mode = self._strategy_mode(strategy.name)
+        if mode == "signal":
+            self._send_signal_alert(signal, strategy, regime)
             return False
 
         stop_distance_pips = abs(signal.price - signal.stop_loss) / pip_size(signal.symbol)

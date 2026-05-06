@@ -258,6 +258,11 @@ class AccountResponse(BaseModel):
 class StrategyResponse(BaseModel):
     name: str
     enabled: bool
+    mode: str = "execute"  # 'execute' (bot trades) | 'signal' (alerts only)
+
+
+class StrategyModeRequest(BaseModel):
+    mode: str = Field(pattern="^(execute|signal)$")
 
 
 class BrokerConfigRequest(BaseModel):
@@ -413,7 +418,26 @@ def account(_user: dict = Depends(current_user)) -> AccountResponse:
 
 @app.get("/strategies", response_model=list[StrategyResponse])
 def list_strategies(_user: dict = Depends(current_user)) -> list[StrategyResponse]:
-    return [StrategyResponse(name=n, enabled=e) for n, e in toggle_store.list().items()]
+    return [
+        StrategyResponse(name=s["name"], enabled=s["enabled"], mode=s["mode"])
+        for s in toggle_store.list_full()
+    ]
+
+
+@app.post("/strategies/{name}/mode", response_model=StrategyResponse)
+def set_strategy_mode(
+    name: str,
+    body: StrategyModeRequest,
+    _admin: dict = Depends(require_admin),
+) -> StrategyResponse:
+    try:
+        toggle_store.set_mode(name, body.mode)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"unknown strategy: {name}")
+    full = toggle_store.get_full(name)
+    return StrategyResponse(
+        name=full["name"], enabled=full["enabled"], mode=full["mode"],
+    )
 
 
 @app.post("/strategies/{name}/toggle", response_model=StrategyResponse)
@@ -422,7 +446,12 @@ def toggle_strategy(name: str, _user: dict = Depends(require_2fa)) -> StrategyRe
         enabled = toggle_store.toggle(name)
     except KeyError:
         raise HTTPException(404, f"strategy '{name}' not found") from None
-    return StrategyResponse(name=name, enabled=enabled)
+    full = toggle_store.get_full(name)
+    return StrategyResponse(
+        name=name,
+        enabled=enabled,
+        mode=full["mode"] if full else "execute",
+    )
 
 
 @app.get("/trades", response_model=list[TradeResponse])

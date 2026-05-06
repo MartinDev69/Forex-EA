@@ -292,6 +292,24 @@
     .strat-name { font-size: 13px; font-weight: 500; color: var(--text); }
     .strat-status { font-size: 10px; color: var(--muted); margin-top: 2px; letter-spacing: 0.08em; }
     .strat-item.on .strat-status { color: var(--green); }
+    .strat-item.signal-mode.on { background: var(--adim); border-color: rgba(217,119,6,0.3); }
+    .strat-item.signal-mode.on .strat-status { color: var(--amber); }
+    .strat-group { display: flex; flex-direction: column; gap: 8px; }
+    .strat-group-hd {
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--muted); font-weight: 600; padding: 0 4px 4px;
+    }
+    .strat-group-sub { font-size: 9px; letter-spacing: 0.1em; color: var(--muted); text-transform: none; opacity: 0.75; }
+    .strat-empty { font-size: 11px; color: var(--muted); padding: 8px 4px; font-style: italic; }
+    .strat-mode-btn {
+      width: 28px; height: 28px; border-radius: 8px;
+      border: 1px solid var(--edge2); background: var(--surface2);
+      cursor: pointer; font-size: 13px; color: var(--muted);
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.15s; margin-right: 4px;
+    }
+    .strat-mode-btn:hover { border-color: var(--gglow); color: var(--green); }
 
     .tog-track {
       width: 42px; height: 24px; border-radius: 12px; position: relative;
@@ -653,24 +671,57 @@
           <div class="panel-head">
             <div>
               <div class="panel-title">Strategies</div>
-              <div class="panel-sub" x-text="isAdmin ? 'tap to arm / disarm' : 'view-only'"></div>
+              <div class="panel-sub" x-text="isAdmin ? 'tap row to swap mode · tap toggle to arm/disarm' : 'view-only'"></div>
             </div>
           </div>
           <div class="panel-body">
             <template x-if="strategies.length === 0">
               <div class="empty">No strategies loaded.</div>
             </template>
-            <template x-for="s in strategies" :key="s.name">
-              <div class="strat-item" :class="{ on: s.enabled }" @click="toggleStrategy(s.name)">
-                <div>
-                  <div class="strat-name" x-text="s.name"></div>
-                  <div class="strat-status" x-text="s.enabled ? '● armed' : '○ disarmed'"></div>
-                </div>
-                <div class="tog-track" :class="s.enabled ? 'on' : 'off'" @click.stop="toggleStrategy(s.name)">
-                  <div class="tog-thumb"></div>
-                </div>
+
+            <div class="strat-group" x-show="executeStrategies.length || signalStrategies.length">
+              <div class="strat-group-hd">
+                <span>⚙️ Auto-execute</span>
+                <span class="strat-group-sub">Bot places orders</span>
               </div>
-            </template>
+              <template x-if="executeStrategies.length === 0">
+                <div class="strat-empty">No strategies in execute mode.</div>
+              </template>
+              <template x-for="s in executeStrategies" :key="s.name">
+                <div class="strat-item" :class="{ on: s.enabled }">
+                  <div style="flex:1;cursor:pointer" @click="isAdmin && setStrategyMode(s.name, 'signal')">
+                    <div class="strat-name" x-text="s.name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"></div>
+                    <div class="strat-status" x-text="s.enabled ? '● armed · executing' : '○ disarmed'"></div>
+                  </div>
+                  <button x-show="isAdmin" class="strat-mode-btn" @click.stop="setStrategyMode(s.name, 'signal')" title="Move to signal-only">📡</button>
+                  <div class="tog-track" :class="s.enabled ? 'on' : 'off'" @click="isAdmin && toggleStrategy(s.name)">
+                    <div class="tog-thumb"></div>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <div class="strat-group" style="margin-top:14px" x-show="signalStrategies.length || executeStrategies.length">
+              <div class="strat-group-hd">
+                <span>📡 Signals only</span>
+                <span class="strat-group-sub">Telegram alerts, no orders</span>
+              </div>
+              <template x-if="signalStrategies.length === 0">
+                <div class="strat-empty">Tap a strategy above to move it here.</div>
+              </template>
+              <template x-for="s in signalStrategies" :key="s.name">
+                <div class="strat-item signal-mode" :class="{ on: s.enabled }">
+                  <div style="flex:1;cursor:pointer" @click="isAdmin && setStrategyMode(s.name, 'execute')">
+                    <div class="strat-name" x-text="s.name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"></div>
+                    <div class="strat-status" x-text="s.enabled ? '● armed · alerts only' : '○ disarmed'"></div>
+                  </div>
+                  <button x-show="isAdmin" class="strat-mode-btn" @click.stop="setStrategyMode(s.name, 'execute')" title="Move to auto-execute">⚙️</button>
+                  <div class="tog-track" :class="s.enabled ? 'on' : 'off'" @click="isAdmin && toggleStrategy(s.name)">
+                    <div class="tog-thumb"></div>
+                  </div>
+                </div>
+              </template>
+            </div>
           </div>
         </div>
       </div>
