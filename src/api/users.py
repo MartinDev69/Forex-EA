@@ -90,6 +90,10 @@ class UserRecord:
     expires_at: str | None = None
     # True if expires_at is in the past. Computed at read-time.
     expired: bool = False
+    # Phone number (from Telegram contact share). Optional.
+    phone_number: str | None = None
+    # Friendly display name (typically the Telegram first_name). Optional.
+    display_name: str | None = None
 
 
 class LastAdminError(RuntimeError):
@@ -123,6 +127,10 @@ class UserStore:
             c.execute("ALTER TABLE auth_users ADD COLUMN expires_at TEXT")
         if "expired_notified_at" not in cols:
             c.execute("ALTER TABLE auth_users ADD COLUMN expired_notified_at TEXT")
+        if "phone_number" not in cols:
+            c.execute("ALTER TABLE auth_users ADD COLUMN phone_number TEXT")
+        if "display_name" not in cols:
+            c.execute("ALTER TABLE auth_users ADD COLUMN display_name TEXT")
         # password_hash was NOT NULL pre-setup-flow; make it nullable so we can
         # pre-seed assigned users before they've chosen a password. SQLite
         # can't ALTER constraints in place, so we migrate via table rebuild
@@ -222,6 +230,8 @@ class UserStore:
         self, ad_id: str, email: str, *,
         duration: timedelta | None = None,
         now: datetime | None = None,
+        phone_number: str | None = None,
+        display_name: str | None = None,
     ) -> str | None:
         """Seed a user-role row with no password yet (pending setup).
 
@@ -253,15 +263,18 @@ class UserStore:
             if existing is None:
                 c.execute(
                     "INSERT INTO auth_users (username, password_hash, role, "
-                    "email, expires_at) "
-                    "VALUES (?, NULL, 'user', ?, ?)",
-                    (ad_id, email, expires_at_iso),
+                    "email, expires_at, phone_number, display_name) "
+                    "VALUES (?, NULL, 'user', ?, ?, ?, ?)",
+                    (ad_id, email, expires_at_iso, phone_number, display_name),
                 )
             elif existing["password_hash"] is None:
                 c.execute(
                     "UPDATE auth_users SET email = ?, expires_at = ?, "
-                    "expired_notified_at = NULL WHERE username = ?",
-                    (email, expires_at_iso, ad_id),
+                    "expired_notified_at = NULL, "
+                    "phone_number = COALESCE(?, phone_number), "
+                    "display_name = COALESCE(?, display_name) "
+                    "WHERE username = ?",
+                    (email, expires_at_iso, phone_number, display_name, ad_id),
                 )
             else:
                 raise ValueError(f"{ad_id} already has a password set")
@@ -441,7 +454,8 @@ class UserStore:
         with self._conn() as c:
             rows = c.execute(
                 "SELECT username, role, email, created_at, password_hash, "
-                "expires_at FROM auth_users ORDER BY role DESC, username"
+                "expires_at, phone_number, display_name "
+                "FROM auth_users ORDER BY role DESC, username"
             ).fetchall()
         out: list[UserRecord] = []
         for r in rows:
@@ -457,6 +471,8 @@ class UserStore:
                 password_set=bool(r["password_hash"]),
                 expires_at=r["expires_at"],
                 expired=expired,
+                phone_number=r["phone_number"] if "phone_number" in r.keys() else None,
+                display_name=r["display_name"] if "display_name" in r.keys() else None,
             ))
         return out
 

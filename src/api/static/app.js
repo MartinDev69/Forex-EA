@@ -930,23 +930,15 @@ document.addEventListener("alpine:init", () => {
 
     async approveRequest(r) {
       const dur = this.approveDuration[r.id] || r.duration;
-      const delivery = this.approveDelivery[r.id] || "telegram";
-      if (!confirm(`Approve ${r.email} for ${dur} (link via ${delivery})?`)) return;
+      const who = r.phone_number || r.telegram_first_name || r.email || `chat ${r.telegram_chat_id}`;
+      if (!confirm(`Approve ${who} for ${dur}? Setup link will be sent via Telegram.`)) return;
       this.busy = true;
       try {
         const resp = await api(`/subscription-requests/${r.id}/approve`, {
           method: "POST", token: this.token,
-          body: { duration: dur, delivery },
+          body: { duration: dur, delivery: "telegram" },
         });
-        if (delivery === "telegram") {
-          this.flash(`Approved · setup link sent to user on Telegram.`, true);
-        } else if (delivery === "email") {
-          this.flash(`Approved · setup link emailed to ${resp.email}.`, true);
-        } else {
-          this.flash(`Approved · setup link sent via Telegram + email.`, true);
-        }
-        // For telegram-only or no-mailer cases, the URL is also included
-        // in the response so the admin can copy/paste as a backup.
+        this.flash(`Approved · setup link sent on Telegram.`, true);
         if (resp.setup_url) this.lastSetupUrl = resp.setup_url;
       } catch (e) {
         this.flash(`Approve failed: ${this._humanize(e)}`, false);

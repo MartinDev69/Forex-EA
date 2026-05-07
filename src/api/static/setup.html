@@ -88,8 +88,10 @@
     <div class="text-xs text-slate-400 mb-1">AD-ID</div>
     <div id="ad_id" class="font-semibold text-cyan-300 mb-4 tracking-wider"></div>
 
-    <div class="text-xs text-slate-400 mb-1">Email</div>
-    <div id="email" class="text-slate-200 text-sm mb-5 truncate"></div>
+    <div id="contact-row" class="hidden">
+      <div class="text-xs text-slate-400 mb-1" id="contact-label">Email</div>
+      <div id="email" class="text-slate-200 text-sm mb-5 truncate"></div>
+    </div>
 
     <label class="block text-xs uppercase tracking-widest text-slate-400 mb-2">New password</label>
     <input id="pw1" type="password" autocomplete="new-password" required minlength="12"
@@ -147,7 +149,23 @@
       }
       const claims = await r.json();
       document.getElementById("ad_id").textContent = claims.ad_id;
-      document.getElementById("email").textContent = claims.email;
+      // Show phone if we have one, otherwise email — and hide the row
+      // entirely if it's the synthetic "@no-email.local" placeholder
+      // we use for phone-based signups.
+      const isPlaceholder = (claims.email || "").endsWith("@no-email.local");
+      const row = document.getElementById("contact-row");
+      const label = document.getElementById("contact-label");
+      const value = document.getElementById("email");
+      if (claims.phone_number) {
+        label.textContent = "Phone";
+        value.textContent = claims.phone_number;
+        row.classList.remove("hidden");
+      } else if (claims.email && !isPlaceholder) {
+        label.textContent = "Email";
+        value.textContent = claims.email;
+        row.classList.remove("hidden");
+      }
+      // else: no contact info → hide the row entirely
       loading.classList.add("hidden");
       form.classList.remove("hidden");
     } catch (e) {

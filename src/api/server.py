@@ -328,6 +328,8 @@ class UserResponse(BaseModel):
     password_set: bool
     expires_at: str | None = None
     expired: bool = False
+    phone_number: str | None = None
+    display_name: str | None = None
 
 
 class AssignUserRequest(BaseModel):
@@ -391,6 +393,7 @@ class SetupClaimsResponse(BaseModel):
     ad_id: str
     email: str
     expires_at: int
+    phone_number: str | None = None
 
 
 class PoolResponse(BaseModel):
@@ -810,11 +813,18 @@ def get_broker_status(_user: dict = Depends(current_user)) -> BrokerStatusRespon
 # ---------- User management (admin only) ----------
 
 def _to_response(u) -> UserResponse:
+    # Hide the synthetic placeholder email we generate for phone-based
+    # signups so the dashboard doesn't show "telegram-12345@no-email.local".
+    visible_email = u.email
+    if visible_email and visible_email.endswith("@no-email.local"):
+        visible_email = None
     return UserResponse(
-        username=u.username, role=u.role, email=u.email,
+        username=u.username, role=u.role, email=visible_email,
         created_at=u.created_at, password_set=u.password_set,
         expires_at=u.expires_at,
         expired=u.expired,
+        phone_number=getattr(u, "phone_number", None),
+        display_name=getattr(u, "display_name", None),
     )
 
 
@@ -968,11 +978,15 @@ def approve_subscription_request(
 
     # Phone-based signups have an empty email field — fall back to a
     # synthetic placeholder so the user_store row insert doesn't fail
-    # its NOT NULL on email. Real email can be added later via Resend
-    # link if the admin wants it.
+    # its NOT NULL on email. Real email can be added later if needed —
+    # the dashboard hides the placeholder anyway.
     contact_email = req.email or f"telegram-{req.telegram_chat_id}@no-email.local"
     try:
-        user_store.assign(ad_id, contact_email, duration=duration)
+        user_store.assign(
+            ad_id, contact_email, duration=duration,
+            phone_number=req.phone_number,
+            display_name=req.telegram_first_name or req.telegram_username,
+        )
     except ValueError as e:
         raise HTTPException(409, str(e)) from None
 
@@ -1159,8 +1173,13 @@ def preview_setup(token: str) -> SetupClaimsResponse:
         raise HTTPException(409, "password already set for this AD-ID")
     if not user_store.exists(claims["ad_id"]):
         raise HTTPException(404, "AD-ID not recognized")
+    user = next(
+        (u for u in user_store.list_users() if u.username == claims["ad_id"]),
+        None,
+    )
     return SetupClaimsResponse(
         ad_id=claims["ad_id"], email=claims["email"], expires_at=claims["exp"],
+        phone_number=getattr(user, "phone_number", None) if user else None,
     )
 
 
