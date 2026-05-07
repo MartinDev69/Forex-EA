@@ -44,7 +44,9 @@ CREATE TABLE IF NOT EXISTS trade_explanations (
     ml_filter_passed    INTEGER,
     notes               TEXT,
     opened_at           TEXT NOT NULL,
-    indicators_json     TEXT
+    indicators_json     TEXT,
+    bars_json           TEXT,
+    overlays_json       TEXT
 );
 """
 
@@ -78,6 +80,14 @@ class TradeExplanation:
     # Free-form per strategy: e.g. {"rsi": 28.5, "ema_fast": 1.0852,
     # "atr": 0.00074}. Empty when the strategy doesn't expose any.
     indicators: dict = field(default_factory=dict)
+    # OHLC snapshot — last N bars before the signal fired. Each entry is
+    # {t: ISO-8601, o, h, l, c}. Stored so the dashboard can draw the
+    # exact candles the strategy was looking at.
+    bars: list = field(default_factory=list)
+    # Indicator line series aligned with `bars`. Each entry:
+    # {name: 'ema_fast', kind: 'line'|'band', color: str, values: [...]}.
+    # Used by the chart to draw indicator overlays on top of the candles.
+    overlays: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -103,6 +113,8 @@ class TradeExplanation:
             "notes": self.notes,
             "opened_at": self.opened_at,
             "indicators": dict(self.indicators or {}),
+            "bars": list(self.bars or []),
+            "overlays": list(self.overlays or []),
         }
 
 
@@ -118,6 +130,10 @@ class TradeExplanationStore:
             cols = {r["name"] for r in c.execute("PRAGMA table_info(trade_explanations)")}
             if "indicators_json" not in cols:
                 c.execute("ALTER TABLE trade_explanations ADD COLUMN indicators_json TEXT")
+            if "bars_json" not in cols:
+                c.execute("ALTER TABLE trade_explanations ADD COLUMN bars_json TEXT")
+            if "overlays_json" not in cols:
+                c.execute("ALTER TABLE trade_explanations ADD COLUMN overlays_json TEXT")
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -135,8 +151,8 @@ class TradeExplanationStore:
                     regime_trend, regime_volatility, regime_label,
                     regime_adx, regime_atr_pct,
                     allocator_role, allocator_weight, ml_filter_passed,
-                    notes, opened_at, indicators_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    notes, opened_at, indicators_json, bars_json, overlays_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     exp.trade_id, exp.strategy, exp.symbol, exp.side,
@@ -149,6 +165,8 @@ class TradeExplanationStore:
                     None if exp.ml_filter_passed is None else int(exp.ml_filter_passed),
                     exp.notes, exp.opened_at,
                     json.dumps(exp.indicators) if exp.indicators else None,
+                    json.dumps(exp.bars) if exp.bars else None,
+                    json.dumps(exp.overlays) if exp.overlays else None,
                 ),
             )
 
@@ -162,7 +180,8 @@ class TradeExplanationStore:
                        regime_trend, regime_volatility, regime_label,
                        regime_adx, regime_atr_pct,
                        allocator_role, allocator_weight, ml_filter_passed,
-                       notes, opened_at, indicators_json
+                       notes, opened_at, indicators_json,
+                       bars_json, overlays_json
                 FROM trade_explanations
                 WHERE trade_id = ?
                 """,
@@ -197,5 +216,11 @@ class TradeExplanationStore:
             opened_at=row["opened_at"],
             indicators=(
                 json.loads(row["indicators_json"]) if row["indicators_json"] else {}
+            ),
+            bars=(
+                json.loads(row["bars_json"]) if row["bars_json"] else []
+            ),
+            overlays=(
+                json.loads(row["overlays_json"]) if row["overlays_json"] else []
             ),
         )

@@ -7,6 +7,15 @@ const USER_KEY  = "forex_ea_user";
 const ROLE_KEY  = "forex_ea_role";
 const POLL_MS   = 4000;
 
+function _decimalsFor(symbol) {
+  const s = (symbol || "").toUpperCase();
+  if (s.includes("XAU") || s.includes("GOLD")) return 2;
+  if (s.includes("OIL") || s.includes("WTI") || s.includes("BRENT")) return 2;
+  if (s.endsWith("JPY") || s.endsWith("JPYM")) return 3;
+  if (s.includes("BTC") || s.includes("ETH")) return 1;
+  return 5;
+}
+
 async function api(path, { method = "GET", body, token } = {}) {
   const res = await fetch(path, {
     method,
@@ -457,6 +466,131 @@ document.addEventListener("alpine:init", () => {
       return same
         ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
         : d.toLocaleDateString();
+    },
+
+    /**
+     * Render the strategy's signal chart as inline SVG: candlesticks +
+     * EMA/BB overlays + entry/SL/TP lines + a marker on the signal bar.
+     * Returns an HTML string Alpine drops in via x-html — keeps the
+     * dashboard dependency-free (no chart library to vendor).
+     */
+    renderStrategyChart(exp, symbol) {
+      const bars = exp?.bars || [];
+      if (bars.length < 2) return "";
+      const W = 760, H = 220, padL = 6, padR = 6, padT = 6, padB = 14;
+      const innerW = W - padL - padR, innerH = H - padT - padB;
+      const n = bars.length;
+      const step = innerW / n;
+      const candleW = Math.max(1, step * 0.6);
+
+      // Pull every value we need to scale the y-axis: bar highs/lows,
+      // every overlay value, and the entry/SL/TP levels.
+      const allY = [];
+      for (const b of bars) {
+        if (b.h != null) allY.push(b.h);
+        if (b.l != null) allY.push(b.l);
+      }
+      const overlays = exp?.overlays || [];
+      for (const o of overlays) {
+        if (o.kind === "line" && o.values) {
+          for (const v of o.values) if (v != null) allY.push(v);
+        } else if (o.kind === "band") {
+          for (const v of (o.upper || [])) if (v != null) allY.push(v);
+          for (const v of (o.lower || [])) if (v != null) allY.push(v);
+        }
+      }
+      const entry = exp.signal_price, sl = exp.signal_stop, tp = exp.signal_target;
+      [entry, sl, tp].forEach(v => { if (v != null) allY.push(v); });
+      if (!allY.length) return "";
+      const yMin = Math.min(...allY), yMax = Math.max(...allY);
+      const yRange = (yMax - yMin) || 1;
+      const pad = yRange * 0.04;
+      const yTop = yMax + pad, yBottom = yMin - pad;
+      const yScale = v => padT + (yTop - v) / (yTop - yBottom) * innerH;
+      const xScale = i => padL + i * step + step / 2;
+
+      const isBuy = exp?.side === "BUY";
+      const sigColor = isBuy ? "#22ee88" : "#ff3355";
+
+      // Candles
+      let candlesSvg = "";
+      bars.forEach((b, i) => {
+        if (b.o == null || b.c == null || b.h == null || b.l == null) return;
+        const up = b.c >= b.o;
+        const color = up ? "rgba(34,238,136,0.85)" : "rgba(255,51,85,0.85)";
+        const x = xScale(i);
+        const wickTop = yScale(b.h), wickBot = yScale(b.l);
+        const bodyHi = yScale(Math.max(b.o, b.c));
+        const bodyLo = yScale(Math.min(b.o, b.c));
+        const bodyH = Math.max(1, bodyLo - bodyHi);
+        candlesSvg += `<line x1="${x}" y1="${wickTop}" x2="${x}" y2="${wickBot}" stroke="${color}" stroke-width="1"/>`;
+        candlesSvg += `<rect x="${x - candleW / 2}" y="${bodyHi}" width="${candleW}" height="${bodyH}" fill="${color}" />`;
+      });
+
+      // Overlays
+      const polyline = (vals, color, dash = "") => {
+        const pts = [];
+        vals.forEach((v, i) => {
+          if (v != null && i < n) pts.push(`${xScale(i).toFixed(1)},${yScale(v).toFixed(1)}`);
+        });
+        if (pts.length < 2) return "";
+        return `<polyline fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="${dash}" points="${pts.join(" ")}"/>`;
+      };
+      let overlaysSvg = "";
+      const legend = [];
+      for (const o of overlays) {
+        if (o.kind === "line") {
+          overlaysSvg += polyline(o.values || [], o.color || "#8fa0aa");
+          legend.push(`<span><span class="swatch" style="background:${o.color}"></span>${o.name}</span>`);
+        } else if (o.kind === "band") {
+          // Filled BB envelope: upper polyline + lower polyline reversed.
+          const up = (o.upper || []);
+          const dn = (o.lower || []);
+          const pts = [];
+          up.forEach((v, i) => { if (v != null) pts.push(`${xScale(i).toFixed(1)},${yScale(v).toFixed(1)}`); });
+          for (let i = dn.length - 1; i >= 0; i--) {
+            if (dn[i] != null) pts.push(`${xScale(i).toFixed(1)},${yScale(dn[i]).toFixed(1)}`);
+          }
+          if (pts.length >= 4) {
+            overlaysSvg += `<polygon points="${pts.join(" ")}" fill="${o.color}" fill-opacity="0.06" stroke="none"/>`;
+          }
+          overlaysSvg += polyline(up, o.color || "#8fa0aa", "3 3");
+          overlaysSvg += polyline(dn, o.color || "#8fa0aa", "3 3");
+          legend.push(`<span><span class="swatch" style="background:${o.color}"></span>${o.name}</span>`);
+        }
+      }
+
+      // Entry / SL / TP horizontal lines and labels
+      const horiz = (y, color, label) => {
+        if (y == null) return "";
+        const py = yScale(y);
+        return `<line x1="${padL}" y1="${py}" x2="${W - padR}" y2="${py}" stroke="${color}" stroke-width="1" stroke-dasharray="4 4" opacity="0.85"/>` +
+          `<rect x="${W - padR - 60}" y="${py - 7}" width="60" height="13" rx="3" fill="${color}" opacity="0.85"/>` +
+          `<text x="${W - padR - 4}" y="${py + 3}" text-anchor="end" font-size="10" font-family="monospace" fill="#000" font-weight="700">${label}</text>`;
+      };
+      const fmt = v => v == null ? "" : v.toFixed(_decimalsFor(symbol));
+      let levelsSvg = "";
+      levelsSvg += horiz(entry, sigColor, "ENTRY " + fmt(entry));
+      levelsSvg += horiz(sl, "#ff3355", "SL " + fmt(sl));
+      levelsSvg += horiz(tp, "#22ee88", "TP " + fmt(tp));
+
+      // Signal arrow on the most recent bar
+      const sigX = xScale(n - 1);
+      const sigY = yScale(entry);
+      const arrow = isBuy
+        ? `<path d="M ${sigX} ${sigY + 14} l -6 8 l 12 0 z" fill="${sigColor}"/>`
+        : `<path d="M ${sigX} ${sigY - 14} l -6 -8 l 12 0 z" fill="${sigColor}"/>`;
+
+      const legendHtml = legend.length
+        ? `<div class="strategy-chart-legend">${legend.join("")}` +
+          `<span><span class="swatch" style="background:${sigColor}"></span>Entry</span>` +
+          `<span><span class="swatch" style="background:#ff3355"></span>SL</span>` +
+          `<span><span class="swatch" style="background:#22ee88"></span>TP</span></div>`
+        : "";
+
+      return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">` +
+        overlaysSvg + candlesSvg + levelsSvg + arrow +
+        `</svg>${legendHtml}`;
     },
 
     formatIndicator(value) {

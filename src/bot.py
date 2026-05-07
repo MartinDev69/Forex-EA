@@ -29,6 +29,7 @@ from src.execution.fills import Fill, FillStore, signed_slippage_pips
 from src.execution.journal import TradeJournal
 from src.execution.stops import StopManager
 from src.execution.strategy_toggles import StrategyToggleStore
+from src.explanations.chart import serialise_bars, standard_overlays
 from src.explanations.store import TradeExplanation, TradeExplanationStore
 from src.ml.signal_filter import SignalFilter
 from src.monitoring.telegram_notifier import NoOpNotifier
@@ -278,7 +279,7 @@ class Bot:
                         price=signal.price,
                     )
                     continue
-                if self._handle_signal(signal, strategy, regime):
+                if self._handle_signal(signal, strategy, regime, bars=bars):
                     acted += 1
 
         self._write_heartbeat(tick_error)
@@ -687,6 +688,7 @@ class Bot:
 
     def _handle_signal(
         self, signal: Signal, strategy: Strategy, regime: RegimeSnapshot | None = None,
+        bars: pd.DataFrame | None = None,
     ) -> bool:
         if signal.stop_loss is None or signal.take_profit is None:
             log.warning("signal from %s missing SL/TP — skipping", strategy.name)
@@ -757,7 +759,7 @@ class Bot:
             return False
 
         self.journal.record_open(order)
-        self._record_explanation(order, signal, strategy, regime, role, weight)
+        self._record_explanation(order, signal, strategy, regime, role, weight, bars=bars)
         self.risk.register_trade_opened(self.risk.limits.risk_per_trade * weight)
         if self.risk.propfirm_guard is not None:
             try:
@@ -849,6 +851,7 @@ class Bot:
         regime: RegimeSnapshot | None,
         allocator_role: str,
         allocator_weight: float,
+        bars: pd.DataFrame | None = None,
     ) -> None:
         """Persist the decision context for /trades/{id}/explain. No-op if
         the explanation_store wasn't injected — zero cost when off.
@@ -890,6 +893,8 @@ class Bot:
                 ml_filter_passed=(True if self.signal_filter is not None else None),
                 notes=signal.reason or "",
                 indicators=dict(signal.indicators or {}),
+                bars=serialise_bars(bars) if bars is not None else [],
+                overlays=standard_overlays(bars) if bars is not None else [],
             ))
         except Exception:
             log.exception("explanation_store.record failed for trade %s", order.id)

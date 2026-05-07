@@ -5,6 +5,7 @@ import '../models/explanation.dart';
 import '../models/status.dart';
 import '../theme.dart';
 import '../widgets/logo_spinner.dart';
+import '../widgets/strategy_chart.dart';
 
 /// Format a price using the broker's typical decimal precision per symbol
 /// class — keeps the trade row from leaking float artifacts like
@@ -727,6 +728,37 @@ class _ExplanationBody extends StatelessWidget {
                 fontStyle: FontStyle.italic,
               ),
             ),
+          ),
+        ],
+        if (exp.bars.length >= 2) ...[
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Icon(Icons.show_chart,
+                  size: 14, color: Theme.of(context).brightness == Brightness.dark
+                      ? kNeonGreen : kLightWin),
+              const SizedBox(width: 6),
+              Text(
+                'CHART AT SIGNAL TIME',
+                style: TextStyle(
+                  fontSize: 10,
+                  letterSpacing: 2.0,
+                  fontWeight: FontWeight.w700,
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? kNeonGreen : kLightWin,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          StrategyChart(
+            bars: exp.bars,
+            overlays: exp.overlays,
+            entry: exp.signalPrice,
+            stop: exp.signalStop,
+            target: exp.signalTarget,
+            side: exp.side,
+            symbol: exp.symbol,
           ),
         ],
         if (exp.indicators.isNotEmpty) ...[

@@ -513,6 +513,21 @@
     .explain-cell { background: var(--surface2); border: 1px solid var(--edge); border-radius: 8px; padding: 10px 12px; }
     .explain-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--muted); }
     .explain-val { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--text); margin-top: 4px; }
+    .strategy-chart {
+      background: var(--surface2); border: 1px solid var(--edge);
+      border-radius: 10px; padding: 10px; margin-bottom: 10px;
+      overflow: hidden;
+    }
+    .strategy-chart svg { width: 100%; height: auto; display: block; }
+    .strategy-chart-legend {
+      display: flex; gap: 12px; flex-wrap: wrap;
+      font-size: 10px; color: var(--muted); margin-top: 6px;
+      letter-spacing: 0.05em;
+    }
+    .strategy-chart-legend .swatch {
+      display: inline-block; width: 10px; height: 2px;
+      vertical-align: middle; margin-right: 4px; border-radius: 1px;
+    }
     .indicator-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
     .indicator-cell { background: rgba(34,238,136,0.06); border: 1px solid var(--gglow); border-radius: 7px; padding: 7px 10px; }
     .indicator-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.18em; color: var(--green); opacity: 0.85; }
@@ -1149,6 +1164,10 @@
                         <div class="explain-cell"><div class="explain-label">stop / target</div><div class="explain-val"><span x-text="(explanations[t.id]?.signal_stop ?? 0).toFixed(t.symbol?.includes('XAU') || t.symbol?.includes('OIL') ? 2 : 5)"></span> / <span x-text="(explanations[t.id]?.signal_target ?? 0).toFixed(t.symbol?.includes('XAU') || t.symbol?.includes('OIL') ? 2 : 5)"></span></div></div>
                         <div class="explain-cell"><div class="explain-label">R:R · stop dist</div><div class="explain-val"><span x-text="(explanations[t.id]?.risk_reward ?? 0).toFixed(2)"></span> · <span x-text="(explanations[t.id]?.stop_distance_pips ?? 0).toFixed(1)"></span>p</div></div>
                         <div class="explain-cell"><div class="explain-label">lot · regime</div><div class="explain-val"><span x-text="(explanations[t.id]?.lot_size ?? 0).toFixed(2)"></span> · <span x-text="explanations[t.id]?.regime_label || '—'"></span></div></div>
+                      </div>
+                      <div x-show="explanations[t.id]?.bars?.length" style="margin-top:12px">
+                        <div style="font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">📈 Chart at signal time</div>
+                        <div class="strategy-chart" x-html="renderStrategyChart(explanations[t.id], t.symbol)"></div>
                       </div>
                       <div x-show="explanations[t.id]?.indicators && Object.keys(explanations[t.id].indicators).length" style="margin-top:12px">
                         <div style="font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">📊 What the strategy saw</div>

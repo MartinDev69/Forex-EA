@@ -23,6 +23,10 @@ class TradeExplanation {
   // Indicator snapshot — what the strategy "saw". Free-form per
   // strategy: e.g. {'rsi': 28.5, 'ema_fast': 1.0852}.
   final Map<String, dynamic> indicators;
+  // Last ~50 bars at signal time, [{t, o, h, l, c}].
+  final List<Map<String, dynamic>> bars;
+  // Indicator overlay series the chart should draw.
+  final List<Map<String, dynamic>> overlays;
 
   TradeExplanation({
     required this.tradeId,
@@ -47,6 +51,8 @@ class TradeExplanation {
     this.mlFilterPassed,
     this.notes = '',
     this.indicators = const {},
+    this.bars = const [],
+    this.overlays = const [],
   });
 
   factory TradeExplanation.fromJson(Map<String, dynamic> json) => TradeExplanation(
@@ -72,5 +78,11 @@ class TradeExplanation {
         mlFilterPassed: json['ml_filter_passed'] as bool?,
         notes: (json['notes'] as String?) ?? '',
         indicators: (json['indicators'] as Map<String, dynamic>?) ?? const {},
+        bars: ((json['bars'] as List<dynamic>?) ?? const [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList(),
+        overlays: ((json['overlays'] as List<dynamic>?) ?? const [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList(),
       );
 }
