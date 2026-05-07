@@ -781,6 +781,10 @@ class Bot:
         # the same (strategy, symbol). Without this, restarting the bot
         # re-evaluates the in-progress M15 bar and any setup that's
         # still satisfied fires again. State persists across restarts.
+        # We mark the bar immediately on a fresh signal, before any
+        # placement, so a hard-kill between place() and remember() can't
+        # leave the bar unmarked (the only thing worse than a missed
+        # trade is two trades for the same setup).
         if self.signal_dedup_store is not None:
             try:
                 if self.signal_dedup_store.already_acted(
@@ -791,8 +795,12 @@ class Bot:
                         strategy.name, signal.symbol, signal.timestamp,
                     )
                     return False
+                self.signal_dedup_store.remember(
+                    strategy.name, signal.symbol, signal.timestamp,
+                    signal.type.value,
+                )
             except Exception:
-                log.exception("signal_dedup_store.already_acted failed")
+                log.exception("signal_dedup_store check/remember failed")
 
         # If the strategy is in signal-only mode, fire a Telegram alert
         # and skip placement. We pass the same SL/TP/RR data the user
@@ -801,16 +809,7 @@ class Bot:
         mode = self._strategy_mode(strategy.name)
         if mode == "signal":
             self._send_signal_alert(signal, strategy, regime)
-            # Mark dedup even for signals — otherwise restart re-fires
-            # the same Telegram alert.
-            if self.signal_dedup_store is not None:
-                try:
-                    self.signal_dedup_store.remember(
-                        strategy.name, signal.symbol, signal.timestamp,
-                        signal.type.value,
-                    )
-                except Exception:
-                    log.exception("signal_dedup_store.remember (signal mode) failed")
+            # Dedup already marked above — restart won't re-fire the alert.
             return False
 
         # Same-symbol opposite-side guard. If the bot already has a
@@ -899,16 +898,8 @@ class Bot:
             return False
 
         self.journal.record_open(order)
-        # Mark this bar as acted-on for (strategy, symbol) so a restart
-        # within the same M15 candle won't re-fire the signal.
-        if self.signal_dedup_store is not None:
-            try:
-                self.signal_dedup_store.remember(
-                    strategy.name, signal.symbol, signal.timestamp,
-                    signal.type.value,
-                )
-            except Exception:
-                log.exception("signal_dedup_store.remember failed")
+        # Dedup was marked at the top of _handle_signal so we can't
+        # re-fire on restart even if a hard kill lands here.
         self._record_explanation(order, signal, strategy, regime, role, weight, bars=bars)
         self.risk.register_trade_opened(self.risk.limits.risk_per_trade * weight)
         if self.risk.propfirm_guard is not None:
