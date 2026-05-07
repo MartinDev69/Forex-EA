@@ -929,7 +929,6 @@ document.addEventListener("alpine:init", () => {
           method: "POST", token: this.token,
           body: { duration: this.approveDuration[r.id] || r.duration },
         });
-        await this.load();
         if (resp.setup_url) {
           this.lastSetupUrl = resp.setup_url;
           this.flash(`Approved — SMTP off, copy the setup link above.`, true);
@@ -939,6 +938,9 @@ document.addEventListener("alpine:init", () => {
       } catch (e) {
         this.flash(`Approve failed: ${this._humanize(e)}`, false);
       } finally {
+        // Always refresh — stale rows from a previously-succeeded approve
+        // were causing "already approved" errors on retry.
+        await this.load();
         this.busy = false;
       }
     },
@@ -954,11 +956,11 @@ document.addEventListener("alpine:init", () => {
         await api(`/subscription-requests/${r.id}/reject`, {
           method: "POST", token: this.token, body: { reason },
         });
-        await this.load();
         this.flash(`Request rejected. User notified on Telegram.`, true);
       } catch (e) {
         this.flash(`Reject failed: ${this._humanize(e)}`, false);
       } finally {
+        await this.load();
         this.busy = false;
       }
     },
