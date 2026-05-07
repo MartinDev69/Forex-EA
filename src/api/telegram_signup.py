@@ -202,8 +202,12 @@ class TelegramSignupBot:
                  admin_chat_id: int | None = None) -> None:
         self.token = token
         self.store = store
-        # If set, DMs from this chat are ignored — the admin doesn't
-        # sign up via their own bot. None means "no admin filter".
+        # admin_chat_id is kept for reference / future use, but no
+        # longer filters incoming DMs — we used to drop messages whose
+        # chat_id matched the admin's, on the assumption the admin
+        # didn't need to sign up via their own bot. But Telegram
+        # private-chat IDs are the user's own user_id, so the admin
+        # was being silently filtered out when testing /start.
         self.admin_chat_id = admin_chat_id
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -303,15 +307,12 @@ class TelegramSignupBot:
         elif "message" in update:
             self._handle_message(update["message"])
 
-    def _is_admin(self, chat_id: int) -> bool:
-        return self.admin_chat_id is not None and chat_id == self.admin_chat_id
-
     # -------------------------------------------------- message handling
 
     def _handle_message(self, message: dict) -> None:
         chat = message.get("chat") or {}
         chat_id = int(chat.get("id", 0))
-        if chat_id == 0 or self._is_admin(chat_id):
+        if chat_id == 0:
             return
 
         from_user = message.get("from") or {}
@@ -341,7 +342,7 @@ class TelegramSignupBot:
     def _handle_callback(self, cb: dict) -> None:
         from_user = cb.get("from") or {}
         chat_id = int((cb.get("message") or {}).get("chat", {}).get("id", 0))
-        if chat_id == 0 or self._is_admin(chat_id):
+        if chat_id == 0:
             return
         data = cb.get("data") or ""
         username = from_user.get("username")
