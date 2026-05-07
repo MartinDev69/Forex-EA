@@ -10,10 +10,15 @@
 //|  compile. Then from MT5: drag the indicator onto any chart of    |
 //|  a symbol the bot trades.                                        |
 //|                                                                  |
+//|  Also drop these BMPs into <MT5 data folder>\MQL5\Files\:         |
+//|     antigreed-buy.bmp                                             |
+//|     antigreed-sell.bmp                                            |
+//|     antigreed-logo.bmp                                            |
+//|                                                                   |
 //|  The bot stamps every order's comment with "AG · ..." — this     |
 //|  indicator picks them out by that prefix and draws:              |
-//|    ▲ green arrow + label at every BUY entry                      |
-//|    ▼ red arrow + label at every SELL entry                       |
+//|    AntiGreed logo (green-tinted) + label at every BUY entry      |
+//|    AntiGreed logo (red-tinted) + label at every SELL entry       |
 //|    ✓ green checkmark at winning closes (with PnL)                |
 //|    ✗ red X at losing closes (with PnL)                           |
 //|    dashed SL (red) and TP (green) lines on currently-open trades |
@@ -36,6 +41,9 @@ input bool   InpShowSlTp      = true;     // Draw SL/TP dashed lines on open tra
 input bool   InpShowExits     = true;     // Draw exit markers for closed trades
 input int    InpHistoryDays   = 7;        // How far back in history to scan for exits
 input string InpObjPrefix     = "AG_";    // Object-name prefix (don't change unless conflicting)
+input bool   InpUseLogo       = true;     // Draw the AntiGreed logo at each entry (needs BMPs in MQL5\Files)
+input string InpLogoBuy       = "antigreed-buy.bmp";   // Logo file for BUY entries
+input string InpLogoSell      = "antigreed-sell.bmp";  // Logo file for SELL entries
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -120,15 +128,26 @@ void DrawOpenPositions()
       datetime t   = (datetime)PositionGetInteger(POSITION_TIME);
       bool isBuy   = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
 
-      // Entry arrow
+      // Entry marker — logo BMP (preferred) or fallback arrow.
       string arrow = InpObjPrefix + "entry_" + IntegerToString(ticket);
       if(ObjectFind(0, arrow) < 0)
       {
-         ObjectCreate(0, arrow, OBJ_ARROW, 0, t, price);
-         ObjectSetInteger(0, arrow, OBJPROP_ARROWCODE, isBuy ? 233 : 234);
-         ObjectSetInteger(0, arrow, OBJPROP_COLOR, isBuy ? InpBuyColor : InpSellColor);
-         ObjectSetInteger(0, arrow, OBJPROP_WIDTH, 3);
-         ObjectSetInteger(0, arrow, OBJPROP_BACK, false);
+         if(InpUseLogo)
+         {
+            ObjectCreate(0, arrow, OBJ_BITMAP, 0, t, price);
+            string bmp = isBuy ? InpLogoBuy : InpLogoSell;
+            ObjectSetString(0, arrow, OBJPROP_BMPFILE, 0, "\\Files\\" + bmp);
+            ObjectSetInteger(0, arrow, OBJPROP_ANCHOR, ANCHOR_CENTER);
+            ObjectSetInteger(0, arrow, OBJPROP_BACK, false);
+         }
+         else
+         {
+            ObjectCreate(0, arrow, OBJ_ARROW, 0, t, price);
+            ObjectSetInteger(0, arrow, OBJPROP_ARROWCODE, isBuy ? 233 : 234);
+            ObjectSetInteger(0, arrow, OBJPROP_COLOR, isBuy ? InpBuyColor : InpSellColor);
+            ObjectSetInteger(0, arrow, OBJPROP_WIDTH, 3);
+            ObjectSetInteger(0, arrow, OBJPROP_BACK, false);
+         }
       }
 
       // Strategy label next to the arrow
