@@ -27,6 +27,7 @@ from src.correlation.throttle import OpenPosition
 from src.execution.base import DataFeed, Executor, Order, OrderStatus
 from src.execution.fills import Fill, FillStore, signed_slippage_pips
 from src.execution.journal import TradeJournal
+from src.execution.signal_dedup import SignalDedupStore
 from src.execution.stops import StopManager
 from src.execution.strategy_toggles import StrategyToggleStore
 from src.explanations.chart import serialise_bars, standard_overlays, strategy_decorations
@@ -124,6 +125,7 @@ class Bot:
         kill_switch_flag: KillSwitchFlag | None = None,
         broker_status_store: BrokerStatusStore | None = None,
         pending_orders_store: PendingOrderStore | None = None,
+        signal_dedup_store: SignalDedupStore | None = None,
         broker_id: str = "",
         broker_status_refresh_ticks: int = 5,
         journal_reconcile_ticks: int = 12,
@@ -183,6 +185,7 @@ class Bot:
         # without owning its own MT5 connection.
         self.broker_status_store = broker_status_store
         self.pending_orders_store = pending_orders_store
+        self.signal_dedup_store = signal_dedup_store
         self.broker_id = broker_id
         self.broker_status_refresh_ticks = max(1, broker_status_refresh_ticks)
         self.journal_reconcile_ticks = max(1, journal_reconcile_ticks)
@@ -774,6 +777,23 @@ class Bot:
             log.warning("signal from %s missing SL/TP — skipping", strategy.name)
             return False
 
+        # Bar-level dedup — refuse to act twice on the same candle for
+        # the same (strategy, symbol). Without this, restarting the bot
+        # re-evaluates the in-progress M15 bar and any setup that's
+        # still satisfied fires again. State persists across restarts.
+        if self.signal_dedup_store is not None:
+            try:
+                if self.signal_dedup_store.already_acted(
+                    strategy.name, signal.symbol, signal.timestamp,
+                ):
+                    log.debug(
+                        "signal dedup: %s already acted on %s @ %s — skipping",
+                        strategy.name, signal.symbol, signal.timestamp,
+                    )
+                    return False
+            except Exception:
+                log.exception("signal_dedup_store.already_acted failed")
+
         # If the strategy is in signal-only mode, fire a Telegram alert
         # and skip placement. We pass the same SL/TP/RR data the user
         # would see if the bot were taking the trade so they can mirror
@@ -781,7 +801,43 @@ class Bot:
         mode = self._strategy_mode(strategy.name)
         if mode == "signal":
             self._send_signal_alert(signal, strategy, regime)
+            # Mark dedup even for signals — otherwise restart re-fires
+            # the same Telegram alert.
+            if self.signal_dedup_store is not None:
+                try:
+                    self.signal_dedup_store.remember(
+                        strategy.name, signal.symbol, signal.timestamp,
+                        signal.type.value,
+                    )
+                except Exception:
+                    log.exception("signal_dedup_store.remember (signal mode) failed")
             return False
+
+        # Same-symbol opposite-side guard. If the bot already has a
+        # position on this symbol in the OPPOSITE direction, refuse to
+        # open — that's two strategies hedging each other and net effect
+        # is paying spread to do nothing. Same-side stacks are allowed
+        # (heat cap will throttle them if they get out of hand).
+        existing = [
+            p for p in self._open_positions_snapshot()
+            if p.symbol == signal.symbol
+        ]
+        for p in existing:
+            p_side = p.side.value if hasattr(p.side, "value") else p.side
+            if p_side != signal.type.value:
+                log.info(
+                    "opposite-side gate: %s %s already open, refusing %s %s",
+                    p.symbol, p_side, signal.type.value, strategy.name,
+                )
+                self._maybe_send_setup_alert(
+                    strategy_name=strategy.name,
+                    symbol=signal.symbol,
+                    side=signal.type.value,
+                    gate="opposite-side guard",
+                    detail=f"already {p_side} on {p.symbol}",
+                    price=signal.price,
+                )
+                return False
 
         stop_distance_pips = abs(signal.price - signal.stop_loss) / pip_size(signal.symbol)
         # Default to full weight when the allocator hasn't decided yet (cold
@@ -843,6 +899,16 @@ class Bot:
             return False
 
         self.journal.record_open(order)
+        # Mark this bar as acted-on for (strategy, symbol) so a restart
+        # within the same M15 candle won't re-fire the signal.
+        if self.signal_dedup_store is not None:
+            try:
+                self.signal_dedup_store.remember(
+                    strategy.name, signal.symbol, signal.timestamp,
+                    signal.type.value,
+                )
+            except Exception:
+                log.exception("signal_dedup_store.remember failed")
         self._record_explanation(order, signal, strategy, regime, role, weight, bars=bars)
         self.risk.register_trade_opened(self.risk.limits.risk_per_trade * weight)
         if self.risk.propfirm_guard is not None:
