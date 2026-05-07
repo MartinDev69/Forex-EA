@@ -892,6 +892,8 @@ document.addEventListener("alpine:init", () => {
     form: { ad_id: "", email: "", duration: "1m" },
     reset: { username: "", password: "" },
     extendChoice: {},          // ad_id -> selected duration code in the dropdown
+    requests: [],              // pending Telegram signup requests
+    approveDuration: {},       // request_id -> duration selected by admin (defaults to user's pick)
     lastSetupUrl: "",
     busy: false,
     message: "",
@@ -902,14 +904,62 @@ document.addEventListener("alpine:init", () => {
     async load() {
       if (!this.token || !this.isAdmin) return;
       try {
-        const [list, pool] = await Promise.all([
+        const [list, pool, requests] = await Promise.all([
           api("/users", { token: this.token }),
           api("/users/pool", { token: this.token }),
+          api("/subscription-requests", { token: this.token }).catch(() => []),
         ]);
         this.list = list;
         this.pool = pool;
+        this.requests = requests || [];
+        // Initialise the approval-duration dropdown with each user's pick.
+        const dur = {};
+        for (const r of this.requests) dur[r.id] = r.duration;
+        this.approveDuration = { ...this.approveDuration, ...dur };
       } catch (e) {
         this.flash(`Could not load operators: ${e.message}`, false);
+      }
+    },
+
+    async approveRequest(r) {
+      if (!confirm(`Approve ${r.email} for ${this.approveDuration[r.id] || r.duration}?`)) return;
+      this.busy = true;
+      try {
+        const resp = await api(`/subscription-requests/${r.id}/approve`, {
+          method: "POST", token: this.token,
+          body: { duration: this.approveDuration[r.id] || r.duration },
+        });
+        await this.load();
+        if (resp.setup_url) {
+          this.lastSetupUrl = resp.setup_url;
+          this.flash(`Approved — SMTP off, copy the setup link above.`, true);
+        } else {
+          this.flash(`Approved · setup link emailed to ${resp.email}.`, true);
+        }
+      } catch (e) {
+        this.flash(`Approve failed: ${this._humanize(e)}`, false);
+      } finally {
+        this.busy = false;
+      }
+    },
+
+    async rejectRequest(r) {
+      const reason = prompt(
+        `Reject the request from ${r.email}?\nGive a short reason — it'll be sent to them on Telegram:`,
+        "Sorry, we can't accept new operators right now.",
+      );
+      if (!reason) return;
+      this.busy = true;
+      try {
+        await api(`/subscription-requests/${r.id}/reject`, {
+          method: "POST", token: this.token, body: { reason },
+        });
+        await this.load();
+        this.flash(`Request rejected. User notified on Telegram.`, true);
+      } catch (e) {
+        this.flash(`Reject failed: ${this._humanize(e)}`, false);
+      } finally {
+        this.busy = false;
       }
     },
 

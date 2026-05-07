@@ -63,6 +63,15 @@ from src.api.mailer import send_setup_email
 from src.api.setup_tokens import SETUP_TTL_S, create_setup_token, decode_setup_token
 from src.api.totp import generate_secret, provisioning_uri, verify_code
 from src.api.totp_store import TOTPStore
+from src.api.subscription_requests import (
+    SubscriptionRequest,
+    SubscriptionRequestStore,
+)
+from src.api.telegram_signup import (
+    TelegramSignupBot,
+    send_approval_dm,
+    send_rejection_dm,
+)
 from src.api.users import LastAdminError, UserStore, parse_duration
 from src.allocator import AllocationStore
 from src.explanations import TradeExplanationStore
@@ -90,7 +99,7 @@ import jwt as _jwt  # noqa: E402  — for exception types in /auth/setup
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    global _calendar_refresher, _expiry_notifier
+    global _calendar_refresher, _expiry_notifier, _signup_bot
     interval = int(os.environ.get("CALENDAR_REFRESH_INTERVAL_S", "1800"))
     _calendar_refresher = CalendarRefresher(
         ForexFactoryProvider(), calendar_store, interval_s=interval,
@@ -100,6 +109,17 @@ async def _lifespan(app: FastAPI):
     # subscription just lapsed but who haven't been emailed yet, send
     # the "your subscription has expired" notice, mark them notified.
     _expiry_notifier = asyncio.create_task(_subscription_expiry_loop())
+    # Telegram signup bot — receives DMs from prospective users and
+    # walks them through the duration → email flow. Only starts if
+    # SIGNUP_TELEGRAM_BOT_TOKEN is set; otherwise the dashboard's
+    # admin Operators panel is the only signup path.
+    if SIGNUP_BOT_TOKEN:
+        _signup_bot = TelegramSignupBot(
+            SIGNUP_BOT_TOKEN, subscription_request_store,
+            admin_chat_id=ADMIN_TG_CHAT_ID,
+        )
+        _signup_bot.start()
+        log.info("signup bot polling started")
     try:
         yield
     finally:
@@ -113,6 +133,9 @@ async def _lifespan(app: FastAPI):
             except (asyncio.CancelledError, Exception):
                 pass
             _expiry_notifier = None
+        if _signup_bot is not None:
+            await _signup_bot.stop()
+            _signup_bot = None
 
 
 async def _subscription_expiry_loop() -> None:
@@ -169,6 +192,13 @@ toggle_store.initialize_defaults({
     name: DEFAULT_STRATEGY_FLAGS.get(name, False) for name in STRATEGY_REGISTRY
 })
 user_store = UserStore(_DB)
+subscription_request_store = SubscriptionRequestStore(_DB)
+SIGNUP_BOT_TOKEN = os.environ.get("SIGNUP_TELEGRAM_BOT_TOKEN", "").strip() or None
+ADMIN_TG_CHAT_ID = (
+    int(os.environ["TELEGRAM_CHAT_ID"])
+    if os.environ.get("TELEGRAM_CHAT_ID", "").strip().lstrip("-").isdigit()
+    else None
+)
 
 
 def current_user(user: dict = Depends(_current_user_jwt)) -> dict:
@@ -218,6 +248,7 @@ voice_log_store = VoiceLogStore(_DB)
 # running event loop don't need to deal with asyncio tasks.
 _calendar_refresher: CalendarRefresher | None = None
 _expiry_notifier: asyncio.Task | None = None
+_signup_bot: TelegramSignupBot | None = None
 # Lazy — needs AUTH_SECRET and that check belongs on first real use, not import.
 _broker_config_store: BrokerConfigStore | None = None
 _totp_store: TOTPStore | None = None
@@ -299,6 +330,34 @@ class AssignUserResponse(BaseModel):
 
 class ExtendSubscriptionRequest(BaseModel):
     duration: str = Field(pattern="^(5h|1w|2w|1m|2m|3m)$")
+
+
+class SubscriptionRequestResponse(BaseModel):
+    id: int
+    telegram_chat_id: int
+    telegram_username: str | None
+    telegram_first_name: str | None
+    duration: str
+    email: str
+    status: str
+    created_at: str
+    decided_at: str | None
+    decided_by: str | None
+    assigned_ad_id: str | None
+    rejection_reason: str | None
+
+
+class ApproveRequestRequest(BaseModel):
+    # Allow override of duration on approval — the admin might want
+    # to give a longer window than the user requested. Defaults to
+    # whatever the user picked.
+    duration: str | None = Field(default=None, pattern="^(5h|1w|2w|1m|2m|3m)$")
+    # Optional: pin a specific AD-ID. Otherwise the next pool ID is used.
+    ad_id: str | None = Field(default=None, max_length=32)
+
+
+class RejectRequestRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=200)
 
 
 class SetupPasswordRequest(BaseModel):
@@ -811,6 +870,129 @@ def extend_user_subscription(
     if full is None:
         raise HTTPException(404, "user not found")
     return _to_response(full)
+
+
+def _request_to_response(r: SubscriptionRequest) -> SubscriptionRequestResponse:
+    return SubscriptionRequestResponse(
+        id=r.id,
+        telegram_chat_id=r.telegram_chat_id,
+        telegram_username=r.telegram_username,
+        telegram_first_name=r.telegram_first_name,
+        duration=r.duration,
+        email=r.email,
+        status=r.status,
+        created_at=r.created_at,
+        decided_at=r.decided_at,
+        decided_by=r.decided_by,
+        assigned_ad_id=r.assigned_ad_id,
+        rejection_reason=r.rejection_reason,
+    )
+
+
+@app.get("/subscription-requests", response_model=list[SubscriptionRequestResponse])
+def list_subscription_requests(
+    pending_only: bool = True,
+    _admin: dict = Depends(require_admin),
+) -> list[SubscriptionRequestResponse]:
+    """Telegram-bot signup requests visible to admins. Pass
+    ?pending_only=false to also see approved/rejected history.
+    """
+    rows = (subscription_request_store.list_pending() if pending_only
+            else subscription_request_store.list_recent(limit=100))
+    return [_request_to_response(r) for r in rows]
+
+
+@app.post(
+    "/subscription-requests/{request_id}/approve",
+    response_model=AssignUserResponse,
+)
+def approve_subscription_request(
+    request_id: int,
+    body: ApproveRequestRequest,
+    admin: dict = Depends(require_admin),
+    _twofa: dict = Depends(require_2fa),
+) -> AssignUserResponse:
+    """Assign an AD-ID to a Telegram signup request.
+
+    Picks the next pool ID (or the one the admin specified), seeds the
+    user with the requested duration, fires the setup-link email, and
+    DMs the user via the Telegram signup bot to tell them to check
+    their inbox.
+    """
+    req = subscription_request_store.get(request_id)
+    if req is None:
+        raise HTTPException(404, "request not found")
+    if req.status != "pending":
+        raise HTTPException(409, f"request is already {req.status}")
+
+    # Pick AD-ID — explicit override or next from the pool.
+    ad_id = body.ad_id
+    if ad_id:
+        if ad_id == ADMIN_AD_ID or not is_user_ad_id(ad_id):
+            raise HTTPException(400, "invalid AD-ID")
+    else:
+        pool = user_store.unclaimed_pool()
+        if not pool:
+            raise HTTPException(409, "AD-ID pool empty — refill first")
+        ad_id = pool[0]
+
+    duration_code = body.duration or req.duration
+    try:
+        duration = parse_duration(duration_code)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+    try:
+        user_store.assign(ad_id, req.email, duration=duration)
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from None
+
+    # Mark the request approved before sending the email so a flaky
+    # Resend doesn't leave us with an approved row that wasn't notified.
+    subscription_request_store.mark_approved(
+        request_id, admin=admin.get("username", "admin"), assigned_ad_id=ad_id,
+    )
+
+    # Issue + email the setup link (existing helper).
+    resp = _issue_setup_link(ad_id, req.email)
+
+    # Tell the user via Telegram. Best-effort — if Telegram is down,
+    # the email still went out.
+    try:
+        send_approval_dm(
+            SIGNUP_BOT_TOKEN, req.telegram_chat_id, ad_id, duration_code,
+        )
+    except Exception:
+        log.exception("approval Telegram DM failed for chat %s", req.telegram_chat_id)
+    return resp
+
+
+@app.post(
+    "/subscription-requests/{request_id}/reject",
+    response_model=SubscriptionRequestResponse,
+)
+def reject_subscription_request(
+    request_id: int,
+    body: RejectRequestRequest,
+    admin: dict = Depends(require_admin),
+    _twofa: dict = Depends(require_2fa),
+) -> SubscriptionRequestResponse:
+    """Decline a pending signup request. The reason is sent to the
+    user via Telegram so they know what to do next.
+    """
+    req = subscription_request_store.get(request_id)
+    if req is None:
+        raise HTTPException(404, "request not found")
+    if req.status != "pending":
+        raise HTTPException(409, f"request is already {req.status}")
+    updated = subscription_request_store.mark_rejected(
+        request_id, admin=admin.get("username", "admin"), reason=body.reason,
+    )
+    try:
+        send_rejection_dm(SIGNUP_BOT_TOKEN, req.telegram_chat_id, body.reason)
+    except Exception:
+        log.exception("rejection Telegram DM failed for chat %s", req.telegram_chat_id)
+    return _request_to_response(updated or req)
 
 
 @app.post("/users/{username}/resend", response_model=AssignUserResponse)

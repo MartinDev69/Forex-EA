@@ -1193,6 +1193,53 @@
 
       <!-- Operators (admin only) -->
       <div class="section" x-show="isAdmin" x-data="users" x-init="load()">
+
+        <!-- Pending signup requests from the Telegram signup bot -->
+        <div x-show="requests.length > 0" style="margin-bottom:18px">
+          <div class="sec-hd">Pending signup requests <span style="color:var(--green);font-family:var(--mono);margin-left:6px" x-text="'(' + requests.length + ')'"></span></div>
+          <div class="panel">
+            <table class="users-table">
+              <thead>
+                <tr>
+                  <th>From</th>
+                  <th>Email</th>
+                  <th>Duration</th>
+                  <th>Submitted</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="r in requests" :key="r.id">
+                  <tr>
+                    <td>
+                      <div style="font-family:var(--mono);font-size:12px" x-text="r.telegram_first_name || '—'"></div>
+                      <div style="font-size:10px;color:var(--muted)" x-text="r.telegram_username ? '@' + r.telegram_username : 'chat ' + r.telegram_chat_id"></div>
+                    </td>
+                    <td><span class="user-email" x-text="r.email"></span></td>
+                    <td>
+                      <select x-model="approveDuration[r.id]"
+                              style="background:var(--surface2);border:1px solid var(--edge2);border-radius:6px;color:var(--text);padding:3px 6px;font-size:11px;font-family:var(--mono)">
+                        <option value="5h">5 hours</option>
+                        <option value="1w">1 week</option>
+                        <option value="2w">2 weeks</option>
+                        <option value="1m">1 month</option>
+                        <option value="2m">2 months</option>
+                        <option value="3m">3 months</option>
+                      </select>
+                      <div style="font-size:10px;color:var(--muted);margin-top:2px" x-text="'requested ' + r.duration"></div>
+                    </td>
+                    <td style="font-size:11px;color:var(--muted)" x-text="fmtTime(r.created_at)"></td>
+                    <td style="text-align:right;white-space:nowrap">
+                      <button class="btn-sl-g" style="padding:5px 12px;font-size:11px" @click="approveRequest(r)">Approve</button>
+                      <button class="btn-ol-r" style="padding:5px 12px;font-size:11px;margin-left:6px" @click="rejectRequest(r)">Reject</button>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <div class="sec-hd">Operators</div>
         <div class="panel">
           <table class="users-table">
