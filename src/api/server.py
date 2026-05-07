@@ -98,7 +98,11 @@ from src.watchdog import HeartbeatStore
 
 import jwt as _jwt  # noqa: E402  — for exception types in /auth/setup
 
-log = logging.getLogger(__name__)
+# Uvicorn pre-configures "uvicorn.error" at INFO with a handler that
+# writes to stderr — so app-level INFO messages actually appear in
+# api.stderr.log without us having to call logging.basicConfig (which
+# would fight uvicorn's own log config).
+log = logging.getLogger("uvicorn.error")
 
 
 @asynccontextmanager
