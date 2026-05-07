@@ -790,9 +790,10 @@ class Bot:
                 if self.signal_dedup_store.already_acted(
                     strategy.name, signal.symbol, signal.timestamp,
                 ):
-                    log.debug(
-                        "signal dedup: %s already acted on %s @ %s — skipping",
-                        strategy.name, signal.symbol, signal.timestamp,
+                    log.info(
+                        "DEDUP SKIP %s %s %s @ bar %s",
+                        strategy.name, signal.type.value, signal.symbol,
+                        signal.timestamp,
                     )
                     return False
                 self.signal_dedup_store.remember(
@@ -898,6 +899,12 @@ class Bot:
             return False
 
         self.journal.record_open(order)
+        log.info(
+            "OPEN %s %s %s %.2f lots @ %.5f  SL %.5f  TP %.5f  bar %s",
+            strategy.name, signal.type.value, signal.symbol,
+            order.lot_size, order.entry_price,
+            order.stop_loss, order.take_profit, signal.timestamp,
+        )
         # Dedup was marked at the top of _handle_signal so we can't
         # re-fire on restart even if a hard kill lands here.
         self._record_explanation(order, signal, strategy, regime, role, weight, bars=bars)
