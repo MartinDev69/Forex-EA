@@ -107,6 +107,19 @@ APPROVAL_DM = (
     "<i>The setup link is valid for 24 hours.</i>"
 )
 
+# Variant used when the admin chose to deliver the setup link via
+# Telegram instead of email. Drops the email reference and embeds the
+# link directly so the user can tap it.
+APPROVAL_DM_WITH_LINK = (
+    "🎉 <b>Your AntiGreed access is ready!</b>\n\n"
+    "Your AD-ID <code>{ad_id}</code> has been assigned with a "
+    "<b>{duration_label}</b> subscription.\n\n"
+    "🔐 Tap the link below to set your password, then log in to the "
+    "dashboard:\n\n"
+    "<a href=\"{setup_url}\">Set my password</a>\n\n"
+    "<i>The link is valid for {expires_hours} hours.</i>"
+)
+
 REJECTION_DM = (
     "❌ <b>Your subscription request was declined.</b>\n\n"
     "{reason}\n\n"
@@ -178,6 +191,27 @@ def send_approval_dm(
     return send_message(
         token, chat_id,
         APPROVAL_DM.format(ad_id=ad_id, duration_label=DURATION_LABEL.get(duration, duration)),
+    )
+
+
+def send_approval_dm_with_link(
+    token: str | None, chat_id: int, ad_id: str, duration: str,
+    setup_url: str, expires_hours: int,
+) -> bool:
+    """Like send_approval_dm but embeds the setup link directly in the
+    Telegram message — used when the admin opts to skip email delivery
+    and hand the link straight to the user via the bot.
+    """
+    if not token:
+        return False
+    return send_message(
+        token, chat_id,
+        APPROVAL_DM_WITH_LINK.format(
+            ad_id=ad_id,
+            duration_label=DURATION_LABEL.get(duration, duration),
+            setup_url=setup_url,
+            expires_hours=expires_hours,
+        ),
     )
 
 

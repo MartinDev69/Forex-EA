@@ -894,6 +894,7 @@ document.addEventListener("alpine:init", () => {
     extendChoice: {},          // ad_id -> selected duration code in the dropdown
     requests: [],              // pending Telegram signup requests
     approveDuration: {},       // request_id -> duration selected by admin (defaults to user's pick)
+    approveDelivery: {},       // request_id -> 'telegram' | 'email' | 'both'
     lastSetupUrl: "",
     busy: false,
     message: "",
@@ -912,29 +913,41 @@ document.addEventListener("alpine:init", () => {
         this.list = list;
         this.pool = pool;
         this.requests = requests || [];
-        // Initialise the approval-duration dropdown with each user's pick.
-        const dur = {};
-        for (const r of this.requests) dur[r.id] = r.duration;
+        // Initialise the approval-duration dropdown with each user's pick,
+        // and default delivery to telegram (avoids the email path entirely
+        // for admins who don't want to deal with mailer config).
+        const dur = {}, delivery = {};
+        for (const r of this.requests) {
+          dur[r.id] = r.duration;
+          if (!this.approveDelivery[r.id]) delivery[r.id] = "telegram";
+        }
         this.approveDuration = { ...this.approveDuration, ...dur };
+        this.approveDelivery = { ...this.approveDelivery, ...delivery };
       } catch (e) {
         this.flash(`Could not load operators: ${e.message}`, false);
       }
     },
 
     async approveRequest(r) {
-      if (!confirm(`Approve ${r.email} for ${this.approveDuration[r.id] || r.duration}?`)) return;
+      const dur = this.approveDuration[r.id] || r.duration;
+      const delivery = this.approveDelivery[r.id] || "telegram";
+      if (!confirm(`Approve ${r.email} for ${dur} (link via ${delivery})?`)) return;
       this.busy = true;
       try {
         const resp = await api(`/subscription-requests/${r.id}/approve`, {
           method: "POST", token: this.token,
-          body: { duration: this.approveDuration[r.id] || r.duration },
+          body: { duration: dur, delivery },
         });
-        if (resp.setup_url) {
-          this.lastSetupUrl = resp.setup_url;
-          this.flash(`Approved — SMTP off, copy the setup link above.`, true);
-        } else {
+        if (delivery === "telegram") {
+          this.flash(`Approved · setup link sent to user on Telegram.`, true);
+        } else if (delivery === "email") {
           this.flash(`Approved · setup link emailed to ${resp.email}.`, true);
+        } else {
+          this.flash(`Approved · setup link sent via Telegram + email.`, true);
         }
+        // For telegram-only or no-mailer cases, the URL is also included
+        // in the response so the admin can copy/paste as a backup.
+        if (resp.setup_url) this.lastSetupUrl = resp.setup_url;
       } catch (e) {
         this.flash(`Approve failed: ${this._humanize(e)}`, false);
       } finally {

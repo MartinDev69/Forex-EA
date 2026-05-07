@@ -71,6 +71,7 @@ from src.api.subscription_requests import (
 from src.api.telegram_signup import (
     TelegramSignupBot,
     send_approval_dm,
+    send_approval_dm_with_link,
     send_rejection_dm,
 )
 from src.api.users import LastAdminError, UserStore, parse_duration
@@ -371,6 +372,10 @@ class ApproveRequestRequest(BaseModel):
     duration: str | None = Field(default=None, pattern="^(5h|1w|2w|1m|2m|3m)$")
     # Optional: pin a specific AD-ID. Otherwise the next pool ID is used.
     ad_id: str | None = Field(default=None, max_length=32)
+    # How to deliver the setup link. "telegram" uses the bot DM only,
+    # "email" uses the mailer only, "both" tries both (default).
+    # Telegram-only is useful when the email path is unreachable.
+    delivery: str = Field(default="telegram", pattern="^(telegram|email|both)$")
 
 
 class RejectRequestRequest(BaseModel):
@@ -964,26 +969,64 @@ def approve_subscription_request(
     except ValueError as e:
         raise HTTPException(409, str(e)) from None
 
-    # Mark the request approved before sending the email so a flaky
-    # Resend doesn't leave us with an approved row that wasn't notified.
+    # Mark the request approved before sending anything so a flaky
+    # mailer or Telegram outage doesn't leave us with an approved row
+    # that wasn't notified.
     subscription_request_store.mark_approved(
         request_id, admin=admin.get("username", "admin"), assigned_ad_id=ad_id,
     )
 
-    # DM the user on Telegram FIRST so a flaky mailer can't block the
-    # notification — they at least know the AD-ID was created and can
-    # ask the admin to resend the link if no email arrives.
-    try:
-        send_approval_dm(
-            SIGNUP_BOT_TOKEN, req.telegram_chat_id, ad_id, duration_code,
-        )
-    except Exception:
-        log.exception("approval Telegram DM failed for chat %s", req.telegram_chat_id)
+    # Mint the setup token regardless of delivery method — the URL
+    # itself is short-lived and harmless to generate.
+    token, exp, url = create_setup_token(ad_id, req.email)
+    hours = SETUP_TTL_S // 3600
 
-    # Issue + email the setup link (existing helper). If email delivery
-    # fails the operator is still in the store and the admin can hit
-    # "Resend link" from the dashboard once the mailer is healthy.
-    return _issue_setup_link(ad_id, req.email)
+    delivery = body.delivery or "telegram"
+    telegram_ok = False
+    email_ok = False
+    last_email_error: str | None = None
+
+    if delivery in ("telegram", "both"):
+        try:
+            telegram_ok = send_approval_dm_with_link(
+                SIGNUP_BOT_TOKEN, req.telegram_chat_id, ad_id, duration_code,
+                setup_url=url, expires_hours=hours,
+            )
+        except Exception:
+            log.exception(
+                "approval Telegram DM failed for chat %s", req.telegram_chat_id,
+            )
+
+    if delivery in ("email", "both"):
+        try:
+            send_setup_email(
+                to=req.email, ad_id=ad_id, setup_url=url, expires_hours=hours,
+            )
+            email_ok = True
+        except Exception as e:
+            last_email_error = str(e)
+            log.exception("approval email failed for %s", req.email)
+
+    # If telegram-only and the DM failed, that's the only delivery path
+    # — fail loud so the admin knows. Same for email-only.
+    if delivery == "telegram" and not telegram_ok:
+        raise HTTPException(502, "Telegram DM failed — bot may be offline")
+    if delivery == "email" and not email_ok:
+        raise HTTPException(502, f"email delivery failed: {last_email_error}")
+    # 'both' is forgiving — if at least one succeeded we report success
+    if delivery == "both" and not (telegram_ok or email_ok):
+        raise HTTPException(
+            502, f"both delivery paths failed (email: {last_email_error})",
+        )
+
+    from src.api.mailer import mailer_configured
+    return AssignUserResponse(
+        ad_id=ad_id, email=req.email, setup_expires_at=exp,
+        # Hand back the URL when no mailer is configured OR when the
+        # admin chose telegram-only — useful for copy/paste fallback.
+        setup_url=url if (delivery == "telegram" or not mailer_configured()) else None,
+        subscription_expires_at=user_store.get_expires_at(ad_id),
+    )
 
 
 @app.post(

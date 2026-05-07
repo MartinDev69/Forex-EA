@@ -1230,6 +1230,13 @@
                     </td>
                     <td style="font-size:11px;color:var(--muted)" x-text="fmtTime(r.created_at)"></td>
                     <td style="text-align:right;white-space:nowrap">
+                      <select x-model="approveDelivery[r.id]"
+                              style="background:var(--surface2);border:1px solid var(--edge2);border-radius:6px;color:var(--text);padding:3px 6px;font-size:10px;font-family:var(--mono);margin-right:6px"
+                              title="Where to send the setup link">
+                        <option value="telegram">via Telegram</option>
+                        <option value="email">via email</option>
+                        <option value="both">both</option>
+                      </select>
                       <button class="btn-sl-g" style="padding:5px 12px;font-size:11px" @click="approveRequest(r)">Approve</button>
                       <button class="btn-ol-r" style="padding:5px 12px;font-size:11px;margin-left:6px" @click="rejectRequest(r)">Reject</button>
                     </td>
