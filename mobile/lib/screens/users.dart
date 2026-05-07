@@ -147,6 +147,38 @@ class _UsersScreenState extends State<UsersScreen> {
     if (updated == true) _snack('Password updated.');
   }
 
+  Future<void> _extend(AppUser u) async {
+    if (u.isAdmin) return;
+    final code = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('Extend ${u.username}'),
+        children: [
+          for (final entry in const [
+            ('5h', '5 hours'),
+            ('1w', '1 week'),
+            ('2w', '2 weeks'),
+            ('1m', '1 month'),
+            ('2m', '2 months'),
+            ('3m', '3 months'),
+          ])
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, entry.$1),
+              child: Text('+ ${entry.$2}'),
+            ),
+        ],
+      ),
+    );
+    if (code == null) return;
+    try {
+      await widget.apiClient.extendUser(u.username, code);
+      _snack('${u.username} extended by $code.');
+      await _load();
+    } catch (e) {
+      _snack('Extend failed: ${_humanErr(e)}', ok: false);
+    }
+  }
+
   Future<void> _delete(AppUser u) async {
     if (u.username == widget.apiClient.username || u.isAdmin) return;
     final ok = await showDialog<bool>(
@@ -222,6 +254,7 @@ class _UsersScreenState extends State<UsersScreen> {
                           onResend: () => _resend(u),
                           onReset: () => _resetPassword(u),
                           onDelete: () => _delete(u),
+                          onExtend: () => _extend(u),
                         ),
                       if ((_users ?? []).isEmpty)
                         const Padding(
@@ -242,25 +275,55 @@ class _UserTile extends StatelessWidget {
     required this.onResend,
     required this.onReset,
     required this.onDelete,
+    required this.onExtend,
   });
   final AppUser user;
   final bool isSelf;
   final VoidCallback onResend;
   final VoidCallback onReset;
   final VoidCallback onDelete;
+  final VoidCallback onExtend;
+
+  String _formatSubscription() {
+    if (user.expiresAt == null) return '';
+    final exp = DateTime.tryParse(user.expiresAt!);
+    if (exp == null) return user.expiresAt!;
+    final now = DateTime.now().toUtc();
+    final diff = exp.difference(now);
+    if (diff.isNegative) {
+      final daysAgo = -diff.inDays;
+      return daysAgo > 0
+          ? 'expired ${daysAgo}d ago'
+          : 'expired ${-diff.inHours}h ago';
+    }
+    if (diff.inHours < 24) return '${diff.inHours}h left';
+    return '${diff.inDays}d left';
+  }
 
   @override
   Widget build(BuildContext context) {
     final statusLabel = user.isAdmin
         ? 'admin'
-        : user.passwordSet
-            ? 'active'
-            : 'pending';
+        : user.expired
+            ? 'expired'
+            : user.passwordSet
+                ? 'active'
+                : 'pending';
     final statusColor = user.isAdmin
         ? Colors.cyanAccent
-        : user.passwordSet
-            ? Colors.greenAccent
-            : Colors.amberAccent;
+        : user.expired
+            ? Colors.redAccent
+            : user.passwordSet
+                ? Colors.greenAccent
+                : Colors.amberAccent;
+    final subscription = _formatSubscription();
+    final subColor = user.expired
+        ? Colors.redAccent
+        : (user.expiresAt != null && (DateTime.tryParse(user.expiresAt!)
+                ?.difference(DateTime.now().toUtc())
+                .inHours ?? 1000) < 48)
+            ? Colors.amberAccent
+            : Colors.grey.shade400;
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Padding(
@@ -317,6 +380,19 @@ class _UserTile extends StatelessWidget {
                   ]),
                   if (user.email != null && user.email!.isNotEmpty)
                     Text(user.email!, style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
+                  if (subscription.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        subscription,
+                        style: TextStyle(
+                          color: subColor,
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                          fontWeight: user.expired ? FontWeight.w700 : FontWeight.w500,
+                        ),
+                      ),
+                    ),
                   if (user.createdAt.isNotEmpty)
                     Text(user.createdAt, style: TextStyle(color: Colors.grey.shade600, fontSize: 10)),
                 ],
@@ -327,8 +403,11 @@ class _UserTile extends StatelessWidget {
                 if (v == 'resend') onResend();
                 if (v == 'reset') onReset();
                 if (v == 'delete') onDelete();
+                if (v == 'extend') onExtend();
               },
               itemBuilder: (_) => [
+                if (!user.isAdmin)
+                  const PopupMenuItem(value: 'extend', child: Text('Extend subscription…')),
                 if (user.isPending)
                   const PopupMenuItem(value: 'resend', child: Text('Resend setup link')),
                 if (user.passwordSet)
@@ -364,8 +443,18 @@ class _AssignDialog extends StatefulWidget {
 class _AssignDialogState extends State<_AssignDialog> {
   final _email = TextEditingController();
   late String _adId = widget.pool.unclaimed.first;
+  String _duration = '1m';
   bool _busy = false;
   String? _error;
+
+  static const _durations = [
+    ('5h', '5 hours'),
+    ('1w', '1 week'),
+    ('2w', '2 weeks'),
+    ('1m', '1 month'),
+    ('2m', '2 months'),
+    ('3m', '3 months'),
+  ];
 
   @override
   void dispose() {
@@ -381,7 +470,9 @@ class _AssignDialogState extends State<_AssignDialog> {
     }
     setState(() { _busy = true; _error = null; });
     try {
-      final result = await widget.apiClient.assignUser(adId: _adId, email: email);
+      final result = await widget.apiClient.assignUser(
+        adId: _adId, email: email, duration: _duration,
+      );
       if (mounted) Navigator.pop(context, result);
     } catch (e) {
       setState(() {
@@ -423,10 +514,25 @@ class _AssignDialogState extends State<_AssignDialog> {
                 prefixIcon: Icon(Icons.mail_outline),
               ),
             ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _duration,
+              decoration: const InputDecoration(
+                labelText: 'Subscription duration',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.timer_outlined),
+              ),
+              items: [
+                for (final entry in _durations)
+                  DropdownMenuItem(value: entry.$1, child: Text(entry.$2)),
+              ],
+              onChanged: (v) { if (v != null) setState(() => _duration = v); },
+            ),
             const SizedBox(height: 8),
             Text(
               'They will receive an email link to pick their own password. '
-              'The link expires in 24 hours.',
+              'The setup link expires in 24 hours; the subscription itself '
+              'expires after the duration above.',
               style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
             ),
             if (_error != null) ...[

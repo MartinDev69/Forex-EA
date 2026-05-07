@@ -3,12 +3,15 @@
 All identities are AD-IDs:
 - `Admi8X` is the singleton admin — protected from deletion, demotion, and duplication.
 - Regular operators receive random AD-IDs (`AD-XXXXXXXX`) drawn from a
-  pre-generated pool of 100 unclaimed IDs. The admin assigns an ID + email;
-  an emailed setup link lets the operator choose their own password.
+  pre-generated pool of 100 unclaimed IDs. The admin assigns an ID + email
+  with a subscription duration; an emailed setup link lets the operator
+  choose their own password. Subscriptions expire — login is rejected
+  past expiry and the user is emailed asking them to contact admin to renew.
 
 Storage layout (one SQLite file shared with trades + toggles):
 
-  auth_users (ad_id PK, password_hash NULLABLE, role, email, created_at)
+  auth_users (ad_id PK, password_hash NULLABLE, role, email, created_at,
+              expires_at NULLABLE, expired_notified_at NULLABLE)
   ad_id_pool (ad_id PK, generated_at)            — unclaimed IDs only
   used_setup_tokens (jti PK, used_at)            — single-use link tracking
 """
@@ -16,12 +19,38 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .ad_id import ADMIN_AD_ID, new_ad_id
 
 ROLES = ("admin", "user")
 DEFAULT_POOL_SIZE = 100
+
+# Human-friendly duration codes the dashboard uses. Keep keys stable —
+# the UI hard-codes them. Values are timedelta-equivalents.
+SUBSCRIPTION_DURATIONS: dict[str, timedelta] = {
+    "5h":  timedelta(hours=5),
+    "1w":  timedelta(weeks=1),
+    "2w":  timedelta(weeks=2),
+    "1m":  timedelta(days=30),
+    "2m":  timedelta(days=60),
+    "3m":  timedelta(days=90),
+}
+
+
+def parse_duration(code: str) -> timedelta:
+    """Resolve a duration code (e.g. '2w') to a timedelta. Raises
+    ValueError for anything not in SUBSCRIPTION_DURATIONS — the API
+    surfaces this as a 400 to the admin.
+    """
+    td = SUBSCRIPTION_DURATIONS.get(code)
+    if td is None:
+        raise ValueError(
+            f"unknown subscription duration {code!r}; "
+            f"choose one of {list(SUBSCRIPTION_DURATIONS)}"
+        )
+    return td
 
 SCHEMA_USERS = """
 CREATE TABLE IF NOT EXISTS auth_users (
@@ -57,6 +86,10 @@ class UserRecord:
     # True when the user has chosen a password and can log in. Assigned-but-
     # not-yet-set-up operators have password_set=False.
     password_set: bool
+    # ISO timestamp; None means never expires (admin accounts get None).
+    expires_at: str | None = None
+    # True if expires_at is in the past. Computed at read-time.
+    expired: bool = False
 
 
 class LastAdminError(RuntimeError):
@@ -86,6 +119,10 @@ class UserStore:
             c.execute("ALTER TABLE auth_users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
         if "email" not in cols:
             c.execute("ALTER TABLE auth_users ADD COLUMN email TEXT")
+        if "expires_at" not in cols:
+            c.execute("ALTER TABLE auth_users ADD COLUMN expires_at TEXT")
+        if "expired_notified_at" not in cols:
+            c.execute("ALTER TABLE auth_users ADD COLUMN expired_notified_at TEXT")
         # password_hash was NOT NULL pre-setup-flow; make it nullable so we can
         # pre-seed assigned users before they've chosen a password. SQLite
         # can't ALTER constraints in place, so we migrate via table rebuild
@@ -181,14 +218,25 @@ class UserStore:
             "SELECT COUNT(*) FROM auth_users WHERE role = 'admin'"
         ).fetchone()[0])
 
-    def assign(self, ad_id: str, email: str) -> None:
+    def assign(
+        self, ad_id: str, email: str, *,
+        duration: timedelta | None = None,
+        now: datetime | None = None,
+    ) -> str | None:
         """Seed a user-role row with no password yet (pending setup).
 
         Claims the AD-ID from the pool. Rejects the singleton admin ID — the
         admin is seeded via scripts/create_user.py, not the assign flow.
+
+        ``duration`` sets the subscription window; expires_at = now + duration.
+        Pass None for an unlimited subscription (kept for backwards compat
+        with older callers / the admin account). Returns the ISO expires_at
+        the row was stamped with (or None if no duration).
         """
         if ad_id == ADMIN_AD_ID:
             raise ValueError(f"{ADMIN_AD_ID} is reserved for the admin")
+        now = now or datetime.now(timezone.utc)
+        expires_at_iso = (now + duration).isoformat() if duration is not None else None
         with self._conn() as c:
             # The AD-ID must come from the pool so admin can't mint arbitrary IDs.
             if not c.execute(
@@ -204,17 +252,118 @@ class UserStore:
             ).fetchone()
             if existing is None:
                 c.execute(
-                    "INSERT INTO auth_users (username, password_hash, role, email) "
-                    "VALUES (?, NULL, 'user', ?)",
-                    (ad_id, email),
+                    "INSERT INTO auth_users (username, password_hash, role, "
+                    "email, expires_at) "
+                    "VALUES (?, NULL, 'user', ?, ?)",
+                    (ad_id, email, expires_at_iso),
                 )
             elif existing["password_hash"] is None:
                 c.execute(
-                    "UPDATE auth_users SET email = ? WHERE username = ?",
-                    (email, ad_id),
+                    "UPDATE auth_users SET email = ?, expires_at = ?, "
+                    "expired_notified_at = NULL WHERE username = ?",
+                    (email, expires_at_iso, ad_id),
                 )
             else:
                 raise ValueError(f"{ad_id} already has a password set")
+        return expires_at_iso
+
+    def extend(
+        self, username: str, duration: timedelta, *,
+        now: datetime | None = None,
+    ) -> str | None:
+        """Push the user's expires_at forward by ``duration``. If the
+        subscription already lapsed, anchors the extension at now (so a
+        2-week renewal of a long-expired user gives 2 weeks from now,
+        not 2 weeks from the past expiry). Returns the new ISO expires_at.
+
+        Clears the expired-notified flag so a future expiry triggers a
+        fresh email rather than being suppressed by the previous one.
+        """
+        if username == ADMIN_AD_ID:
+            raise ValueError(f"{ADMIN_AD_ID} has no subscription to extend")
+        now = now or datetime.now(timezone.utc)
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT expires_at FROM auth_users WHERE username = ?",
+                (username,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(username)
+            current = row["expires_at"]
+            try:
+                anchor = datetime.fromisoformat(current) if current else now
+            except ValueError:
+                anchor = now
+            # If the user already lapsed, restart from now rather than
+            # tacking onto a past expiry.
+            if anchor < now:
+                anchor = now
+            new_expires = (anchor + duration).isoformat()
+            c.execute(
+                "UPDATE auth_users SET expires_at = ?, "
+                "expired_notified_at = NULL WHERE username = ?",
+                (new_expires, username),
+            )
+        return new_expires
+
+    def get_expires_at(self, username: str) -> str | None:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT expires_at FROM auth_users WHERE username = ?",
+                (username,),
+            ).fetchone()
+        return row["expires_at"] if row else None
+
+    def is_expired(self, username: str, *, now: datetime | None = None) -> bool:
+        """True if the user has an expires_at in the past. Admin and
+        users with no expires_at always return False.
+        """
+        if username == ADMIN_AD_ID:
+            return False
+        ts = self.get_expires_at(username)
+        if not ts:
+            return False
+        try:
+            expires = datetime.fromisoformat(ts)
+        except ValueError:
+            return False
+        now = now or datetime.now(timezone.utc)
+        return expires < now
+
+    def list_expired_unnotified(self, *, now: datetime | None = None) -> list[UserRecord]:
+        """Users whose expires_at has just passed and we haven't yet
+        emailed the "subscription expired" notice for. The expiry-email
+        cron pulls this list, sends each one, then calls mark_notified.
+        """
+        now = now or datetime.now(timezone.utc)
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT username, role, email, created_at, password_hash, "
+                "expires_at, expired_notified_at FROM auth_users "
+                "WHERE expires_at IS NOT NULL "
+                "  AND expires_at < ? "
+                "  AND expired_notified_at IS NULL "
+                "  AND username != ?",
+                (now.isoformat(), ADMIN_AD_ID),
+            ).fetchall()
+        return [
+            UserRecord(
+                username=r["username"], role=r["role"], email=r["email"],
+                created_at=r["created_at"],
+                password_set=bool(r["password_hash"]),
+                expires_at=r["expires_at"],
+                expired=True,
+            )
+            for r in rows
+        ]
+
+    def mark_notified(self, username: str, *, now: datetime | None = None) -> None:
+        now = now or datetime.now(timezone.utc)
+        with self._conn() as c:
+            c.execute(
+                "UPDATE auth_users SET expired_notified_at = ? WHERE username = ?",
+                (now.isoformat(), username),
+            )
 
     def create_admin(self, password_hash: str) -> None:
         """Seed the singleton admin. Idempotent only when the admin doesn't exist yet."""
@@ -288,19 +437,28 @@ class UserStore:
             ).fetchone() is not None
 
     def list_users(self) -> list[UserRecord]:
+        now = datetime.now(timezone.utc)
         with self._conn() as c:
             rows = c.execute(
-                "SELECT username, role, email, created_at, password_hash "
-                "FROM auth_users ORDER BY role DESC, username"
+                "SELECT username, role, email, created_at, password_hash, "
+                "expires_at FROM auth_users ORDER BY role DESC, username"
             ).fetchall()
-        return [
-            UserRecord(
+        out: list[UserRecord] = []
+        for r in rows:
+            expired = False
+            if r["expires_at"] and r["username"] != ADMIN_AD_ID:
+                try:
+                    expired = datetime.fromisoformat(r["expires_at"]) < now
+                except ValueError:
+                    expired = False
+            out.append(UserRecord(
                 username=r["username"], role=r["role"], email=r["email"],
                 created_at=r["created_at"],
                 password_set=bool(r["password_hash"]),
-            )
-            for r in rows
-        ]
+                expires_at=r["expires_at"],
+                expired=expired,
+            ))
+        return out
 
     def list_usernames(self) -> list[str]:
         return [u.username for u in self.list_users()]

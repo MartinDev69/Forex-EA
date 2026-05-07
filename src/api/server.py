@@ -23,6 +23,7 @@ Run locally:
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -49,10 +50,10 @@ from src.api.auth import (
     authenticate,
     client_ip,
     create_token,
-    current_user,
+    current_user as _current_user_jwt,
     hash_password,
     rate_limiter,
-    require_admin,
+    require_admin as _require_admin_jwt,
 )
 from src.api.ad_id import ADMIN_AD_ID, is_user_ad_id
 from src.api.broker_config import BrokerConfig, BrokerConfigStore
@@ -62,7 +63,7 @@ from src.api.mailer import send_setup_email
 from src.api.setup_tokens import SETUP_TTL_S, create_setup_token, decode_setup_token
 from src.api.totp import generate_secret, provisioning_uri, verify_code
 from src.api.totp_store import TOTPStore
-from src.api.users import LastAdminError, UserStore
+from src.api.users import LastAdminError, UserStore, parse_duration
 from src.allocator import AllocationStore
 from src.explanations import TradeExplanationStore
 from src.correlation import CorrelationStore
@@ -89,18 +90,58 @@ import jwt as _jwt  # noqa: E402  — for exception types in /auth/setup
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    global _calendar_refresher
+    global _calendar_refresher, _expiry_notifier
     interval = int(os.environ.get("CALENDAR_REFRESH_INTERVAL_S", "1800"))
     _calendar_refresher = CalendarRefresher(
         ForexFactoryProvider(), calendar_store, interval_s=interval,
     )
     _calendar_refresher.start()
+    # Subscription-expiry scan — every 15 min, look for users whose
+    # subscription just lapsed but who haven't been emailed yet, send
+    # the "your subscription has expired" notice, mark them notified.
+    _expiry_notifier = asyncio.create_task(_subscription_expiry_loop())
     try:
         yield
     finally:
         if _calendar_refresher is not None:
             await _calendar_refresher.stop()
             _calendar_refresher = None
+        if _expiry_notifier is not None:
+            _expiry_notifier.cancel()
+            try:
+                await _expiry_notifier
+            except (asyncio.CancelledError, Exception):
+                pass
+            _expiry_notifier = None
+
+
+async def _subscription_expiry_loop() -> None:
+    """Background task: every 15 minutes, email users who just expired."""
+    interval = int(os.environ.get("SUBSCRIPTION_EXPIRY_SCAN_S", "900"))
+    while True:
+        try:
+            _send_expiry_emails()
+        except Exception:
+            log.exception("subscription-expiry scan failed")
+        await asyncio.sleep(interval)
+
+
+def _send_expiry_emails() -> None:
+    """Pull expired-unnotified users, fire one email each, mark notified."""
+    from src.api.mailer import send_subscription_expired_email
+    rows = user_store.list_expired_unnotified()
+    for u in rows:
+        if not u.email:
+            user_store.mark_notified(u.username)  # nothing to send to
+            continue
+        try:
+            send_subscription_expired_email(to=u.email, ad_id=u.username)
+            user_store.mark_notified(u.username)
+        except Exception:
+            log.exception(
+                "subscription-expired email failed for %s; will retry next scan",
+                u.username,
+            )
 
 
 app = FastAPI(title="Forex-EA Control API", version="0.3.0", lifespan=_lifespan)
@@ -128,6 +169,33 @@ toggle_store.initialize_defaults({
     name: DEFAULT_STRATEGY_FLAGS.get(name, False) for name in STRATEGY_REGISTRY
 })
 user_store = UserStore(_DB)
+
+
+def current_user(user: dict = Depends(_current_user_jwt)) -> dict:
+    """Wraps the JWT-only current_user with a subscription-expiry check.
+
+    Any request whose token decodes correctly but whose subscription has
+    lapsed is rejected with 401 + a clear "subscription expired" message,
+    so the dashboard's existing 401-handler dumps them back to login.
+    """
+    sub = user.get("username") or user.get("sub") or ""
+    if sub and user_store.is_expired(sub):
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "subscription expired — contact admin to renew",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+
+def require_admin(user: dict = Depends(current_user)) -> dict:
+    """Same as auth.require_admin but goes through our expiry-aware
+    current_user so an expired admin token (shouldn't happen — admin
+    has no expiry — but defensive) gets 401, not 403.
+    """
+    if user.get("role") != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "admin privileges required")
+    return user
 broker_status_store = BrokerStatusStore(_DB)
 pending_orders_store = PendingOrderStore(_DB)
 calendar_store = EventStore(_DB)
@@ -149,6 +217,7 @@ voice_log_store = VoiceLogStore(_DB)
 # Refresher is created on startup so tests that import this module without a
 # running event loop don't need to deal with asyncio tasks.
 _calendar_refresher: CalendarRefresher | None = None
+_expiry_notifier: asyncio.Task | None = None
 # Lazy — needs AUTH_SECRET and that check belongs on first real use, not import.
 _broker_config_store: BrokerConfigStore | None = None
 _totp_store: TOTPStore | None = None
@@ -208,11 +277,16 @@ class UserResponse(BaseModel):
     email: str | None = None
     created_at: str
     password_set: bool
+    expires_at: str | None = None
+    expired: bool = False
 
 
 class AssignUserRequest(BaseModel):
     ad_id: str = Field(min_length=1, max_length=32)
     email: str = Field(min_length=3, max_length=254)
+    # Subscription window. Codes are kept short so the dropdown is
+    # readable: '5h', '1w', '2w', '1m', '2m', '3m'.
+    duration: str = Field(default="1m", pattern="^(5h|1w|2w|1m|2m|3m)$")
 
 
 class AssignUserResponse(BaseModel):
@@ -220,6 +294,11 @@ class AssignUserResponse(BaseModel):
     email: str
     setup_expires_at: int
     setup_url: str | None = None  # populated in dev mode so admin can copy the link
+    subscription_expires_at: str | None = None  # ISO; None for unlimited
+
+
+class ExtendSubscriptionRequest(BaseModel):
+    duration: str = Field(pattern="^(5h|1w|2w|1m|2m|3m)$")
 
 
 class SetupPasswordRequest(BaseModel):
@@ -652,6 +731,8 @@ def _to_response(u) -> UserResponse:
     return UserResponse(
         username=u.username, role=u.role, email=u.email,
         created_at=u.created_at, password_set=u.password_set,
+        expires_at=u.expires_at,
+        expired=u.expired,
     )
 
 
@@ -691,10 +772,45 @@ def assign_user(
     if "@" not in body.email or "." not in body.email.split("@")[-1]:
         raise HTTPException(400, "invalid email address")
     try:
-        user_store.assign(body.ad_id, body.email)
+        duration = parse_duration(body.duration)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    try:
+        expires = user_store.assign(body.ad_id, body.email, duration=duration)
     except ValueError as e:
         raise HTTPException(409, str(e)) from None
-    return _issue_setup_link(body.ad_id, body.email)
+    return _issue_setup_link(body.ad_id, body.email, subscription_expires_at=expires)
+
+
+@app.post("/users/{username}/extend", response_model=UserResponse)
+def extend_user_subscription(
+    username: str,
+    body: ExtendSubscriptionRequest,
+    _admin: dict = Depends(require_admin),
+    _twofa: dict = Depends(require_2fa),
+) -> UserResponse:
+    """Push the subscription forward by the requested duration. If the
+    user is currently expired, the new window starts from now (so they
+    don't lose any of the renewal). Clears the expired-notified flag so
+    a future expiry triggers a fresh email.
+    """
+    if username == ADMIN_AD_ID:
+        raise HTTPException(400, "admin has no subscription to extend")
+    try:
+        duration = parse_duration(body.duration)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    try:
+        user_store.extend(username, duration)
+    except KeyError:
+        raise HTTPException(404, "user not found") from None
+    full = next(
+        (u for u in user_store.list_users() if u.username == username),
+        None,
+    )
+    if full is None:
+        raise HTTPException(404, "user not found")
+    return _to_response(full)
 
 
 @app.post("/users/{username}/resend", response_model=AssignUserResponse)
@@ -713,12 +829,17 @@ def resend_setup_link(
     return _issue_setup_link(username, email)
 
 
-def _issue_setup_link(ad_id: str, email: str) -> AssignUserResponse:
+def _issue_setup_link(
+    ad_id: str, email: str, *,
+    subscription_expires_at: str | None = None,
+) -> AssignUserResponse:
     """Mint a fresh setup JWT, try to email it, surface the URL in dev mode."""
     from src.api.mailer import mailer_configured
 
     token, exp, url = create_setup_token(ad_id, email)
     hours = SETUP_TTL_S // 3600
+    if subscription_expires_at is None:
+        subscription_expires_at = user_store.get_expires_at(ad_id)
     try:
         send_setup_email(to=email, ad_id=ad_id, setup_url=url, expires_hours=hours)
     except Exception as e:
@@ -730,6 +851,7 @@ def _issue_setup_link(ad_id: str, email: str) -> AssignUserResponse:
         # No mailer wired up → email wasn't really sent — hand back the URL
         # so the admin can copy it to the recipient.
         setup_url=None if mailer_configured() else url,
+        subscription_expires_at=subscription_expires_at,
     )
 
 

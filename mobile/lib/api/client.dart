@@ -293,14 +293,25 @@ class ApiClient {
   Future<AssignResult> assignUser({
     required String adId,
     required String email,
+    String duration = '1m',
   }) async {
     final r = await http.post(
       _u('/users/assign'),
       headers: _headers,
-      body: json.encode({'ad_id': adId, 'email': email}),
+      body: json.encode({'ad_id': adId, 'email': email, 'duration': duration}),
     );
     _check(r);
     return AssignResult.fromJson(json.decode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<AppUser> extendUser(String username, String duration) async {
+    final r = await http.post(
+      _u('/users/$username/extend'),
+      headers: _headers,
+      body: json.encode({'duration': duration}),
+    );
+    _check(r);
+    return AppUser.fromJson(json.decode(r.body) as Map<String, dynamic>);
   }
 
   Future<AssignResult> resendSetupLink(String username) async {

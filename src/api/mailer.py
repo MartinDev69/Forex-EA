@@ -57,6 +57,74 @@ def mailer_configured() -> bool:
     return smtp_configured()
 
 
+def send_subscription_expired_email(*, to: str, ad_id: str) -> None:
+    """Notify an operator that their subscription has lapsed. Same
+    delivery path as setup links — Resend if configured, SMTP fallback,
+    or stdout in dev. Raises on hard delivery failure.
+    """
+    subject = f"Your AntiGreed subscription has expired ({ad_id})"
+    text_body = (
+        f"Hi,\n\n"
+        f"The subscription for your AntiGreed AD-ID {ad_id} has expired and "
+        f"your access has been suspended.\n\n"
+        f"To renew, please contact the admin who assigned this ID and ask them "
+        f"to extend your subscription. Once renewed, you'll be able to log "
+        f"back in immediately with the same AD-ID and password.\n\n"
+        f"Thanks,\nAntiGreed\n"
+    )
+    html_body = f"""<!doctype html>
+<html><body style="font-family:system-ui,sans-serif;line-height:1.5;color:#0b1220">
+  <h2 style="color:#dc2626">AntiGreed · subscription expired</h2>
+  <p>The subscription for your AD-ID
+     <code style="background:#eee;padding:2px 6px;border-radius:4px">{ad_id}</code>
+     has expired. Your access has been suspended.</p>
+  <p>To renew, please contact the admin who assigned this ID and ask them
+     to extend your subscription. Once renewed, you'll be able to log
+     back in immediately with the same AD-ID and password.</p>
+  <p style="color:#666;font-size:13px">— AntiGreed</p>
+</body></html>"""
+    _send(to=to, subject=subject, text=text_body, html=html_body)
+    log.info("Sent subscription-expired email to %s for AD-ID %s", to, ad_id)
+
+
+def _send(*, to: str, subject: str, text: str, html: str) -> None:
+    """Internal: route a built message through the active provider."""
+    provider = _provider()
+    if provider == "resend":
+        _send_via_resend(to=to, subject=subject, text=text, html=html)
+        return
+
+    if not smtp_configured():
+        log.warning(
+            "No mailer configured — would send '%s' to %s; printing instead.",
+            subject, to,
+        )
+        print(f"\n--- email to {to} ---\nSubject: {subject}\n{text}\n---\n", flush=True)
+        return
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = os.environ.get("SMTP_FROM", _DEFAULT_FROM)
+    msg["To"] = to
+    msg.set_content(text)
+    msg.add_alternative(html, subtype="html")
+
+    host = os.environ["SMTP_HOST"]
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    user = os.environ.get("SMTP_USER")
+    password = os.environ.get("SMTP_PASSWORD")
+    use_tls = os.environ.get("SMTP_STARTTLS", "1") != "0"
+
+    with smtplib.SMTP(host, port, timeout=15) as s:
+        s.ehlo()
+        if use_tls:
+            s.starttls()
+            s.ehlo()
+        if user and password:
+            s.login(user, password)
+        s.send_message(msg)
+
+
 def send_setup_email(*, to: str, ad_id: str, setup_url: str, expires_hours: int) -> None:
     """Deliver the setup link to a new operator.
 

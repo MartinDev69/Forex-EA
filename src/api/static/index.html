@@ -1196,10 +1196,10 @@
         <div class="sec-hd">Operators</div>
         <div class="panel">
           <table class="users-table">
-            <thead><tr><th>AD-ID</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>AD-ID</th><th>Email</th><th>Role</th><th>Status</th><th>Subscription</th><th></th></tr></thead>
             <tbody>
               <template x-if="list.length === 0">
-                <tr><td colspan="5" class="empty">No operators yet — assign one below.</td></tr>
+                <tr><td colspan="6" class="empty">No operators yet — assign one below.</td></tr>
               </template>
               <template x-for="u in list" :key="u.username">
                 <tr>
@@ -1208,9 +1208,25 @@
                   <td>
                     <span class="role-badge" :style="u.role !== 'admin' ? 'background:var(--surface2);border:1px solid var(--edge);color:var(--muted)' : ''" x-text="u.role"></span>
                   </td>
-                  <td><span :style="'font-size:11px;letter-spacing:0.1em;text-transform:uppercase;font-weight:600;color:' + (u.status === 'active' ? 'var(--green)' : 'var(--amber)')" x-text="u.status"></span></td>
+                  <td><span :style="'font-size:11px;letter-spacing:0.1em;text-transform:uppercase;font-weight:600;color:' + statusColor(u)" x-text="statusLabel(u)"></span></td>
+                  <td>
+                    <span x-show="u.role === 'admin'" style="font-size:11px;color:var(--muted)">unlimited</span>
+                    <span x-show="u.role !== 'admin' && !u.expires_at" style="font-size:11px;color:var(--muted)">—</span>
+                    <span x-show="u.role !== 'admin' && u.expires_at" :style="'font-size:11px;font-family:var(--mono);color:' + (u.expired ? 'var(--red)' : (subscriptionWarning(u) ? 'var(--amber)' : 'var(--text2)'))" x-text="formatSubscription(u)"></span>
+                  </td>
                   <td style="text-align:right">
-                    <button x-show="u.status !== 'active'" class="btn-ol-g" style="padding:5px 10px;font-size:10px" @click="resend(u)">Resend link</button>
+                    <select x-show="u.username !== me && u.role !== 'admin'" x-model="extendChoice[u.username]"
+                            style="background:var(--surface2);border:1px solid var(--edge2);border-radius:6px;color:var(--text);padding:3px 6px;font-size:11px;font-family:var(--mono);margin-right:4px">
+                      <option value="" disabled selected>extend…</option>
+                      <option value="5h">+ 5 hours</option>
+                      <option value="1w">+ 1 week</option>
+                      <option value="2w">+ 2 weeks</option>
+                      <option value="1m">+ 1 month</option>
+                      <option value="2m">+ 2 months</option>
+                      <option value="3m">+ 3 months</option>
+                    </select>
+                    <button x-show="u.username !== me && u.role !== 'admin' && extendChoice[u.username]" class="btn-ol-g" style="padding:5px 10px;font-size:10px" @click="extend(u)">Extend</button>
+                    <button x-show="!u.password_set" class="btn-ol-g" style="padding:5px 10px;font-size:10px;margin-left:6px" @click="resend(u)">Resend link</button>
                     <button x-show="u.username !== me && u.role !== 'admin'" class="btn-ol-r" style="padding:5px 10px;font-size:10px;margin-left:6px" @click="remove(u)">Remove</button>
                   </td>
                 </tr>
@@ -1218,13 +1234,23 @@
             </tbody>
           </table>
 
-          <div class="users-form">
+          <div class="users-form" style="grid-template-columns:1fr 1fr auto auto">
             <div class="field-block"><label>AD-ID</label><input type="text" x-model="form.ad_id" :placeholder="(pool.unclaimed?.[0]) || 'user_xxx'" list="pool-list" />
               <datalist id="pool-list">
                 <template x-for="ad in (pool.unclaimed || [])" :key="ad"><option :value="ad"></option></template>
               </datalist>
             </div>
             <div class="field-block"><label>Email</label><input type="email" x-model="form.email" placeholder="user@example.com" /></div>
+            <div class="field-block"><label>Subscription</label>
+              <select x-model="form.duration">
+                <option value="5h">5 hours</option>
+                <option value="1w">1 week</option>
+                <option value="2w">2 weeks</option>
+                <option value="1m">1 month</option>
+                <option value="2m">2 months</option>
+                <option value="3m">3 months</option>
+              </select>
+            </div>
             <div style="display:flex;gap:8px">
               <button class="btn-sl-g" @click="assign()" :disabled="busy">Assign</button>
               <button class="btn-ol-g" @click="refillPool()" :disabled="busy">Refill pool</button>

@@ -5,6 +5,8 @@ class AppUser {
     required this.email,
     required this.createdAt,
     required this.passwordSet,
+    this.expiresAt,
+    this.expired = false,
   });
 
   final String username;
@@ -12,6 +14,10 @@ class AppUser {
   final String? email;
   final String createdAt;
   final bool passwordSet;
+  /// ISO timestamp when the subscription ends. Null = unlimited (admin).
+  final String? expiresAt;
+  /// Whether [expiresAt] is in the past.
+  final bool expired;
 
   bool get isAdmin => role == 'admin';
   bool get isPending => !passwordSet && role != 'admin';
@@ -22,6 +28,8 @@ class AppUser {
         email: j['email'] as String?,
         createdAt: (j['created_at'] as String?) ?? '',
         passwordSet: (j['password_set'] as bool?) ?? true,
+        expiresAt: j['expires_at'] as String?,
+        expired: (j['expired'] as bool?) ?? false,
       );
 }
 

@@ -889,8 +889,9 @@ document.addEventListener("alpine:init", () => {
     me: localStorage.getItem(USER_KEY) || "",
     list: [],
     pool: { unclaimed: [], size: 0 },
-    form: { ad_id: "", email: "" },
+    form: { ad_id: "", email: "", duration: "1m" },
     reset: { username: "", password: "" },
+    extendChoice: {},          // ad_id -> selected duration code in the dropdown
     lastSetupUrl: "",
     busy: false,
     message: "",
@@ -932,9 +933,13 @@ document.addEventListener("alpine:init", () => {
       try {
         const resp = await api("/users/assign", {
           method: "POST", token: this.token,
-          body: { ad_id: this.form.ad_id, email: this.form.email.trim() },
+          body: {
+            ad_id: this.form.ad_id,
+            email: this.form.email.trim(),
+            duration: this.form.duration || "1m",
+          },
         });
-        this.form = { ad_id: "", email: "" };
+        this.form = { ad_id: "", email: "", duration: "1m" };
         await this.load();
         if (resp.setup_url) {
           this.lastSetupUrl = resp.setup_url;
@@ -947,6 +952,57 @@ document.addEventListener("alpine:init", () => {
       } finally {
         this.busy = false;
       }
+    },
+
+    async extend(u) {
+      const code = this.extendChoice[u.username];
+      if (!code) return;
+      this.busy = true;
+      try {
+        await api(`/users/${encodeURIComponent(u.username)}/extend`,
+          { method: "POST", token: this.token, body: { duration: code } });
+        this.extendChoice = { ...this.extendChoice, [u.username]: "" };
+        await this.load();
+        this.flash(`${u.username} extended by ${code}.`, true);
+      } catch (e) {
+        this.flash(`Extend failed: ${this._humanize(e)}`, false);
+      } finally {
+        this.busy = false;
+      }
+    },
+
+    statusLabel(u) {
+      if (!u.password_set) return "pending";
+      if (u.expired) return "expired";
+      return "active";
+    },
+    statusColor(u) {
+      if (u.expired) return "var(--red)";
+      if (!u.password_set) return "var(--amber)";
+      return "var(--green)";
+    },
+    formatSubscription(u) {
+      if (!u.expires_at) return "—";
+      const exp = new Date(u.expires_at);
+      const now = new Date();
+      const diffMs = exp.getTime() - now.getTime();
+      const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+      const diffHours = Math.round(diffMs / (1000 * 60 * 60));
+      const dateStr = exp.toLocaleDateString();
+      if (diffMs < 0) {
+        const daysAgo = Math.abs(diffDays);
+        return daysAgo > 0
+          ? `expired ${daysAgo}d ago · ${dateStr}`
+          : `expired ${Math.abs(diffHours)}h ago`;
+      }
+      if (diffHours < 24) return `${diffHours}h left · ${dateStr}`;
+      return `${diffDays}d left · ${dateStr}`;
+    },
+    subscriptionWarning(u) {
+      // Amber when within 48 hours of expiry.
+      if (!u.expires_at || u.expired) return false;
+      const exp = new Date(u.expires_at);
+      return (exp.getTime() - Date.now()) < 48 * 3600 * 1000;
     },
 
     async resend(u) {
