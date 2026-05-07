@@ -754,6 +754,7 @@ class _ExplanationBody extends StatelessWidget {
           StrategyChart(
             bars: exp.bars,
             overlays: exp.overlays,
+            subplots: exp.subplots,
             entry: exp.signalPrice,
             stop: exp.signalStop,
             target: exp.signalTarget,

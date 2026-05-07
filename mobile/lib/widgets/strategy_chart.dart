@@ -21,11 +21,13 @@ class StrategyChart extends StatelessWidget {
     required this.target,
     required this.side,
     required this.symbol,
+    this.subplots = const [],
     this.height = 200,
   });
 
   final List<Map<String, dynamic>> bars;
   final List<Map<String, dynamic>> overlays;
+  final List<Map<String, dynamic>> subplots;
   final double entry;
   final double stop;
   final double target;
@@ -49,6 +51,7 @@ class StrategyChart extends StatelessWidget {
     }
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final muted = mutedColor(context);
+    final totalHeight = height + subplots.length * 70 + (subplots.isNotEmpty ? 8.0 : 0);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -61,18 +64,20 @@ class StrategyChart extends StatelessWidget {
           ),
           padding: const EdgeInsets.all(8),
           child: SizedBox(
-            height: height,
+            height: totalHeight,
             width: double.infinity,
             child: CustomPaint(
               painter: _StrategyChartPainter(
                 bars: bars,
                 overlays: overlays,
+                subplots: subplots,
                 entry: entry,
                 stop: stop,
                 target: target,
                 isBuy: side == 'BUY',
                 isDark: isDark,
                 decimals: _decimals,
+                priceHeight: height,
               ),
             ),
           ),
@@ -141,22 +146,26 @@ class _StrategyChartPainter extends CustomPainter {
   _StrategyChartPainter({
     required this.bars,
     required this.overlays,
+    required this.subplots,
     required this.entry,
     required this.stop,
     required this.target,
     required this.isBuy,
     required this.isDark,
     required this.decimals,
+    required this.priceHeight,
   });
 
   final List<Map<String, dynamic>> bars;
   final List<Map<String, dynamic>> overlays;
+  final List<Map<String, dynamic>> subplots;
   final double entry;
   final double stop;
   final double target;
   final bool isBuy;
   final bool isDark;
   final int decimals;
+  final double priceHeight;
 
   double? _num(dynamic v) {
     if (v == null) return null;
@@ -171,7 +180,8 @@ class _StrategyChartPainter extends CustomPainter {
 
     const padL = 4.0, padR = 60.0, padT = 6.0, padB = 12.0;
     final innerW = size.width - padL - padR;
-    final innerH = size.height - padT - padB;
+    // Constrain candles to the priceHeight; subplots get the rest below.
+    final innerH = priceHeight - padT - padB;
     final step = innerW / n;
     final candleW = (step * 0.6).clamp(1.0, 14.0);
 
@@ -307,7 +317,118 @@ class _StrategyChartPainter extends CustomPainter {
     }
     p.close();
     canvas.drawPath(p, arrowPaint);
+
+    // Subplot panes
+    if (subplots.isNotEmpty) {
+      const subH = 70.0, subGap = 8.0;
+      final paneTop0 = priceHeight + 2.0;
+      for (var idx = 0; idx < subplots.length; idx++) {
+        final sp = subplots[idx];
+        final top = paneTop0 + idx * (subH + subGap);
+        final yMin = (sp['y_min'] as num?)?.toDouble() ?? 0.0;
+        final yMax = (sp['y_max'] as num?)?.toDouble() ?? 100.0;
+        final yRange = (yMax - yMin).abs().clamp(1e-9, double.infinity);
+        double sy(double v) => top + (yMax - v) / yRange * subH;
+
+        // Pane separator
+        canvas.drawLine(
+          Offset(padL, top),
+          Offset(size.width - padR, top),
+          Paint()..color = (isDark ? kEdge : kLightEdge).withValues(alpha: 0.5)..strokeWidth = 1,
+        );
+
+        // Title
+        final mutedC = isDark ? kMuted : kLightMuted;
+        final titlePainter = TextPainter(
+          text: TextSpan(
+            text: (sp['name'] as String?) ?? '',
+            style: TextStyle(
+              fontFamily: 'monospace', fontSize: 9,
+              color: mutedC,
+              letterSpacing: 1.5,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        titlePainter.paint(canvas, Offset(padL + 4, top + 2));
+
+        // Guide lines (OB/OS/threshold)
+        for (final g in (sp['guides'] as List? ?? const [])) {
+          final gy = sy((g['y'] as num).toDouble());
+          final gColor = _parseHex((g['color'] as String?) ?? '#8fa0aa')
+              .withValues(alpha: 0.5);
+          final paint = Paint()..color = gColor..strokeWidth = 1;
+          var gx = padL;
+          while (gx < size.width - padR) {
+            canvas.drawLine(Offset(gx, gy), Offset(gx + 3, gy), paint);
+            gx += 6;
+          }
+          final lbl = TextPainter(
+            text: TextSpan(
+              text: '${g['label']} ${g['y']}',
+              style: TextStyle(
+                fontFamily: 'monospace', fontSize: 9,
+                color: gColor.withValues(alpha: 0.9),
+              ),
+            ),
+            textDirection: TextDirection.ltr,
+          )..layout();
+          lbl.paint(canvas, Offset(size.width - padR - lbl.width - 2, gy - 11));
+        }
+
+        final kind = sp['kind'] as String?;
+        if (kind == 'line') {
+          final color = _parseHex((sp['color'] as String?) ?? '#22ee88');
+          final vals = ((sp['values'] as List?) ?? const []).map(_num).toList();
+          _drawLine(canvas, vals, color, xAt, sy);
+        } else if (kind == 'double_line') {
+          final pColor = _parseHex((sp['primary_color'] as String?) ?? '#22ee88');
+          final sColor = _parseHex((sp['secondary_color'] as String?) ?? '#ffc73a');
+          final tColor = _parseHex((sp['tertiary_color'] as String?) ?? '#ff3355');
+          final pVals = ((sp['primary'] as List?) ?? const []).map(_num).toList();
+          final sVals = ((sp['secondary'] as List?) ?? const []).map(_num).toList();
+          _drawLine(canvas, pVals, pColor, xAt, sy);
+          _drawLine(canvas, sVals, sColor, xAt, sy);
+          if (sp['tertiary'] != null) {
+            final tVals = (sp['tertiary'] as List).map(_num).toList();
+            _drawLine(canvas, tVals, tColor, xAt, sy);
+          }
+        } else if (kind == 'macd') {
+          final hist = ((sp['histogram'] as List?) ?? const []).map(_num).toList();
+          final zeroY = sy(0);
+          for (var i = 0; i < hist.length; i++) {
+            final v = hist[i];
+            if (v == null) continue;
+            final x = xAt(i);
+            final y0 = zeroY, y1 = sy(v);
+            final ttop = y0 < y1 ? y0 : y1;
+            final h2 = (y1 - y0).abs().clamp(1.0, double.infinity);
+            final hcolor = (v >= 0
+                ? (isDark ? kNeonGreen : kLightWin)
+                : (isDark ? kNeonRed : kLightLoss))
+                .withValues(alpha: 0.5);
+            canvas.drawRect(
+              Rect.fromLTWH(x - candleW / 2, ttop, candleW, h2),
+              Paint()..color = hcolor,
+            );
+          }
+          // Zero line
+          canvas.drawLine(
+            Offset(padL, zeroY), Offset(size.width - padR, zeroY),
+            Paint()..color = (isDark ? kMuted : kLightMuted).withValues(alpha: 0.5)
+              ..strokeWidth = 1,
+          );
+          final mColor = _parseHex((sp['color'] as String?) ?? '#22ee88');
+          final sColor = _parseHex((sp['signal_color'] as String?) ?? '#ff3355');
+          final mVals = ((sp['macd'] as List?) ?? const []).map(_num).toList();
+          final sVals = ((sp['signal'] as List?) ?? const []).map(_num).toList();
+          _drawLine(canvas, mVals, mColor, xAt, sy);
+          _drawLine(canvas, sVals, sColor, xAt, sy);
+        }
+      }
+    }
   }
+
 
   void _drawLine(
     Canvas canvas,

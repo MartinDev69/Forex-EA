@@ -29,7 +29,7 @@ from src.execution.fills import Fill, FillStore, signed_slippage_pips
 from src.execution.journal import TradeJournal
 from src.execution.stops import StopManager
 from src.execution.strategy_toggles import StrategyToggleStore
-from src.explanations.chart import serialise_bars, standard_overlays
+from src.explanations.chart import serialise_bars, standard_overlays, strategy_decorations
 from src.explanations.store import TradeExplanation, TradeExplanationStore
 from src.ml.signal_filter import SignalFilter
 from src.monitoring.telegram_notifier import NoOpNotifier
@@ -894,7 +894,14 @@ class Bot:
                 notes=signal.reason or "",
                 indicators=dict(signal.indicators or {}),
                 bars=serialise_bars(bars) if bars is not None else [],
-                overlays=standard_overlays(bars) if bars is not None else [],
+                overlays=(
+                    standard_overlays(bars) + strategy_decorations(strategy.name, bars)[0]
+                    if bars is not None else []
+                ),
+                subplots=(
+                    strategy_decorations(strategy.name, bars)[1]
+                    if bars is not None else []
+                ),
             ))
         except Exception:
             log.exception("explanation_store.record failed for trade %s", order.id)

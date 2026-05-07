@@ -13,7 +13,9 @@ import math
 
 import pandas as pd
 
-from src.indicators.trend import ema
+from src.indicators.directional import adx
+from src.indicators.momentum import rsi, stochastic
+from src.indicators.trend import ema, macd
 from src.indicators.volatility import bollinger_bands
 
 
@@ -114,3 +116,159 @@ def standard_overlays(ohlc: pd.DataFrame, count: int = SNAPSHOT_BARS) -> list[di
             "lower": _series_values(bb["lower"], count),
         },
     ]
+
+
+# Strategy-specific decorations. Each entry returns (overlays, subplots)
+# the bot will merge on top of the standard EMA+BB set. Overlays share
+# the price axis; subplots get a separate pane below the candles.
+def strategy_decorations(
+    strategy_name: str,
+    ohlc: pd.DataFrame,
+    count: int = SNAPSHOT_BARS,
+) -> tuple[list[dict], list[dict]]:
+    if ohlc is None or len(ohlc) == 0:
+        return [], []
+    overlays: list[dict] = []
+    subplots: list[dict] = []
+    close = ohlc["close"]
+    high = ohlc["high"]
+    low = ohlc["low"]
+    name = strategy_name or ""
+
+    if name == "ma_crossover":
+        overlays += [
+            {"name": "EMA12", "kind": "line", "color": "#22ee88",
+             "values": _series_values(ema(close, 12), count), "emphasis": True},
+            {"name": "EMA26", "kind": "line", "color": "#ff3355",
+             "values": _series_values(ema(close, 26), count), "emphasis": True},
+        ]
+
+    elif name == "rsi_mean_reversion":
+        subplots.append({
+            "name": "RSI(14)", "kind": "line",
+            "values": _series_values(rsi(close, 14), count),
+            "color": "#22ee88",
+            "y_min": 0, "y_max": 100,
+            "guides": [
+                {"y": 30, "label": "OS", "color": "#22ee88"},
+                {"y": 70, "label": "OB", "color": "#ff3355"},
+            ],
+        })
+
+    elif name == "donchian_breakout":
+        prior = ohlc.iloc[:-1]
+        upper = float(prior["high"].rolling(20).max().iloc[-1])
+        lower = float(prior["low"].rolling(20).min().iloc[-1])
+        overlays += [
+            {"name": "Channel high", "kind": "line", "color": "#22ee88",
+             "values": [upper] * min(count, len(ohlc)), "emphasis": True},
+            {"name": "Channel low", "kind": "line", "color": "#ff3355",
+             "values": [lower] * min(count, len(ohlc)), "emphasis": True},
+        ]
+
+    elif name == "macd_cross":
+        m = macd(close, 12, 26, 9)
+        subplots.append({
+            "name": "MACD",
+            "kind": "macd",
+            "macd": _series_values(m["macd"], count),
+            "signal": _series_values(m["signal"], count),
+            "histogram": _series_values(m["histogram"], count),
+            "color": "#22ee88",
+            "signal_color": "#ff3355",
+        })
+
+    elif name == "bollinger_bounce":
+        # BB already drawn by standard set; add RSI subplot.
+        subplots.append({
+            "name": "RSI(14)", "kind": "line",
+            "values": _series_values(rsi(close, 14), count),
+            "color": "#22ee88",
+            "y_min": 0, "y_max": 100,
+            "guides": [
+                {"y": 35, "label": "OS", "color": "#22ee88"},
+                {"y": 65, "label": "OB", "color": "#ff3355"},
+            ],
+        })
+
+    elif name == "stochastic_reversal":
+        st = stochastic(high, low, close, 14, 3)
+        subplots.append({
+            "name": "Stochastic",
+            "kind": "double_line",
+            "primary": _series_values(st["%K"], count),
+            "secondary": _series_values(st["%D"], count),
+            "primary_color": "#22ee88",
+            "secondary_color": "#ffc73a",
+            "y_min": 0, "y_max": 100,
+            "guides": [
+                {"y": 20, "label": "OS", "color": "#22ee88"},
+                {"y": 80, "label": "OB", "color": "#ff3355"},
+            ],
+        })
+
+    elif name == "triple_ma_alignment":
+        overlays += [
+            {"name": "EMA8", "kind": "line", "color": "#22ee88",
+             "values": _series_values(ema(close, 8), count), "emphasis": True},
+            {"name": "EMA21", "kind": "line", "color": "#ffc73a",
+             "values": _series_values(ema(close, 21), count), "emphasis": True},
+            {"name": "EMA55", "kind": "line", "color": "#ff3355",
+             "values": _series_values(ema(close, 55), count), "emphasis": True},
+        ]
+
+    elif name == "inside_bar_breakout":
+        # Mother bar = bar -3 (last is current, -2 is the inside bar).
+        if len(ohlc) >= 3:
+            mother = ohlc.iloc[-3]
+            mh = float(mother["high"]); ml = float(mother["low"])
+            overlays += [
+                {"name": "Mother high", "kind": "line", "color": "#22ee88",
+                 "values": [mh] * min(count, len(ohlc)), "emphasis": True},
+                {"name": "Mother low", "kind": "line", "color": "#ff3355",
+                 "values": [ml] * min(count, len(ohlc)), "emphasis": True},
+            ]
+
+    elif name == "engulfing_pattern":
+        overlays.append(
+            {"name": "EMA50", "kind": "line", "color": "#ffc73a",
+             "values": _series_values(ema(close, 50), count), "emphasis": True}
+        )
+
+    elif name == "ema_pullback":
+        overlays += [
+            {"name": "EMA21", "kind": "line", "color": "#22ee88",
+             "values": _series_values(ema(close, 21), count), "emphasis": True},
+            {"name": "EMA200", "kind": "line", "color": "#ff3355",
+             "values": _series_values(ema(close, 200), count), "emphasis": True},
+        ]
+
+    elif name == "adx_breakout":
+        adx_df = adx(high, low, close, 14)
+        subplots.append({
+            "name": "ADX(14)",
+            "kind": "double_line",
+            "primary": _series_values(adx_df["adx"], count),
+            "secondary": _series_values(adx_df["plus_di"], count),
+            "tertiary": _series_values(adx_df["minus_di"], count),
+            "primary_color": "#ffc73a",
+            "secondary_color": "#22ee88",
+            "tertiary_color": "#ff3355",
+            "y_min": 0, "y_max": 60,
+            "guides": [
+                {"y": 25, "label": "Trend", "color": "#ffc73a"},
+            ],
+        })
+        # Lookback high/low markers on the price chart too.
+        if len(ohlc) >= 21:
+            prior = ohlc.iloc[:-1]
+            upper = float(prior["high"].rolling(20).max().iloc[-1])
+            lower = float(prior["low"].rolling(20).min().iloc[-1])
+            overlays += [
+                {"name": "Lookback high", "kind": "line", "color": "#22ee88",
+                 "values": [upper] * min(count, len(ohlc)), "emphasis": True},
+                {"name": "Lookback low", "kind": "line", "color": "#ff3355",
+                 "values": [lower] * min(count, len(ohlc)), "emphasis": True},
+            ]
+
+    return overlays, subplots

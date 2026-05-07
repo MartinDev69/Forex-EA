@@ -477,8 +477,14 @@ document.addEventListener("alpine:init", () => {
     renderStrategyChart(exp, symbol) {
       const bars = exp?.bars || [];
       if (bars.length < 2) return "";
-      const W = 760, H = 220, padL = 6, padR = 6, padT = 6, padB = 14;
-      const innerW = W - padL - padR, innerH = H - padT - padB;
+      const subplots = exp?.subplots || [];
+      const subH = subplots.length ? 70 : 0;
+      const subGap = subplots.length ? 8 : 0;
+      const W = 760, H = 220 + subplots.length * (subH + subGap);
+      const padL = 6, padR = 6, padT = 6, padB = 14;
+      const priceH = 220 - padT - padB;  // candle pane
+      const innerW = W - padL - padR;
+      const innerH = priceH;
       const n = bars.length;
       const step = innerW / n;
       const candleW = Math.max(1, step * 0.6);
@@ -588,8 +594,59 @@ document.addEventListener("alpine:init", () => {
           `<span><span class="swatch" style="background:#22ee88"></span>TP</span></div>`
         : "";
 
+      // Subplot panes (RSI, MACD, Stochastic, ADX) below the candles.
+      let subplotsSvg = "";
+      const paneTop = priceH + padT + padB;
+      subplots.forEach((sp, idx) => {
+        const top = paneTop + idx * (subH + subGap) + subGap;
+        const bottom = top + subH;
+        // Frame
+        subplotsSvg += `<line x1="${padL}" y1="${top}" x2="${W - padR}" y2="${top}" stroke="rgba(143,160,170,0.2)" stroke-width="1"/>`;
+        const yMin = sp.y_min != null ? sp.y_min : 0;
+        const yMax = sp.y_max != null ? sp.y_max : 100;
+        const yRange = (yMax - yMin) || 1;
+        const sy = v => top + (yMax - v) / yRange * subH;
+        // Guides (OB/OS/threshold lines)
+        for (const g of (sp.guides || [])) {
+          const gy = sy(g.y);
+          subplotsSvg += `<line x1="${padL}" y1="${gy}" x2="${W - padR}" y2="${gy}" stroke="${g.color || '#8fa0aa'}" stroke-width="1" stroke-dasharray="3 3" opacity="0.5"/>`;
+          subplotsSvg += `<text x="${W - padR - 4}" y="${gy - 3}" text-anchor="end" font-size="9" fill="${g.color || '#8fa0aa'}" font-family="monospace">${g.label} ${g.y}</text>`;
+        }
+        // Title
+        subplotsSvg += `<text x="${padL + 4}" y="${top + 11}" font-size="9" fill="#8fa0aa" font-family="monospace" letter-spacing="1.5">${sp.name}</text>`;
+        const subPolyline = (vals, color, dash = "") => {
+          const pts = [];
+          (vals || []).forEach((v, i) => {
+            if (v != null && i < n) pts.push(`${xScale(i).toFixed(1)},${sy(v).toFixed(1)}`);
+          });
+          if (pts.length < 2) return "";
+          return `<polyline fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="${dash}" points="${pts.join(" ")}"/>`;
+        };
+        if (sp.kind === "line") {
+          subplotsSvg += subPolyline(sp.values, sp.color || "#22ee88");
+        } else if (sp.kind === "double_line") {
+          subplotsSvg += subPolyline(sp.primary, sp.primary_color || "#22ee88");
+          subplotsSvg += subPolyline(sp.secondary, sp.secondary_color || "#ffc73a");
+          if (sp.tertiary) subplotsSvg += subPolyline(sp.tertiary, sp.tertiary_color || "#ff3355");
+        } else if (sp.kind === "macd") {
+          // Histogram bars then macd + signal lines.
+          const zeroY = sy(0);
+          (sp.histogram || []).forEach((v, i) => {
+            if (v == null) return;
+            const x = xScale(i) - candleW / 2;
+            const y0 = sy(0), y1 = sy(v);
+            const top2 = Math.min(y0, y1), h2 = Math.abs(y1 - y0);
+            const hcolor = v >= 0 ? "rgba(34,238,136,0.5)" : "rgba(255,51,85,0.5)";
+            subplotsSvg += `<rect x="${x}" y="${top2}" width="${candleW}" height="${Math.max(1, h2)}" fill="${hcolor}"/>`;
+          });
+          subplotsSvg += `<line x1="${padL}" y1="${zeroY}" x2="${W - padR}" y2="${zeroY}" stroke="rgba(143,160,170,0.4)" stroke-width="1"/>`;
+          subplotsSvg += subPolyline(sp.macd, sp.color || "#22ee88");
+          subplotsSvg += subPolyline(sp.signal, sp.signal_color || "#ff3355");
+        }
+      });
+
       return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">` +
-        overlaysSvg + candlesSvg + levelsSvg + arrow +
+        overlaysSvg + candlesSvg + levelsSvg + arrow + subplotsSvg +
         `</svg>${legendHtml}`;
     },
 

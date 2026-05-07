@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS trade_explanations (
     opened_at           TEXT NOT NULL,
     indicators_json     TEXT,
     bars_json           TEXT,
-    overlays_json       TEXT
+    overlays_json       TEXT,
+    subplots_json       TEXT
 );
 """
 
@@ -88,6 +89,10 @@ class TradeExplanation:
     # {name: 'ema_fast', kind: 'line'|'band', color: str, values: [...]}.
     # Used by the chart to draw indicator overlays on top of the candles.
     overlays: list = field(default_factory=list)
+    # Subplot series shown in a pane below the candles — RSI, MACD,
+    # Stochastic, ADX. Empty for strategies whose entire signal lives
+    # on the price chart.
+    subplots: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -115,6 +120,7 @@ class TradeExplanation:
             "indicators": dict(self.indicators or {}),
             "bars": list(self.bars or []),
             "overlays": list(self.overlays or []),
+            "subplots": list(self.subplots or []),
         }
 
 
@@ -134,6 +140,8 @@ class TradeExplanationStore:
                 c.execute("ALTER TABLE trade_explanations ADD COLUMN bars_json TEXT")
             if "overlays_json" not in cols:
                 c.execute("ALTER TABLE trade_explanations ADD COLUMN overlays_json TEXT")
+            if "subplots_json" not in cols:
+                c.execute("ALTER TABLE trade_explanations ADD COLUMN subplots_json TEXT")
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -151,8 +159,9 @@ class TradeExplanationStore:
                     regime_trend, regime_volatility, regime_label,
                     regime_adx, regime_atr_pct,
                     allocator_role, allocator_weight, ml_filter_passed,
-                    notes, opened_at, indicators_json, bars_json, overlays_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    notes, opened_at, indicators_json, bars_json, overlays_json,
+                    subplots_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     exp.trade_id, exp.strategy, exp.symbol, exp.side,
@@ -167,6 +176,7 @@ class TradeExplanationStore:
                     json.dumps(exp.indicators) if exp.indicators else None,
                     json.dumps(exp.bars) if exp.bars else None,
                     json.dumps(exp.overlays) if exp.overlays else None,
+                    json.dumps(exp.subplots) if exp.subplots else None,
                 ),
             )
 
@@ -181,7 +191,7 @@ class TradeExplanationStore:
                        regime_adx, regime_atr_pct,
                        allocator_role, allocator_weight, ml_filter_passed,
                        notes, opened_at, indicators_json,
-                       bars_json, overlays_json
+                       bars_json, overlays_json, subplots_json
                 FROM trade_explanations
                 WHERE trade_id = ?
                 """,
@@ -222,5 +232,8 @@ class TradeExplanationStore:
             ),
             overlays=(
                 json.loads(row["overlays_json"]) if row["overlays_json"] else []
+            ),
+            subplots=(
+                json.loads(row["subplots_json"]) if row["subplots_json"] else []
             ),
         )

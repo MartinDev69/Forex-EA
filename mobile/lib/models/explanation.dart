@@ -25,8 +25,12 @@ class TradeExplanation {
   final Map<String, dynamic> indicators;
   // Last ~50 bars at signal time, [{t, o, h, l, c}].
   final List<Map<String, dynamic>> bars;
-  // Indicator overlay series the chart should draw.
+  // Indicator overlay series the chart should draw on the price pane.
   final List<Map<String, dynamic>> overlays;
+  // Subplot series shown in a second pane below the candles
+  // (RSI / MACD / Stochastic / ADX). Empty when the strategy's
+  // entire signal lives on the price chart.
+  final List<Map<String, dynamic>> subplots;
 
   TradeExplanation({
     required this.tradeId,
@@ -53,6 +57,7 @@ class TradeExplanation {
     this.indicators = const {},
     this.bars = const [],
     this.overlays = const [],
+    this.subplots = const [],
   });
 
   factory TradeExplanation.fromJson(Map<String, dynamic> json) => TradeExplanation(
@@ -82,6 +87,9 @@ class TradeExplanation {
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList(),
         overlays: ((json['overlays'] as List<dynamic>?) ?? const [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList(),
+        subplots: ((json['subplots'] as List<dynamic>?) ?? const [])
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList(),
       );

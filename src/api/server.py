@@ -1234,6 +1234,7 @@ class TradeExplanationModel(BaseModel):
     indicators: dict = Field(default_factory=dict)
     bars: list = Field(default_factory=list)
     overlays: list = Field(default_factory=list)
+    subplots: list = Field(default_factory=list)
 
 
 @app.get("/trades/{trade_id}/explain", response_model=TradeExplanationModel)
