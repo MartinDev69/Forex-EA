@@ -843,7 +843,7 @@
                     <label>Broker</label>
                     <select x-model="form.broker" @change="onBrokerChange()">
                       <template x-for="p in presets" :key="p.id">
-                        <option :value="p.id" x-text="p.label"></option>
+                        <option :value="p.id" x-text="p.display_name || p.id"></option>
                       </template>
                     </select>
                   </div>
