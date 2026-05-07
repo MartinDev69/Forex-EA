@@ -33,7 +33,9 @@ from .subscription_requests import (
     VALID_DURATIONS,
 )
 
-log = logging.getLogger(__name__)
+# Route through uvicorn.error so messages reach api.stderr.log without
+# having to call logging.basicConfig (which would fight uvicorn's setup).
+log = logging.getLogger("uvicorn.error")
 
 API_URL = "https://api.telegram.org/bot{token}/{method}"
 
@@ -226,7 +228,8 @@ class TelegramSignupBot:
     # -------------------------------------------------- polling loop
 
     async def _run(self) -> None:
-        loop = asyncio.get_event_loop()
+        log.info("signup bot _run task entered")
+        loop = asyncio.get_running_loop()
 
         # Identity check — call getMe so the operator knows the token is
         # valid and which bot username it belongs to. Then delete any
