@@ -185,7 +185,11 @@ class MT5Executor:
             "tp": float(order.take_profit),
             "deviation": self.deviation,
             "magic": self.magic,
-            "comment": order.strategy[:31],  # MT5 comment hard limit
+            "comment": self._build_open_comment(
+                order.strategy,
+                side=order.side.value if order.side else None,
+                regime=order.extra.get("regime") if hasattr(order, "extra") else None,
+            ),
             "type_time": self._mt5.ORDER_TIME_GTC,
             "type_filling": self._resolve_filling_mode(order.symbol),
         }
@@ -239,7 +243,9 @@ class MT5Executor:
             "price": price,
             "deviation": self.deviation,
             "magic": self.magic,
-            "comment": f"close:{reason}"[:31],
+            "comment": self._build_close_comment(
+                reason, pnl=getattr(order, "pnl", None)
+            ),
             "type_time": self._mt5.ORDER_TIME_GTC,
             "type_filling": self._resolve_filling_mode(order.symbol),
         }
@@ -386,6 +392,67 @@ class MT5Executor:
                 "placed_at": datetime.fromtimestamp(o.time_setup, tz=timezone.utc),
             })
         return out
+
+    # ---------------------------------------------- comment formatting
+
+    # Compact codes so a strategy + regime + sentiment fit in MT5's 31-char
+    # comment budget. Anything longer gets stripped on the broker side.
+    _STRAT_SHORT = {
+        "ma_crossover":         "MAcross",
+        "rsi_mean_reversion":   "RSIrev",
+        "donchian_breakout":    "Donch",
+        "macd_cross":           "MACD",
+        "bollinger_bounce":     "BBbnc",
+        "bollinger_squeeze":    "BBsqz",
+        "stochastic_reversal":  "Stoch",
+        "triple_ma_alignment":  "Tri-MA",
+        "inside_bar_breakout":  "IBbrk",
+        "engulfing_pattern":    "Engulf",
+        "ema_pullback":         "EMApb",
+        "adx_breakout":         "ADXbrk",
+    }
+
+    @classmethod
+    def _build_open_comment(
+        cls, strategy: str | None, side: str | None = None,
+        regime: str | None = None,
+    ) -> str:
+        """Branded order comment shown in MT5 — 'AG' signature so the
+        user can spot bot trades in the broker's history at a glance.
+        Trimmed to MT5's 31-char hard limit.
+        """
+        short = cls._STRAT_SHORT.get(strategy or "", strategy or "?")[:8]
+        parts = ["AG", short]
+        if side:
+            parts.append(side[0])  # B / S — saves space vs full word
+        if regime:
+            parts.append(regime[:5])  # trend / range
+        comment = " · ".join(parts)
+        return comment[:31]
+
+    @classmethod
+    def _build_close_comment(cls, reason: str, pnl: float | None = None) -> str:
+        """Branded close comment. Encodes win/loss + reason so the user
+        can scan MT5 history and instantly see what closed and why.
+        """
+        reason = (reason or "").lower()
+        # Sentiment prefix only when we know the PnL
+        if pnl is not None and pnl > 0.01:
+            tag = "WIN"
+        elif pnl is not None and pnl < -0.01:
+            tag = "LOSS"
+        else:
+            tag = "FLAT"
+        # Reason: target / stop / trail / time / manual / kill
+        reason_short = (
+            "tgt" if "target" in reason or "tp" in reason
+            else "stop" if "stop" in reason or "sl" in reason
+            else "trail" if "trail" in reason
+            else "time" if "time" in reason or "expire" in reason
+            else "kill" if "kill" in reason
+            else "close"
+        )
+        return f"AG · {tag} · {reason_short}"[:31]
 
     # -------------------------------------------------------------- helpers
 

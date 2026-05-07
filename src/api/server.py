@@ -316,6 +316,12 @@ class TradeResponse(BaseModel):
     pnl: float
     opened_at: datetime
     closed_at: datetime | None
+    lot_size: float = 0.0
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    strategy: str | None = None
+    broker_ticket: int | None = None
+    close_reason: str | None = None
 
 
 def _open_positions() -> int:
@@ -459,6 +465,8 @@ def trades(limit: int = 20, _user: dict = Depends(current_user)) -> list[TradeRe
     rows = journal.recent(limit=limit)
     out: list[TradeResponse] = []
     for r in rows:
+        sl = r.get("stop_loss")
+        tp = r.get("take_profit")
         out.append(TradeResponse(
             id=r["id"],
             symbol=r["symbol"],
@@ -468,6 +476,15 @@ def trades(limit: int = 20, _user: dict = Depends(current_user)) -> list[TradeRe
             pnl=r["pnl"] or 0.0,
             opened_at=datetime.fromisoformat(r["opened_at"]),
             closed_at=datetime.fromisoformat(r["closed_at"]) if r["closed_at"] else None,
+            lot_size=float(r.get("lot_size") or 0.0),
+            # Journal stores 0.0 for "no SL/TP" historically — translate
+            # that to null on the wire so the dashboard renders "—"
+            # instead of a nonsense 0.00000.
+            stop_loss=(float(sl) if sl else None),
+            take_profit=(float(tp) if tp else None),
+            strategy=r.get("strategy"),
+            broker_ticket=r.get("broker_ticket"),
+            close_reason=r.get("close_reason"),
         ))
     return out
 

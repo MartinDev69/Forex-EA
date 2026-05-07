@@ -829,6 +829,10 @@ class Bot:
         # added — otherwise probe trades would over- or under-credit the
         # portfolio heat tracker.
         order.extra["risk_weight"] = weight
+        # Pass regime through so the broker comment can show it (helps
+        # the operator scan MT5 history and see why the bot took it).
+        if regime is not None and getattr(regime, "trend", None) is not None:
+            order.extra["regime"] = regime.trend.value
         requested_price = signal.price
         send_started = time.perf_counter()
         order = self.executor.place(order)

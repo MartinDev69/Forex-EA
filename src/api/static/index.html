@@ -1071,9 +1071,9 @@
                       <td style="text-align:right;font-family:var(--mono)" x-text="(t.entry_price ?? 0).toFixed(t.symbol?.includes('XAU') || t.symbol?.includes('OIL') ? 2 : 5)"></td>
                       <td style="text-align:right;font-family:var(--mono);color:var(--muted)" x-text="(t.lot_size ?? 0).toFixed(2)"></td>
                       <td style="text-align:right;font-family:var(--mono);color:var(--muted);font-size:11px">
-                        <span x-text="(t.stop_loss ?? 0).toFixed(t.symbol?.includes('XAU') || t.symbol?.includes('OIL') ? 2 : 5)"></span>
+                        <span x-text="t.stop_loss != null ? t.stop_loss.toFixed(t.symbol?.includes('XAU') || t.symbol?.includes('OIL') ? 2 : 5) : '—'"></span>
                         /
-                        <span x-text="(t.take_profit ?? 0).toFixed(t.symbol?.includes('XAU') || t.symbol?.includes('OIL') ? 2 : 5)"></span>
+                        <span x-text="t.take_profit != null ? t.take_profit.toFixed(t.symbol?.includes('XAU') || t.symbol?.includes('OIL') ? 2 : 5) : '—'"></span>
                       </td>
                       <td style="text-align:right;font-family:var(--mono);color:var(--muted);font-size:12px" x-text="fmtTime(t.opened_at)"></td>
                       <td><span class="status-chip open-chip">open</span></td>
