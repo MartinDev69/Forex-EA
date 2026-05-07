@@ -88,6 +88,56 @@ class TradeJournal:
                 ),
             )
 
+    def list_open(self) -> list[dict]:
+        """Every journal row currently marked OPEN with a broker ticket.
+        Used by the bot's auto-reconciler to detect entries that have
+        already closed broker-side but never got their journal update.
+        """
+        with self._conn() as c:
+            rows = c.execute(
+                """
+                SELECT id, symbol, side, broker_ticket, entry_price, opened_at
+                FROM trades
+                WHERE status = 'OPEN' AND closed_at IS NULL
+                  AND broker_ticket IS NOT NULL
+                """
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_closed_by_ticket(
+        self,
+        broker_ticket: int,
+        *,
+        exit_price: float,
+        closed_at: datetime,
+        pnl: float,
+        close_reason: str = "reconciled_from_mt5",
+    ) -> None:
+        """Patch an open journal row to CLOSED — used by the auto-
+        reconciler when the broker has already closed the position.
+        Only touches rows that are still marked OPEN so re-running is a
+        no-op once the row is settled.
+        """
+        with self._conn() as c:
+            c.execute(
+                """
+                UPDATE trades
+                SET status = 'CLOSED',
+                    exit_price = ?,
+                    closed_at = ?,
+                    pnl = ?,
+                    close_reason = COALESCE(close_reason, ?)
+                WHERE broker_ticket = ? AND status = 'OPEN'
+                """,
+                (
+                    float(exit_price),
+                    closed_at.isoformat(),
+                    float(pnl),
+                    close_reason,
+                    int(broker_ticket),
+                ),
+            )
+
     def recent(self, limit: int = 20) -> list[dict]:
         with self._conn() as c:
             rows = c.execute(

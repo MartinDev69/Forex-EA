@@ -311,6 +311,44 @@ class MT5Executor:
             ))
         return out
 
+    def list_open_position_tickets(self) -> set[int]:
+        """All broker tickets currently open on the account, regardless
+        of magic. Used by the bot's auto-reconciler to spot journal
+        rows that have already closed broker-side.
+        """
+        positions = self._mt5.positions_get()
+        if not positions:
+            return set()
+        return {int(p.ticket) for p in positions}
+
+    def fetch_close_info(self, position_ticket: int) -> dict | None:
+        """Look up the actual close price / pnl / time for a position
+        the broker has already closed. Returns None if no close deal
+        has landed yet (rare race window between positions_get drop
+        and history_deals_get appearance).
+        """
+        try:
+            deals = self._mt5.history_deals_get(position=int(position_ticket))
+        except Exception:
+            log.exception("history_deals_get failed for ticket %s", position_ticket)
+            return None
+        if not deals:
+            return None
+        out_entries = (self._mt5.DEAL_ENTRY_OUT, self._mt5.DEAL_ENTRY_INOUT)
+        close_deals = [d for d in deals if d.entry in out_entries]
+        if not close_deals:
+            return None
+        last = max(close_deals, key=lambda d: d.time)
+        pnl = sum(
+            float(d.profit) + float(d.swap) + float(d.commission)
+            for d in close_deals
+        )
+        return {
+            "exit_price": float(last.price),
+            "closed_at": datetime.fromtimestamp(last.time, tz=timezone.utc),
+            "pnl": pnl,
+        }
+
     def list_pending_orders(self) -> list[dict]:
         """Snapshot of MT5 pending orders (buy_limit/sell_limit/buy_stop/
         sell_stop) — passed up to the bot which writes them to SQLite for

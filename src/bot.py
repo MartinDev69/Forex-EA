@@ -86,6 +86,10 @@ class BotState:
     # Last tick on which the broker_status_store was refreshed with live
     # equity. -1 means we haven't pushed yet — first eligible tick will.
     last_broker_status_refresh_tick: int = -1
+    # Last tick on which we reconciled journal-OPEN rows against MT5's
+    # actual position list. Cheap query, runs every N ticks so phantom
+    # opens (rows kept OPEN after a broker-side stop hit) self-heal.
+    last_journal_reconcile_tick: int = -1
 
 
 class Bot:
@@ -122,6 +126,7 @@ class Bot:
         pending_orders_store: PendingOrderStore | None = None,
         broker_id: str = "",
         broker_status_refresh_ticks: int = 5,
+        journal_reconcile_ticks: int = 12,
     ) -> None:
         self.config = config
         self.strategies = strategies
@@ -180,6 +185,7 @@ class Bot:
         self.pending_orders_store = pending_orders_store
         self.broker_id = broker_id
         self.broker_status_refresh_ticks = max(1, broker_status_refresh_ticks)
+        self.journal_reconcile_ticks = max(1, journal_reconcile_ticks)
         self.state = BotState()
 
     # ------------------------------------------------------------------ core
@@ -219,6 +225,7 @@ class Bot:
         self._maybe_refresh_allocator()
         self._maybe_refresh_broker_status()
         self._maybe_refresh_pending_orders()
+        self._maybe_reconcile_journal()
         self._maybe_send_daily_summary()
         self._maybe_send_weekly_digest()
         self._maybe_warn_blackouts()
@@ -417,6 +424,79 @@ class Bot:
             log.exception("broker_status refresh: store write failed")
         finally:
             self.state.last_broker_status_refresh_tick = self.state.tick_count
+
+    def _maybe_reconcile_journal(self) -> None:
+        """Sync the journal's OPEN rows against MT5's live positions.
+
+        Any journal trade whose broker_ticket is no longer open on the
+        account gets closed in the journal — using history_deals_get to
+        recover the real exit price and PnL when available, or a safe
+        zero-PnL fallback when not (rare race during the close-deal
+        landing). Every error path is swallowed so this can't break the
+        main tick. Throttled by `journal_reconcile_ticks` so the
+        history_deals_get calls stay cheap.
+        """
+        last = self.state.last_journal_reconcile_tick
+        if last >= 0 and (self.state.tick_count - last) < self.journal_reconcile_ticks:
+            return
+        self.state.last_journal_reconcile_tick = self.state.tick_count
+
+        list_tickets = getattr(self.executor, "list_open_position_tickets", None)
+        fetch_close = getattr(self.executor, "fetch_close_info", None)
+        if list_tickets is None or fetch_close is None:
+            return  # mock executor / no MT5 connection — nothing to reconcile
+
+        try:
+            live_tickets = list_tickets() or set()
+        except Exception:
+            log.exception("reconcile: list_open_position_tickets failed")
+            return
+
+        try:
+            open_rows = self.journal.list_open()
+        except Exception:
+            log.exception("reconcile: journal.list_open failed")
+            return
+
+        if not open_rows:
+            return
+
+        for row in open_rows:
+            ticket = row.get("broker_ticket")
+            if not ticket:
+                continue
+            if int(ticket) in live_tickets:
+                continue  # still open on the broker — leave alone
+
+            # Phantom open: not in MT5's position list, must have closed
+            # broker-side. Pull the close deal info and patch the row.
+            try:
+                close_info = fetch_close(int(ticket))
+            except Exception:
+                log.exception("reconcile: fetch_close_info failed for #%s", ticket)
+                continue
+
+            if close_info is None:
+                # No close deal landed yet — skip this round, try again next tick.
+                continue
+            try:
+                self.journal.mark_closed_by_ticket(
+                    int(ticket),
+                    exit_price=close_info["exit_price"],
+                    closed_at=close_info["closed_at"],
+                    pnl=close_info["pnl"],
+                    close_reason="reconciled_from_mt5",
+                )
+                pnl = close_info["pnl"]
+                sign = "+" if pnl >= 0 else ""
+                log.info(
+                    "reconciled phantom open #%s %s %s → CLOSED at %.5f "
+                    "PnL %s%.2f",
+                    ticket, row.get("side", "?"), row.get("symbol", "?"),
+                    close_info["exit_price"], sign, pnl,
+                )
+            except Exception:
+                log.exception("reconcile: journal mark_closed failed for #%s", ticket)
 
     def _maybe_refresh_pending_orders(self) -> None:
         """Snapshot MT5's pending orders into the SQLite store so the
