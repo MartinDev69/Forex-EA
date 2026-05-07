@@ -206,9 +206,17 @@ def main() -> None:
             risk_per_trade=settings.risk_per_trade,
             max_open_trades=settings.max_open_trades,
             max_daily_loss_pct=settings.max_daily_loss_pct,
+            max_portfolio_heat_pct=settings.max_portfolio_heat_pct,
         ),
         portfolio_throttle=portfolio_throttle,
         propfirm_guard=propfirm_guard,
+    )
+    log.info(
+        "Risk: %.2f%%/trade · max %d open · daily-loss %.0f%% · portfolio-heat %.0f%%",
+        settings.risk_per_trade * 100,
+        settings.max_open_trades,
+        settings.max_daily_loss_pct * 100,
+        settings.max_portfolio_heat_pct * 100,
     )
     journal = TradeJournal(Path("data/trades.db"))
     toggle_store = StrategyToggleStore(Path("data/trades.db"))

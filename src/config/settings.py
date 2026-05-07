@@ -17,6 +17,7 @@ class Settings:
     risk_per_trade: float
     max_open_trades: int
     max_daily_loss_pct: float
+    max_portfolio_heat_pct: float
 
     telegram_bot_token: str
     telegram_chat_id: str
@@ -41,6 +42,11 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         risk_per_trade=float(os.getenv("RISK_PER_TRADE", "0.01")),
         max_open_trades=int(os.getenv("MAX_OPEN_TRADES", "3")),
         max_daily_loss_pct=float(os.getenv("MAX_DAILY_LOSS_PCT", "0.05")),
+        # Total open risk across all positions, summed by per-trade risk %.
+        # 0.04 = 4% caps you at four full-size losers stacked. Tighter
+        # than the old 6% default — most blow-ups were stacked-correlation
+        # piles on the same direction.
+        max_portfolio_heat_pct=float(os.getenv("MAX_PORTFOLIO_HEAT_PCT", "0.04")),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
