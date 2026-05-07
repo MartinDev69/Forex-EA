@@ -119,7 +119,16 @@ async def _lifespan(app: FastAPI):
             admin_chat_id=ADMIN_TG_CHAT_ID,
         )
         _signup_bot.start()
-        log.info("signup bot polling started")
+        # Mask all but the last 6 chars so the operator can confirm
+        # the right token was loaded without leaking the full secret
+        # to the log.
+        masked = "***" + SIGNUP_BOT_TOKEN[-6:] if len(SIGNUP_BOT_TOKEN) > 6 else "***"
+        log.info(
+            "signup bot enabled (token %s, admin_chat_id=%s)",
+            masked, ADMIN_TG_CHAT_ID,
+        )
+    else:
+        log.info("signup bot disabled — set SIGNUP_TELEGRAM_BOT_TOKEN to enable")
     try:
         yield
     finally:

@@ -119,6 +119,10 @@ def _api_call(token: str, method: str, payload: dict[str, Any] | None = None,
     """Minimal Telegram Bot API client — POSTs JSON, returns the
     decoded ``result`` field. Returns None on transport error so the
     polling loop can keep going.
+
+    Logs every non-OK Telegram response so the operator can debug
+    when the bot is silent (typical: 401 Unauthorized = wrong token,
+    409 Conflict = webhook still set).
     """
     url = API_URL.format(token=token, method=method)
     data: bytes | None = None
@@ -129,8 +133,21 @@ def _api_call(token: str, method: str, payload: dict[str, Any] | None = None,
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        # Surface the response body — Telegram returns the actual
+        # reason ("Unauthorized", "Conflict: webhook is currently set",
+        # etc.) here, which is what the operator needs to fix the issue.
+        try:
+            body = json.loads(e.read().decode("utf-8"))
+            log.warning(
+                "telegram %s -> HTTP %s: %s",
+                method, e.code, body.get("description"),
+            )
+        except Exception:
+            log.warning("telegram %s -> HTTP %s", method, e.code)
+        return None
     except Exception as exc:
-        log.debug("telegram %s failed: %s", method, exc)
+        log.warning("telegram %s transport error: %s", method, exc)
         return None
     if not body.get("ok"):
         log.warning("telegram %s rejected: %s", method, body.get("description"))
@@ -209,8 +226,37 @@ class TelegramSignupBot:
     # -------------------------------------------------- polling loop
 
     async def _run(self) -> None:
-        log.info("telegram signup bot started")
         loop = asyncio.get_event_loop()
+
+        # Identity check — call getMe so the operator knows the token is
+        # valid and which bot username it belongs to. Then delete any
+        # existing webhook so getUpdates doesn't 409. Both calls are
+        # one-shot, fast, and best-effort: if Telegram is unreachable
+        # the polling loop will keep retrying anyway.
+        try:
+            me = await loop.run_in_executor(None, _api_call, self.token, "getMe", None, 10)
+            if me:
+                log.info(
+                    "signup bot identity: @%s (id=%s, name=%s)",
+                    me.get("username"), me.get("id"), me.get("first_name"),
+                )
+            else:
+                log.warning(
+                    "signup bot getMe returned nothing — token may be invalid; "
+                    "verify with: curl https://api.telegram.org/bot<TOKEN>/getMe"
+                )
+        except Exception:
+            log.exception("signup bot getMe failed")
+
+        try:
+            await loop.run_in_executor(
+                None, _api_call, self.token, "deleteWebhook",
+                {"drop_pending_updates": False}, 10,
+            )
+        except Exception:
+            log.exception("signup bot deleteWebhook failed")
+
+        log.info("signup bot polling loop running")
         while not self._stop.is_set():
             offset = self.store.get_update_offset()
             try:
