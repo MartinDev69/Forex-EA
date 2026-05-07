@@ -808,24 +808,35 @@
         <div class="sec-hd">MT5 Broker</div>
         <div class="panel">
           <div class="panel-body">
-            <div class="robot-ready-card">
-              <img src="/static/img/robot-ready.jpg" class="robot-ready-img" alt="" />
-              <div class="robot-ready-overlay"></div>
-              <div class="robot-ready-text" x-text="status?.connected ? 'Bot Status · Live' : 'Bot Status · Standby'"></div>
-              <div class="robot-ready-sub" x-text="(status?.broker ? status.broker.toUpperCase() : 'BROKER') + ' · ' + (status?.server || '—')"></div>
+            <!-- Live broker status — global bot connection. Admin-only. -->
+            <div x-show="isAdmin">
+              <div class="robot-ready-card">
+                <img src="/static/img/robot-ready.jpg" class="robot-ready-img" alt="" />
+                <div class="robot-ready-overlay"></div>
+                <div class="robot-ready-text" x-text="status?.connected ? 'Bot Status · Live' : 'Bot Status · Standby'"></div>
+                <div class="robot-ready-sub" x-text="(status?.broker ? status.broker.toUpperCase() : 'BROKER') + ' · ' + (status?.server || '—')"></div>
+              </div>
+              <div class="conn-status" :class="status?.connected ? 'on' : 'off'">
+                <div class="live-dot" :class="{ dead: !status?.connected }"></div>
+                <span class="conn-label" x-text="statusLabel"></span>
+                <span class="conn-time" x-text="staleLabel"></span>
+              </div>
+              <div class="acct-grid">
+                <template x-for="f in accountFields()" :key="f.label">
+                  <div class="acct-cell">
+                    <div class="acct-cell-label" x-text="f.label"></div>
+                    <div class="acct-cell-val" x-text="f.value"></div>
+                  </div>
+                </template>
+              </div>
             </div>
-            <div class="conn-status" :class="status?.connected ? 'on' : 'off'">
-              <div class="live-dot" :class="{ dead: !status?.connected }"></div>
-              <span class="conn-label" x-text="statusLabel"></span>
-              <span class="conn-time" x-text="staleLabel"></span>
-            </div>
-            <div class="acct-grid">
-              <template x-for="f in accountFields()" :key="f.label">
-                <div class="acct-cell">
-                  <div class="acct-cell-label" x-text="f.label"></div>
-                  <div class="acct-cell-val" x-text="f.value"></div>
-                </div>
-              </template>
+            <!-- Non-admin placeholder until per-user broker sessions land. -->
+            <div x-show="!isAdmin" style="padding:40px 20px;text-align:center">
+              <div style="font-size:11px;letter-spacing:0.4em;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Your broker</div>
+              <div style="font-size:14px;color:var(--text);margin-bottom:6px">Not connected yet</div>
+              <div style="font-size:12px;color:var(--muted);max-width:480px;margin:0 auto">
+                Per-account broker sessions are coming soon. For now, your access is registered — contact the admin if you'd like to discuss your setup.
+              </div>
             </div>
             <template x-if="isAdmin">
               <div>

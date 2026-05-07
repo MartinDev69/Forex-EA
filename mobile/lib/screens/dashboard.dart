@@ -261,30 +261,106 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 child: Center(child: LogoSpinner(size: 88, label: 'LOADING')),
               ),
             if (_error != null) _ErrorCard(message: _error!),
-            if (_account != null) _AccountCard(account: _account!),
-            if (_account != null && _status != null)
+
+            // Non-admin operators see only the welcome panel — the rest of
+            // the dashboard reflects the singleton bot's MT5 connection,
+            // which isn't theirs.
+            if (!_isAdmin)
+              _WelcomeCard(adId: widget.apiClient.username ?? 'operator'),
+
+            if (_isAdmin && _account != null) _AccountCard(account: _account!),
+            if (_isAdmin && _account != null && _status != null)
               _KpiGrid(account: _account!, status: _status!, trades: _trades),
-            if (_status != null)
+            if (_isAdmin && _status != null)
               _StatusCard(
                 status: _status!,
                 onToggle: _toggleBot,
               ),
-            if (_blackout != null)
+            if (_isAdmin && _blackout != null)
               _BlackoutCard(
                 status: _blackout!,
                 onChangeSymbol: _changeBlackoutSymbol,
               ),
-            if (_regime != null) _RegimeCard(regime: _regime!),
-            if (_correlations != null && _correlations!.pairs.isNotEmpty)
+            if (_isAdmin && _regime != null) _RegimeCard(regime: _regime!),
+            if (_isAdmin && _correlations != null && _correlations!.pairs.isNotEmpty)
               _CorrelationCard(data: _correlations!),
-            if (_drift != null && _drift!.reports.isNotEmpty)
+            if (_isAdmin && _drift != null && _drift!.reports.isNotEmpty)
               _DriftCard(data: _drift!),
-            if (_fillStats != null && _fillStats!.symbols.isNotEmpty)
+            if (_isAdmin && _fillStats != null && _fillStats!.symbols.isNotEmpty)
               _ExecutionQualityCard(data: _fillStats!),
-            if (_allocator != null && _allocator!.allocations.isNotEmpty)
+            if (_isAdmin && _allocator != null && _allocator!.allocations.isNotEmpty)
               _AllocatorCard(data: _allocator!),
           ],
         ),
+      ),
+    );
+  }
+
+  bool get _isAdmin => (widget.apiClient.role ?? 'admin') == 'admin';
+}
+
+class _WelcomeCard extends StatelessWidget {
+  const _WelcomeCard({required this.adId});
+  final String adId;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final accent = isDark ? kNeonGreen : kLightWin;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+      decoration: BoxDecoration(
+        color: isDark ? kSurface : kLightSurface,
+        border: Border.all(color: accent.withValues(alpha: 0.20)),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: isDark
+            ? [BoxShadow(color: accent.withValues(alpha: 0.10), blurRadius: 18, spreadRadius: -8)]
+            : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'ANTIGREED · WELCOME',
+            style: TextStyle(
+              fontSize: 10, letterSpacing: 4,
+              color: accent, fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Hello, $adId!',
+            style: TextStyle(
+              fontSize: 20, fontWeight: FontWeight.w700,
+              color: isDark ? kText : kLightText,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Your subscription is active. Per-account broker sessions are coming soon — '
+            'for now your access is registered. Contact the admin to discuss your setup.',
+            style: TextStyle(color: mutedColor(context), fontSize: 12, height: 1.5),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Icon(Icons.badge_outlined, size: 14, color: mutedColor(context)),
+              const SizedBox(width: 6),
+              Text(
+                'AD-ID  ',
+                style: TextStyle(color: mutedColor(context), fontSize: 11, letterSpacing: 2),
+              ),
+              Text(
+                adId,
+                style: TextStyle(
+                  color: accent, fontSize: 12, fontFamily: 'monospace',
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
