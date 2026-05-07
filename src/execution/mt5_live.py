@@ -175,6 +175,14 @@ class MT5Executor:
             return order
         price = float(tick.ask) if order.side == SignalType.BUY else float(tick.bid)
 
+        # Margin pre-flight: scale the lot down (or skip the trade) if
+        # the broker doesn't have margin for the requested size. Without
+        # this, tight ATR stops on a small account produce 0.5+ lots
+        # that hit "[No money]" rejections and waste signals.
+        order = self._fit_to_margin(order, order_type, price)
+        if order.status == OrderStatus.REJECTED:
+            return order
+
         request = {
             "action": self._mt5.TRADE_ACTION_DEAL,
             "symbol": order.symbol,
@@ -392,6 +400,70 @@ class MT5Executor:
                 "placed_at": datetime.fromtimestamp(o.time_setup, tz=timezone.utc),
             })
         return out
+
+    # ---------------------------------------------- margin pre-flight
+
+    def _fit_to_margin(self, order: Order, order_type: int, price: float) -> Order:
+        """Scale the order's lot size down so it fits in available
+        free margin (with a 10% buffer). Rejects outright if even the
+        broker's minimum lot won't fit.
+
+        MT5's order_calc_margin gives margin per lot; free margin is on
+        account_info(). The arithmetic is:
+
+            max_lot = (free_margin * 0.9) / margin_per_lot
+
+        Anything above max_lot would land as a "No money" rejection
+        and the signal is wasted. Better to scale or skip.
+        """
+        info = self._mt5.symbol_info(order.symbol)
+        acct = self._mt5.account_info()
+        if info is None or acct is None:
+            return order  # can't tell — let the broker decide
+
+        try:
+            margin_per_lot = self._mt5.order_calc_margin(
+                order_type, order.symbol, 1.0, price
+            )
+        except Exception:
+            margin_per_lot = None
+        if not margin_per_lot or margin_per_lot <= 0:
+            return order  # no margin info — let the broker decide
+
+        free = float(getattr(acct, "margin_free", 0.0) or 0.0)
+        if free <= 0:
+            order.status = OrderStatus.REJECTED
+            order.close_reason = "no free margin"
+            log.warning("rejecting %s %s — no free margin",
+                        order.side.value, order.symbol)
+            return order
+
+        # Leave 10% buffer so a tick of price movement doesn't push us
+        # over right after order_send.
+        max_lot = (free * 0.9) / margin_per_lot
+        # Round down to the broker's volume_step (typically 0.01).
+        step = float(getattr(info, "volume_step", 0.01) or 0.01)
+        min_lot = float(getattr(info, "volume_min", 0.01) or 0.01)
+        max_lot = (max_lot // step) * step
+
+        if max_lot < min_lot:
+            order.status = OrderStatus.REJECTED
+            order.close_reason = (
+                f"insufficient margin: free=${free:.0f} "
+                f"requires ${margin_per_lot * min_lot:.0f} for {min_lot:.2f} lots"
+            )
+            log.warning(order.close_reason)
+            return order
+
+        if order.lot_size > max_lot:
+            log.info(
+                "margin pre-flight: scaling %s %s from %.2f to %.2f lots "
+                "(free=$%.0f, %.0f$/lot)",
+                order.side.value, order.symbol, order.lot_size, max_lot,
+                free, margin_per_lot,
+            )
+            order.lot_size = max_lot
+        return order
 
     # ---------------------------------------------- comment formatting
 
