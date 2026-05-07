@@ -970,18 +970,20 @@ def approve_subscription_request(
         request_id, admin=admin.get("username", "admin"), assigned_ad_id=ad_id,
     )
 
-    # Issue + email the setup link (existing helper).
-    resp = _issue_setup_link(ad_id, req.email)
-
-    # Tell the user via Telegram. Best-effort — if Telegram is down,
-    # the email still went out.
+    # DM the user on Telegram FIRST so a flaky mailer can't block the
+    # notification — they at least know the AD-ID was created and can
+    # ask the admin to resend the link if no email arrives.
     try:
         send_approval_dm(
             SIGNUP_BOT_TOKEN, req.telegram_chat_id, ad_id, duration_code,
         )
     except Exception:
         log.exception("approval Telegram DM failed for chat %s", req.telegram_chat_id)
-    return resp
+
+    # Issue + email the setup link (existing helper). If email delivery
+    # fails the operator is still in the store and the admin can hit
+    # "Resend link" from the dashboard once the mailer is healthy.
+    return _issue_setup_link(ad_id, req.email)
 
 
 @app.post(
