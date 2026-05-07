@@ -27,9 +27,9 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final isAdmin = widget.apiClient.isAdmin;
-    // Non-admin users only see Dashboard + Broker. Strategies, Trades,
-    // Users all reflect the singleton bot's MT5 connection (not theirs)
-    // so showing them would be misleading.
+    // Every operator gets the same five tabs (minus Users for non-admin).
+    // Inside each screen the data is gated on whether the operator has
+    // saved their own broker_config — admins always pass through.
     final pages = <Widget>[
       DashboardScreen(
         apiClient: widget.apiClient,
@@ -37,8 +37,8 @@ class _HomeScreenState extends State<HomeScreen> {
         onForgetDevice: widget.onForgetDevice,
       ),
       BrokerScreen(apiClient: widget.apiClient),
-      if (isAdmin) StrategiesScreen(apiClient: widget.apiClient),
-      if (isAdmin) TradesScreen(apiClient: widget.apiClient),
+      StrategiesScreen(apiClient: widget.apiClient),
+      TradesScreen(apiClient: widget.apiClient),
       if (isAdmin) UsersScreen(apiClient: widget.apiClient),
     ];
     final destinations = <NavigationDestination>[
@@ -52,18 +52,16 @@ class _HomeScreenState extends State<HomeScreen> {
         selectedIcon: Icon(Icons.account_balance),
         label: 'Broker',
       ),
-      if (isAdmin)
-        const NavigationDestination(
-          icon: Icon(Icons.tune_outlined),
-          selectedIcon: Icon(Icons.tune),
-          label: 'Strategies',
-        ),
-      if (isAdmin)
-        const NavigationDestination(
-          icon: Icon(Icons.history_outlined),
-          selectedIcon: Icon(Icons.history),
-          label: 'Trades',
-        ),
+      const NavigationDestination(
+        icon: Icon(Icons.tune_outlined),
+        selectedIcon: Icon(Icons.tune),
+        label: 'Strategies',
+      ),
+      const NavigationDestination(
+        icon: Icon(Icons.history_outlined),
+        selectedIcon: Icon(Icons.history),
+        label: 'Trades',
+      ),
       if (isAdmin)
         const NavigationDestination(
           icon: Icon(Icons.group_outlined),

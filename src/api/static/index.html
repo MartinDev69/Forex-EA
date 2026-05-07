@@ -706,8 +706,9 @@
         </div>
       </div>
 
-      <!-- Welcome panel for newly-signed-up non-admin users -->
-      <div x-show="!isAdmin" class="panel section" style="padding:32px;text-align:center">
+      <!-- Welcome panel for newly-signed-up non-admin users without a
+           broker yet — disappears once they save broker_config. -->
+      <div x-show="!isAdmin && !hasBroker" class="panel section" style="padding:32px;text-align:center">
         <div style="font-size:11px;letter-spacing:0.4em;color:var(--green);text-transform:uppercase;margin-bottom:8px">AntiGreed · Welcome</div>
         <div style="font-size:22px;font-weight:700;color:var(--text);margin-bottom:6px" x-text="'Hello, ' + (me || 'operator') + '!'"></div>
         <div style="font-size:13px;color:var(--muted);max-width:560px;margin:0 auto 24px">
@@ -719,8 +720,8 @@
         </div>
       </div>
 
-      <!-- KPIs (admin only — global bot state) -->
-      <div class="kpi-grid" x-show="isAdmin">
+      <!-- KPIs — visible once admin OR the operator has saved their broker config. -->
+      <div class="kpi-grid" x-show="canSeeDashboard">
         <template x-for="k in kpis()" :key="k.label">
           <div class="kpi-card" :class="k.glow">
             <div class="kpi-label" x-text="k.label"></div>
@@ -730,8 +731,8 @@
         </template>
       </div>
 
-      <!-- Equity chart + strategies — global state, admin only -->
-      <div class="two-col section" x-show="isAdmin">
+      <!-- Equity chart + strategies — appears once broker is configured. -->
+      <div class="two-col section" x-show="canSeeDashboard">
         <div class="panel">
           <div class="panel-head">
             <div>
@@ -808,8 +809,8 @@
         <div class="sec-hd">MT5 Broker</div>
         <div class="panel">
           <div class="panel-body">
-            <!-- Live broker status — global bot connection. Admin-only. -->
-            <div x-show="isAdmin">
+            <!-- Live broker status — visible once broker is configured. -->
+            <div x-show="isAdmin || (savedConfig && savedConfig.login)">
               <div class="robot-ready-card">
                 <img src="/static/img/robot-ready.jpg" class="robot-ready-img" alt="" />
                 <div class="robot-ready-overlay"></div>
@@ -830,15 +831,12 @@
                 </template>
               </div>
             </div>
-            <!-- Non-admin placeholder until per-user broker sessions land. -->
-            <div x-show="!isAdmin" style="padding:40px 20px;text-align:center">
-              <div style="font-size:11px;letter-spacing:0.4em;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Your broker</div>
-              <div style="font-size:14px;color:var(--text);margin-bottom:6px">Not connected yet</div>
-              <div style="font-size:12px;color:var(--muted);max-width:480px;margin:0 auto">
-                Per-account broker sessions are coming soon. For now, your access is registered — contact the admin if you'd like to discuss your setup.
-              </div>
-            </div>
-            <template x-if="isAdmin">
+            <!-- Form is available to every operator — each user has their
+                 own broker_config row keyed by username. The bot's actual
+                 MT5 session is still single-tenant for now (admin only),
+                 so a non-admin's saved config currently just earns them a
+                 dashboard preview rather than a separate trading session. -->
+            <template x-if="true">
               <div>
                 <div class="field-row">
                   <div class="field-block">
@@ -889,8 +887,8 @@
         </div>
       </div>
 
-      <!-- Correlations + Drift — global, admin only -->
-      <div class="two-col section" x-show="isAdmin">
+      <!-- Correlations + Drift — global, visible once broker configured -->
+      <div class="two-col section" x-show="canSeeDashboard">
         <div class="panel">
           <div class="panel-head">
             <div>
@@ -971,8 +969,8 @@
         </div>
       </div>
 
-      <!-- Execution quality — global, admin only -->
-      <div class="section" x-show="isAdmin">
+      <!-- Execution quality — global, visible once broker configured -->
+      <div class="section" x-show="canSeeDashboard">
         <div class="sec-hd">Execution quality · last 24h</div>
         <template x-if="!fillStats?.symbols || fillStats.symbols.length === 0">
           <div class="empty">No fills in the last 24h.</div>
@@ -998,8 +996,8 @@
         </div>
       </div>
 
-      <!-- Allocator — global, admin only -->
-      <div class="section" x-show="isAdmin">
+      <!-- Allocator — global, visible once broker configured -->
+      <div class="section" x-show="canSeeDashboard">
         <div class="sec-hd">Auto-allocator</div>
         <template x-if="!allocator?.allocations || allocator.allocations.length === 0">
           <div class="empty">Allocator hasn't ranked any strategies yet.</div>
@@ -1027,8 +1025,8 @@
         </div>
       </div>
 
-      <!-- LED ticker — global, admin only -->
-      <div class="ticker-band" x-show="isAdmin">
+      <!-- LED ticker — global, visible once broker configured -->
+      <div class="ticker-band" x-show="canSeeDashboard">
         <img src="/static/img/led-ticker.jpg" class="ticker-band-img" alt="" />
         <div class="ticker-band-overlay">
           <span class="ticker-left">Live tape</span>
@@ -1045,8 +1043,8 @@
         </div>
       </div>
 
-      <!-- Trades — global bot state, admin only -->
-      <div class="section" x-show="isAdmin">
+      <!-- Trades — global bot state, visible once broker configured -->
+      <div class="section" x-show="canSeeDashboard">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:14px;flex-wrap:wrap">
           <div class="sec-hd" style="margin-bottom:0;flex:1;min-width:140px">Recent trades</div>
           <div class="trade-tabs">

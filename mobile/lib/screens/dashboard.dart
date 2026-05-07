@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/client.dart';
 import '../models/allocator.dart';
+import '../models/broker.dart';
 import '../models/calendar.dart';
 import '../models/correlation.dart';
 import '../models/drift.dart';
@@ -41,6 +42,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   FillStatsResponse? _fillStats;
   AllocatorResponse? _allocator;
   List<Trade> _trades = const [];
+  // Whether the current user has their own broker_config saved. Admins
+  // always pass; non-admins see the welcome panel until this is true,
+  // then the full dashboard.
+  bool _hasBroker = false;
   String _blackoutSymbol = _kDefaultBlackoutSymbol;
   bool _loading = true;
   String? _error;
@@ -83,8 +88,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         widget.apiClient.fillStats(),
         widget.apiClient.allocator(),
         widget.apiClient.trades(limit: 50),
+        widget.apiClient.brokerConfig(),
       ]);
       if (!mounted) return;
+      final cfg = results[9] as BrokerConfig?;
       setState(() {
         _status = results[0] as BotStatus;
         _account = results[1] as Account;
@@ -95,6 +102,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _fillStats = results[6] as FillStatsResponse;
         _allocator = results[7] as AllocatorResponse;
         _trades = results[8] as List<Trade>;
+        _hasBroker = cfg != null && cfg.login > 0;
         _loading = false;
         _error = null;
       });
@@ -262,33 +270,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             if (_error != null) _ErrorCard(message: _error!),
 
-            // Non-admin operators see only the welcome panel — the rest of
-            // the dashboard reflects the singleton bot's MT5 connection,
-            // which isn't theirs.
-            if (!_isAdmin)
+            // Non-admin operators without a broker config yet see only
+            // the welcome panel. Once they save broker creds (via the
+            // Broker tab), the full dashboard unlocks.
+            if (!_canSeeDashboard)
               _WelcomeCard(adId: widget.apiClient.username ?? 'operator'),
 
-            if (_isAdmin && _account != null) _AccountCard(account: _account!),
-            if (_isAdmin && _account != null && _status != null)
+            if (_canSeeDashboard && _account != null) _AccountCard(account: _account!),
+            if (_canSeeDashboard && _account != null && _status != null)
               _KpiGrid(account: _account!, status: _status!, trades: _trades),
-            if (_isAdmin && _status != null)
+            if (_canSeeDashboard && _status != null)
               _StatusCard(
                 status: _status!,
                 onToggle: _toggleBot,
               ),
-            if (_isAdmin && _blackout != null)
+            if (_canSeeDashboard && _blackout != null)
               _BlackoutCard(
                 status: _blackout!,
                 onChangeSymbol: _changeBlackoutSymbol,
               ),
-            if (_isAdmin && _regime != null) _RegimeCard(regime: _regime!),
-            if (_isAdmin && _correlations != null && _correlations!.pairs.isNotEmpty)
+            if (_canSeeDashboard && _regime != null) _RegimeCard(regime: _regime!),
+            if (_canSeeDashboard && _correlations != null && _correlations!.pairs.isNotEmpty)
               _CorrelationCard(data: _correlations!),
-            if (_isAdmin && _drift != null && _drift!.reports.isNotEmpty)
+            if (_canSeeDashboard && _drift != null && _drift!.reports.isNotEmpty)
               _DriftCard(data: _drift!),
-            if (_isAdmin && _fillStats != null && _fillStats!.symbols.isNotEmpty)
+            if (_canSeeDashboard && _fillStats != null && _fillStats!.symbols.isNotEmpty)
               _ExecutionQualityCard(data: _fillStats!),
-            if (_isAdmin && _allocator != null && _allocator!.allocations.isNotEmpty)
+            if (_canSeeDashboard && _allocator != null && _allocator!.allocations.isNotEmpty)
               _AllocatorCard(data: _allocator!),
           ],
         ),
@@ -297,6 +305,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   bool get _isAdmin => (widget.apiClient.role ?? 'admin') == 'admin';
+  bool get _canSeeDashboard => _isAdmin || _hasBroker;
 }
 
 class _WelcomeCard extends StatelessWidget {

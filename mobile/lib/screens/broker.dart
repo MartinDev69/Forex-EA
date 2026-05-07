@@ -200,10 +200,12 @@ class _BrokerScreenState extends State<BrokerScreen> {
                 padding: const EdgeInsets.all(12),
                 children: [
                   if (_loadError != null) _ErrorCard(message: _loadError!),
-                  // The live status reflects the singleton bot's MT5
-                  // connection — admin's broker. Hide it for non-admins
-                  // so they don't think it's their own.
-                  if (widget.apiClient.isAdmin) _StatusCard(status: _status),
+                  // Live status reflects the singleton bot's MT5
+                  // connection. Show it to admins always; show to
+                  // non-admins once they've saved their own config
+                  // (parallels the web dashboard's gating).
+                  if (widget.apiClient.isAdmin || (_saved != null && _saved!.login > 0))
+                    _StatusCard(status: _status),
                   _FormCard(
                     presets: _presets,
                     active: _broker,

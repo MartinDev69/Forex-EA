@@ -94,6 +94,14 @@ document.addEventListener("alpine:init", () => {
     me: localStorage.getItem(USER_KEY) || "",
     role: localStorage.getItem(ROLE_KEY) || "admin",
     get isAdmin() { return this.role === "admin"; },
+    // True once the operator has saved their own broker config — used
+    // to gate the panels that show global bot data. Admin always sees
+    // them; non-admin sees them after their broker form is saved.
+    get hasBroker() {
+      const c = this.brokerConfig;
+      return !!(c && c.login && c.login > 0);
+    },
+    get canSeeDashboard() { return this.isAdmin || this.hasBroker; },
     version: "v0.3",
     pollMs: POLL_MS,
     paletteOpen: false,
@@ -103,6 +111,7 @@ document.addEventListener("alpine:init", () => {
     strategies: [],
     trades: [],
     pending: [],
+    brokerConfig: null,        // user's own saved broker_config (per-username)
     tradeTab: 'open',     // 'open' | 'pending' | 'closed'
     tradeDate: '',        // 'YYYY-MM-DD' or '' for any
     heartbeat: "—",
@@ -147,7 +156,7 @@ document.addEventListener("alpine:init", () => {
 
     async tick() {
       try {
-        const [status, account, strategies, trades, blackout, regime, correlation, drift, fillStats, allocator, pending] = await Promise.all([
+        const [status, account, strategies, trades, blackout, regime, correlation, drift, fillStats, allocator, pending, brokerConfig] = await Promise.all([
           api("/status",     { token: this.token }),
           api("/account",    { token: this.token }),
           api("/strategies", { token: this.token }),
@@ -161,6 +170,7 @@ document.addEventListener("alpine:init", () => {
           api("/fills/stats?window_hours=24", { token: this.token }).catch(() => null),
           api("/allocator", { token: this.token }).catch(() => null),
           api("/orders/pending", { token: this.token }).catch(() => []),
+          api("/broker/config", { token: this.token }).catch(() => null),
         ]);
         this.status = status;
         this.account = account;
@@ -181,6 +191,7 @@ document.addEventListener("alpine:init", () => {
         this._prevTradeCount = newCount;
         this.trades = trades;
         this.pending = Array.isArray(pending) ? pending : [];
+        this.brokerConfig = brokerConfig || null;
 
         this.heartbeat = status?.last_heartbeat
           ? `heartbeat · ${this.fmtTime(status.last_heartbeat)}`
