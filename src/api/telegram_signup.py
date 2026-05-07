@@ -28,6 +28,7 @@ from typing import Any
 
 from .subscription_requests import (
     STATE_AWAITING_EMAIL,
+    STATE_AWAITING_PHONE,
     STATE_IDLE,
     SubscriptionRequestStore,
     VALID_DURATIONS,
@@ -74,6 +75,24 @@ WELCOME_MESSAGE = (
     "<b>How long would you like access for?</b>"
 )
 
+PHONE_PROMPT = (
+    "Great choice — <b>{duration_label}</b>.\n\n"
+    "Tap the button below to share your phone number with us. "
+    "We'll use it to keep your account on file."
+)
+
+# Custom keyboard with a single "Share my phone number" button. Telegram
+# replies with a contact object (phone_number, first_name, last_name)
+# in the next message — no typing required.
+SHARE_PHONE_KEYBOARD = {
+    "keyboard": [[{"text": "📱 Share my phone number", "request_contact": True}]],
+    "resize_keyboard": True,
+    "one_time_keyboard": True,
+}
+
+# Used to remove the custom keyboard once we've captured the contact.
+REMOVE_KEYBOARD = {"remove_keyboard": True}
+
 EMAIL_PROMPT = (
     "Great choice — <b>{duration_label}</b>.\n\n"
     "Please reply with the email address you'd like the setup link sent to. "
@@ -91,6 +110,12 @@ REQUEST_CONFIRMED = (
 INVALID_EMAIL = (
     "⚠️ That doesn't look like a valid email address. "
     "Please try again — just type the email and send."
+)
+
+NEED_CONTACT = (
+    "⚠️ I need you to tap the <b>📱 Share my phone number</b> button below "
+    "to continue. (Typing the number doesn't work — Telegram needs you "
+    "to tap the button so it knows you really own the number.)"
 )
 
 UNKNOWN_COMMAND = (
@@ -367,6 +392,28 @@ class TelegramSignupBot:
             return
 
         state = self._current_state(chat_id)
+
+        # Contact share — fires when the user tapped the "Share my phone
+        # number" button. The phone number arrives as a structured field,
+        # not text.
+        if "contact" in message:
+            contact = message["contact"] or {}
+            phone = (contact.get("phone_number") or "").strip()
+            if state == STATE_AWAITING_PHONE and phone:
+                self._handle_phone(
+                    chat_id, phone,
+                    username=username, first_name=first_name,
+                )
+                return
+
+        if state == STATE_AWAITING_PHONE:
+            # User typed something instead of tapping the button. Telegram
+            # only authenticates contacts via the share flow, so we have
+            # to ask again.
+            send_message(self.token, chat_id, NEED_CONTACT,
+                         reply_markup=SHARE_PHONE_KEYBOARD)
+            return
+
         if state == STATE_AWAITING_EMAIL:
             self._handle_email(chat_id, text, username=username, first_name=first_name)
             return
@@ -394,12 +441,13 @@ class TelegramSignupBot:
                              "That option isn't available — please /start over.")
                 return
             self.store.upsert_state(
-                chat_id, state=STATE_AWAITING_EMAIL, duration=code,
+                chat_id, state=STATE_AWAITING_PHONE, duration=code,
                 username=username, first_name=first_name,
             )
             send_message(
                 self.token, chat_id,
-                EMAIL_PROMPT.format(duration_label=DURATION_LABEL.get(code, code)),
+                PHONE_PROMPT.format(duration_label=DURATION_LABEL.get(code, code)),
+                reply_markup=SHARE_PHONE_KEYBOARD,
             )
 
     # -------------------------------------------------- conversation steps
@@ -412,6 +460,38 @@ class TelegramSignupBot:
         )
         send_message(self.token, chat_id, WELCOME_MESSAGE,
                      reply_markup=DURATION_KEYBOARD)
+
+    def _handle_phone(self, chat_id: int, phone: str, *,
+                      username: str | None, first_name: str | None) -> None:
+        """Captured phone number from the contact-share button. Creates
+        the pending request and confirms — all via Telegram, no email."""
+        # Telegram contacts often arrive without a leading + on some
+        # carriers; normalize so the dashboard always shows it that way.
+        clean = phone.strip()
+        if clean and not clean.startswith("+"):
+            clean = "+" + clean.lstrip("0")
+        duration = self._current_duration(chat_id)
+        if duration is None:
+            self._send_welcome(chat_id, username=username, first_name=first_name)
+            return
+        try:
+            self.store.create_request(
+                chat_id=chat_id, username=username, first_name=first_name,
+                duration=duration, email="", phone_number=clean,
+            )
+        except ValueError:
+            send_message(self.token, chat_id,
+                         "Sorry, that request couldn't be saved. /start to try again.",
+                         reply_markup=REMOVE_KEYBOARD)
+            return
+        self.store.upsert_state(
+            chat_id, state=STATE_IDLE, duration=None,
+            username=username, first_name=first_name,
+        )
+        send_message(self.token, chat_id, REQUEST_CONFIRMED,
+                     reply_markup=REMOVE_KEYBOARD)
+        log.info("subscription request from chat=%s phone=%s duration=%s",
+                 chat_id, clean, duration)
 
     def _handle_email(self, chat_id: int, text: str, *,
                       username: str | None, first_name: str | None) -> None:

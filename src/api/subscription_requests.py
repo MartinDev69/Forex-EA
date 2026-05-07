@@ -23,6 +23,7 @@ VALID_STATUSES = ("pending", "approved", "rejected")
 # Conversation states the signup bot walks each chat through.
 STATE_IDLE             = "idle"
 STATE_AWAITING_EMAIL   = "awaiting_email"
+STATE_AWAITING_PHONE   = "awaiting_phone"
 
 _REQUESTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS subscription_requests (
@@ -31,7 +32,8 @@ CREATE TABLE IF NOT EXISTS subscription_requests (
     telegram_username   TEXT,
     telegram_first_name TEXT,
     duration            TEXT NOT NULL,
-    email               TEXT NOT NULL,
+    email               TEXT NOT NULL DEFAULT '',
+    phone_number        TEXT,
     status              TEXT NOT NULL DEFAULT 'pending',
     created_at          TEXT NOT NULL,
     decided_at          TEXT,
@@ -71,6 +73,7 @@ class SubscriptionRequest:
     telegram_first_name: str | None
     duration: str
     email: str
+    phone_number: str | None
     status: str
     created_at: str
     decided_at: str | None
@@ -97,6 +100,9 @@ class SubscriptionRequestStore:
             c.execute(_REQUESTS_SCHEMA)
             c.execute(_STATE_SCHEMA)
             c.execute(_OFFSET_SCHEMA)
+            cols = {r["name"] for r in c.execute("PRAGMA table_info(subscription_requests)")}
+            if "phone_number" not in cols:
+                c.execute("ALTER TABLE subscription_requests ADD COLUMN phone_number TEXT")
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -150,7 +156,7 @@ class SubscriptionRequestStore:
 
     def create_request(
         self, *, chat_id: int, username: str | None, first_name: str | None,
-        duration: str, email: str,
+        duration: str, email: str = "", phone_number: str | None = None,
     ) -> int:
         if duration not in VALID_DURATIONS:
             raise ValueError(f"invalid duration: {duration}")
@@ -160,10 +166,10 @@ class SubscriptionRequestStore:
                 """
                 INSERT INTO subscription_requests
                   (telegram_chat_id, telegram_username, telegram_first_name,
-                   duration, email, status, created_at)
-                VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                   duration, email, phone_number, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
                 """,
-                (chat_id, username, first_name, duration, email, now),
+                (chat_id, username, first_name, duration, email, phone_number, now),
             )
             return int(cur.lastrowid)
 
@@ -232,7 +238,8 @@ class SubscriptionRequestStore:
             telegram_username=row["telegram_username"],
             telegram_first_name=row["telegram_first_name"],
             duration=row["duration"],
-            email=row["email"],
+            email=row["email"] or "",
+            phone_number=(row["phone_number"] if "phone_number" in row.keys() else None),
             status=row["status"],
             created_at=row["created_at"],
             decided_at=row["decided_at"],

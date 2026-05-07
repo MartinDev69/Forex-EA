@@ -357,6 +357,7 @@ class SubscriptionRequestResponse(BaseModel):
     telegram_first_name: str | None
     duration: str
     email: str
+    phone_number: str | None = None
     status: str
     created_at: str
     decided_at: str | None
@@ -902,6 +903,7 @@ def _request_to_response(r: SubscriptionRequest) -> SubscriptionRequestResponse:
         telegram_first_name=r.telegram_first_name,
         duration=r.duration,
         email=r.email,
+        phone_number=r.phone_number,
         status=r.status,
         created_at=r.created_at,
         decided_at=r.decided_at,
@@ -964,8 +966,13 @@ def approve_subscription_request(
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
 
+    # Phone-based signups have an empty email field — fall back to a
+    # synthetic placeholder so the user_store row insert doesn't fail
+    # its NOT NULL on email. Real email can be added later via Resend
+    # link if the admin wants it.
+    contact_email = req.email or f"telegram-{req.telegram_chat_id}@no-email.local"
     try:
-        user_store.assign(ad_id, req.email, duration=duration)
+        user_store.assign(ad_id, contact_email, duration=duration)
     except ValueError as e:
         raise HTTPException(409, str(e)) from None
 
@@ -978,7 +985,7 @@ def approve_subscription_request(
 
     # Mint the setup token regardless of delivery method — the URL
     # itself is short-lived and harmless to generate.
-    token, exp, url = create_setup_token(ad_id, req.email)
+    token, exp, url = create_setup_token(ad_id, contact_email)
     hours = SETUP_TTL_S // 3600
 
     delivery = body.delivery or "telegram"
@@ -998,14 +1005,17 @@ def approve_subscription_request(
             )
 
     if delivery in ("email", "both"):
-        try:
-            send_setup_email(
-                to=req.email, ad_id=ad_id, setup_url=url, expires_hours=hours,
-            )
-            email_ok = True
-        except Exception as e:
-            last_email_error = str(e)
-            log.exception("approval email failed for %s", req.email)
+        if not req.email:
+            last_email_error = "no email on record (phone-based signup)"
+        else:
+            try:
+                send_setup_email(
+                    to=req.email, ad_id=ad_id, setup_url=url, expires_hours=hours,
+                )
+                email_ok = True
+            except Exception as e:
+                last_email_error = str(e)
+                log.exception("approval email failed for %s", req.email)
 
     # If telegram-only and the DM failed, that's the only delivery path
     # — fail loud so the admin knows. Same for email-only.

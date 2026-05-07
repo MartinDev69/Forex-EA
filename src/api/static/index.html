@@ -1202,7 +1202,7 @@
               <thead>
                 <tr>
                   <th>From</th>
-                  <th>Email</th>
+                  <th>Contact</th>
                   <th>Duration</th>
                   <th>Submitted</th>
                   <th></th>
@@ -1215,7 +1215,12 @@
                       <div style="font-family:var(--mono);font-size:12px" x-text="r.telegram_first_name || '—'"></div>
                       <div style="font-size:10px;color:var(--muted)" x-text="r.telegram_username ? '@' + r.telegram_username : 'chat ' + r.telegram_chat_id"></div>
                     </td>
-                    <td><span class="user-email" x-text="r.email"></span></td>
+                    <td>
+                      <span class="user-email" style="font-family:var(--mono)"
+                            x-text="r.phone_number || r.email || '—'"></span>
+                      <div x-show="r.phone_number" style="font-size:9px;color:var(--muted);letter-spacing:0.1em">📱 phone</div>
+                      <div x-show="!r.phone_number && r.email" style="font-size:9px;color:var(--muted);letter-spacing:0.1em">✉️ email</div>
+                    </td>
                     <td>
                       <select x-model="approveDuration[r.id]"
                               style="background:var(--surface2);border:1px solid var(--edge2);border-radius:6px;color:var(--text);padding:3px 6px;font-size:11px;font-family:var(--mono)">
