@@ -24,6 +24,7 @@ Run locally:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -96,6 +97,9 @@ from src.voice import (
 from src.watchdog import HeartbeatStore
 
 import jwt as _jwt  # noqa: E402  — for exception types in /auth/setup
+
+log = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
