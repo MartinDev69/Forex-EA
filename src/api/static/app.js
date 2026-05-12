@@ -894,6 +894,52 @@ document.addEventListener("alpine:init", () => {
   }));
 
   // ---------- USERS (admin only) ----------
+  // ---------- COPY-TRADER EA SETUP ----------
+  Alpine.data("eaSetup", () => ({
+    token: localStorage.getItem(TOKEN_KEY),
+    cfg: { api_base_url: "", api_key: "", ad_id: "" },
+    show_key: false,
+    busy: false,
+    msg: "",
+    msgOk: true,
+    async load() {
+      if (!this.token) return;
+      try {
+        this.cfg = await api("/me/ea-config", { token: this.token });
+      } catch (e) {
+        this.msg = `Couldn't load EA config: ${e.message || e}`;
+        this.msgOk = false;
+      }
+    },
+    async rotate() {
+      if (!confirm("Rotate your EA API key? Your installed EA will stop working until you paste the new key.")) return;
+      this.busy = true;
+      try {
+        this.cfg = await api("/me/ea-config/rotate", { method: "POST", token: this.token });
+        this.msg = "New key generated. Paste it into your EA's Inputs tab.";
+        this.msgOk = true;
+      } catch (e) {
+        this.msg = `Rotate failed: ${e.message || e}`;
+        this.msgOk = false;
+      } finally {
+        this.busy = false;
+        setTimeout(() => { this.msg = ""; }, 6000);
+      }
+    },
+    async copy(value, label) {
+      if (!value) return;
+      try {
+        await navigator.clipboard.writeText(value);
+        this.msg = `${label} copied to clipboard.`;
+        this.msgOk = true;
+      } catch (e) {
+        this.msg = `Copy failed — select & copy the field manually.`;
+        this.msgOk = false;
+      }
+      setTimeout(() => { this.msg = ""; }, 3000);
+    },
+  }));
+
   Alpine.data("users", () => ({
     token: localStorage.getItem(TOKEN_KEY),
     role: localStorage.getItem(ROLE_KEY) || "admin",

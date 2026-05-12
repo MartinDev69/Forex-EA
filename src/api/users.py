@@ -131,6 +131,11 @@ class UserStore:
             c.execute("ALTER TABLE auth_users ADD COLUMN phone_number TEXT")
         if "display_name" not in cols:
             c.execute("ALTER TABLE auth_users ADD COLUMN display_name TEXT")
+        # Long-lived API key for the user's MetaTrader copy-trading EA.
+        # Issued once when the user activates their password; the EA
+        # passes it as Authorization: Bearer <key>.
+        if "ea_api_key" not in cols:
+            c.execute("ALTER TABLE auth_users ADD COLUMN ea_api_key TEXT")
         # password_hash was NOT NULL pre-setup-flow; make it nullable so we can
         # pre-seed assigned users before they've chosen a password. SQLite
         # can't ALTER constraints in place, so we migrate via table rebuild
@@ -418,6 +423,59 @@ class UserStore:
                 (new_hash, username),
             )
         return cur.rowcount > 0
+
+    def ensure_ea_api_key(self, username: str) -> str:
+        """Return the user's EA API key; generates one on first call.
+
+        Idempotent — once a key is issued, subsequent calls return the
+        same key (don't regenerate, since the user's installed EA
+        already has the old one configured).
+        """
+        import secrets
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT ea_api_key FROM auth_users WHERE username = ?",
+                (username,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(username)
+            existing = row["ea_api_key"]
+            if existing:
+                return existing
+            new_key = "ea_" + secrets.token_urlsafe(32)
+            c.execute(
+                "UPDATE auth_users SET ea_api_key = ? WHERE username = ?",
+                (new_key, username),
+            )
+            return new_key
+
+    def rotate_ea_api_key(self, username: str) -> str:
+        """Force-issue a new EA key, invalidating any existing one.
+        User's currently-installed EA stops working until they re-paste
+        the new key — useful after a leak.
+        """
+        import secrets
+        new_key = "ea_" + secrets.token_urlsafe(32)
+        with self._conn() as c:
+            cur = c.execute(
+                "UPDATE auth_users SET ea_api_key = ? WHERE username = ?",
+                (new_key, username),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(username)
+        return new_key
+
+    def get_username_by_ea_key(self, key: str) -> str | None:
+        """Reverse lookup for the EA's bearer token. Returns None if
+        the key isn't recognised.
+        """
+        if not key or not key.startswith("ea_"):
+            return None
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT username FROM auth_users WHERE ea_api_key = ?", (key,),
+            ).fetchone()
+        return row["username"] if row else None
 
     def get_hash(self, username: str) -> str | None:
         with self._conn() as c:

@@ -550,6 +550,40 @@
 
     .section { margin-bottom: 28px; }
 
+    /* Copy-trader EA setup */
+    .ea-cfg-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+    }
+    .ea-cfg-field label {
+      display: block; font-size: 10px; letter-spacing: 0.22em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 5px;
+      font-weight: 500;
+    }
+    .ea-steps {
+      display: flex; flex-direction: column; gap: 10px;
+      margin-top: 4px; padding-top: 12px;
+      border-top: 1px dashed var(--edge);
+    }
+    .ea-step {
+      display: grid; grid-template-columns: 28px 1fr; gap: 12px; align-items: start;
+    }
+    .ea-step-n {
+      width: 24px; height: 24px; border-radius: 50%;
+      background: var(--gdim); border: 1px solid var(--gglow);
+      color: var(--green); font-family: var(--mono); font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px;
+    }
+    .ea-step-h { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+    .ea-step-b { font-size: 12px; color: var(--text2); line-height: 1.5; }
+    .ea-step code {
+      background: var(--surface2); border: 1px solid var(--edge); padding: 1px 6px;
+      border-radius: 4px; font-family: var(--mono); font-size: 11px;
+    }
+    @media (max-width: 700px) {
+      .ea-cfg-grid { grid-template-columns: 1fr; }
+    }
+
     /* Trade tabs */
     .trade-tabs {
       display: flex; gap: 4px;
@@ -703,6 +737,102 @@
           <img src="/static/img/robot-iridescent.jpg" class="hero-robot-img" alt="" />
           <div class="hero-robot-overlay"></div>
           <div class="hero-robot-tag">AI Engine</div>
+        </div>
+      </div>
+
+      <!-- Your EA Setup — only shown to non-admin operators. This is
+           the bridge between their AntiGreed access and the MetaTrader
+           EA that actually copies the bot's trades onto their account. -->
+      <div x-show="!isAdmin" class="section" x-data="eaSetup" x-init="load()">
+        <div class="sec-hd">Your copy-trading EA</div>
+        <div class="panel">
+          <div class="panel-body" style="display:flex;flex-direction:column;gap:14px">
+            <div style="font-size:13px;color:var(--text2);line-height:1.55">
+              The AntiGreed bot runs on the admin's account. To mirror its trades
+              onto <em>your</em> MT5 account, install the <b>AntiGreedCopier</b>
+              Expert Advisor below and paste your credentials. Every time the bot
+              opens or closes a trade, the EA replays it on your terminal.
+            </div>
+
+            <div class="ea-cfg-grid">
+              <div class="ea-cfg-field">
+                <label>API base URL</label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="text" readonly x-model="cfg.api_base_url"
+                         style="flex:1;background:var(--surface2);border:1px solid var(--edge2);border-radius:8px;padding:9px 12px;color:var(--text);font-family:var(--mono);font-size:12px"/>
+                  <button class="btn-ol-g" style="padding:8px 12px;font-size:11px"
+                          @click="copy(cfg.api_base_url, 'API URL')">Copy</button>
+                </div>
+              </div>
+              <div class="ea-cfg-field">
+                <label>AD-ID</label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="text" readonly x-model="cfg.ad_id"
+                         style="flex:1;background:var(--surface2);border:1px solid var(--edge2);border-radius:8px;padding:9px 12px;color:var(--text);font-family:var(--mono);font-size:12px"/>
+                  <button class="btn-ol-g" style="padding:8px 12px;font-size:11px"
+                          @click="copy(cfg.ad_id, 'AD-ID')">Copy</button>
+                </div>
+              </div>
+              <div class="ea-cfg-field" style="grid-column:1/-1">
+                <label>API key <span style="color:var(--muted);text-transform:none;letter-spacing:0;font-size:9px">(treat like a password)</span></label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input :type="show_key ? 'text' : 'password'" readonly x-model="cfg.api_key"
+                         style="flex:1;background:var(--surface2);border:1px solid var(--edge2);border-radius:8px;padding:9px 12px;color:var(--text);font-family:var(--mono);font-size:12px"/>
+                  <button class="btn-ol-g" style="padding:8px 10px;font-size:11px"
+                          @click="show_key = !show_key" x-text="show_key ? 'Hide' : 'Show'"></button>
+                  <button class="btn-ol-g" style="padding:8px 10px;font-size:11px"
+                          @click="copy(cfg.api_key, 'API key')">Copy</button>
+                  <button class="btn-ol-r" style="padding:8px 10px;font-size:11px"
+                          @click="rotate()" :disabled="busy">Rotate</button>
+                </div>
+                <div style="font-size:10px;color:var(--muted);margin-top:4px">
+                  Rotating the key invalidates the one in your installed EA — paste the new value into the EA after rotating.
+                </div>
+              </div>
+            </div>
+
+            <div class="ea-steps">
+              <div class="ea-step">
+                <div class="ea-step-n">1</div>
+                <div>
+                  <div class="ea-step-h">Download AntiGreedCopier</div>
+                  <div class="ea-step-b">Save <code>AntiGreedCopier.mq5</code> into your MetaTrader 5 data folder under <code>MQL5\Experts\</code>.</div>
+                  <a class="btn-sl-g" style="margin-top:6px;display:inline-block;padding:7px 14px;font-size:11px;text-decoration:none"
+                     href="https://raw.githubusercontent.com/MartinDev69/Forex-EA/main/mt5/AntiGreedCopier.mq5"
+                     target="_blank" rel="noopener">Download .mq5</a>
+                </div>
+              </div>
+              <div class="ea-step">
+                <div class="ea-step-n">2</div>
+                <div>
+                  <div class="ea-step-h">Compile in MetaEditor</div>
+                  <div class="ea-step-b">Open MT5 → press F4 → open <code>AntiGreedCopier.mq5</code> → press F7. Should report "0 errors, 0 warnings".</div>
+                </div>
+              </div>
+              <div class="ea-step">
+                <div class="ea-step-n">3</div>
+                <div>
+                  <div class="ea-step-h">Whitelist the API URL</div>
+                  <div class="ea-step-b">In MT5: <b>Tools → Options → Expert Advisors</b> → tick <em>"Allow WebRequest for listed URL"</em> and add the API base URL above. Otherwise MT5 blocks outbound HTTP.</div>
+                </div>
+              </div>
+              <div class="ea-step">
+                <div class="ea-step-n">4</div>
+                <div>
+                  <div class="ea-step-h">Attach to any chart</div>
+                  <div class="ea-step-b">Drag the EA from Navigator onto any chart (symbol doesn't matter — the EA picks symbols from the signals). In the Inputs tab, paste the API URL, the API key, and your AD-ID from above.</div>
+                </div>
+              </div>
+              <div class="ea-step">
+                <div class="ea-step-n">5</div>
+                <div>
+                  <div class="ea-step-h">Enable Algo Trading</div>
+                  <div class="ea-step-b">Click the green <b>Algo Trading</b> button in the MT5 toolbar. The EA's smiley face should appear in the top-right of the chart. You're done.</div>
+                </div>
+              </div>
+            </div>
+            <div x-show="msg" :class="msgOk ? 'ok-flash' : 'err-flash'" x-text="msg" style="font-size:12px"></div>
+          </div>
         </div>
       </div>
 

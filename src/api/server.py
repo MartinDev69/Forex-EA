@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,7 +40,7 @@ from dotenv import load_dotenv
 # under NSSM where only PYTHONUTF8 is injected explicitly.
 load_dotenv()
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -64,6 +65,7 @@ from src.api.mailer import send_setup_email
 from src.api.setup_tokens import SETUP_TTL_S, create_setup_token, decode_setup_token
 from src.api.totp import generate_secret, provisioning_uri, verify_code
 from src.api.totp_store import TOTPStore
+from src.api.ea_signals import SignalFeed
 from src.api.subscription_requests import (
     SubscriptionRequest,
     SubscriptionRequestStore,
@@ -211,6 +213,7 @@ toggle_store.initialize_defaults({
 })
 user_store = UserStore(_DB)
 subscription_request_store = SubscriptionRequestStore(_DB)
+signal_feed = SignalFeed(_DB)
 SIGNUP_BOT_TOKEN = os.environ.get("SIGNUP_TELEGRAM_BOT_TOKEN", "").strip() or None
 ADMIN_TG_CHAT_ID = (
     int(os.environ["TELEGRAM_CHAT_ID"])
@@ -234,6 +237,24 @@ def current_user(user: dict = Depends(_current_user_jwt)) -> dict:
             headers={"WWW-Authenticate": "Bearer"},
         )
     return user
+
+
+def ea_caller(authorization: str = Header(default="")) -> str:
+    """Dependency for the EA-facing endpoints. Resolves a Bearer EA
+    API key to a username, applies the same expired-subscription gate
+    as current_user. Returns the username string.
+    """
+    if not authorization.lower().startswith("bearer "):
+        raise HTTPException(401, "missing bearer token")
+    key = authorization.split(" ", 1)[1].strip()
+    username = user_store.get_username_by_ea_key(key)
+    if username is None:
+        raise HTTPException(401, "invalid EA API key")
+    if user_store.is_expired(username):
+        raise HTTPException(
+            403, "subscription expired — contact admin to renew",
+        )
+    return username
 
 
 def require_admin(user: dict = Depends(current_user)) -> dict:
@@ -792,6 +813,117 @@ def list_pending_orders(_user: dict = Depends(current_user)) -> list[dict]:
     ]
 
 
+# ---------- EA copy-trader endpoints ----------
+
+class EAConfigResponse(BaseModel):
+    """Config the user pastes into the AntiGreedCopier EA."""
+    api_base_url: str
+    api_key: str
+    ad_id: str
+    instructions_url: str | None = None
+
+
+@app.get("/me/ea-config", response_model=EAConfigResponse)
+def my_ea_config(user: dict = Depends(current_user)) -> EAConfigResponse:
+    """Return the current user's copy-trading EA config — base URL,
+    API key, AD-ID. Generates the key on first call if missing.
+    Admin doesn't need this (they're the source, not the copier),
+    but the endpoint is open to all users for symmetry.
+    """
+    username = user.get("username") or user.get("sub") or ""
+    if not username:
+        raise HTTPException(400, "username missing from token")
+    try:
+        key = user_store.ensure_ea_api_key(username)
+    except KeyError:
+        raise HTTPException(404, "user not found") from None
+    base = os.environ.get("PUBLIC_BASE_URL") or "http://163.5.178.251:8000"
+    return EAConfigResponse(
+        api_base_url=base.rstrip("/"),
+        api_key=key,
+        ad_id=username,
+    )
+
+
+@app.post("/me/ea-config/rotate", response_model=EAConfigResponse)
+def rotate_my_ea_config(user: dict = Depends(current_user)) -> EAConfigResponse:
+    """Force a new EA API key — invalidates the old one. The user's
+    installed EA stops working until they paste the new key. Use this
+    after a leak / lost device.
+    """
+    username = user.get("username") or user.get("sub") or ""
+    if not username:
+        raise HTTPException(400, "username missing from token")
+    try:
+        key = user_store.rotate_ea_api_key(username)
+    except KeyError:
+        raise HTTPException(404, "user not found") from None
+    base = os.environ.get("PUBLIC_BASE_URL") or "http://163.5.178.251:8000"
+    return EAConfigResponse(
+        api_base_url=base.rstrip("/"), api_key=key, ad_id=username,
+    )
+
+
+@app.get("/signals/feed")
+def signal_feed_endpoint(
+    since: str | None = None,
+    limit: int = 100,
+    username: str = Depends(ea_caller),
+) -> dict:
+    """Polled by the AntiGreedCopier EA. Returns OPEN/CLOSE events
+    with a timestamp newer than ``since`` (ISO-8601). On first poll
+    (no ``since``) the feed bookmarks the latest known event and
+    returns an empty list — the EA only acts on trades that fire
+    *after* it boots, never replays historical opens.
+    """
+    if limit <= 0 or limit > 500:
+        limit = 100
+    try:
+        events = signal_feed.events_since(since, limit=limit)
+    except Exception:
+        log.exception("signal feed query failed")
+        raise HTTPException(500, "feed query failed") from None
+    # Always include a bookmark — the EA stores it and sends it back.
+    # On the cold-start (since=None) path we still return the latest
+    # known timestamp so the EA can begin polling forward from there.
+    if not since:
+        try:
+            with sqlite3.connect(_DB) as c:
+                row = c.execute(
+                    "SELECT COALESCE(MAX(ts), '1970-01-01T00:00:00+00:00') AS mx "
+                    "FROM ("
+                    "  SELECT opened_at AS ts FROM trades "
+                    "  UNION ALL "
+                    "  SELECT closed_at AS ts FROM trades WHERE closed_at IS NOT NULL"
+                    ")"
+                ).fetchone()
+            bookmark = row[0]
+        except Exception:
+            bookmark = "1970-01-01T00:00:00+00:00"
+    else:
+        bookmark = events[-1].ts if events else since
+    return {
+        "user": username,
+        "bookmark": bookmark,
+        "events": [
+            {
+                "type": e.event_type,
+                "trade_id": e.trade_id,
+                "ts": e.ts,
+                "symbol": e.symbol,
+                "side": e.side,
+                "lot_size": e.lot_size,
+                "price": e.price,
+                "stop_loss": e.stop_loss,
+                "take_profit": e.take_profit,
+                "strategy": e.strategy,
+                "broker_ticket": e.broker_ticket,
+            }
+            for e in events
+        ],
+    }
+
+
 @app.get("/broker/status", response_model=BrokerStatusResponse)
 def get_broker_status(_user: dict = Depends(current_user)) -> BrokerStatusResponse:
     s = broker_status_store.read()
@@ -1200,6 +1332,12 @@ def complete_setup(token: str, body: SetupPasswordRequest) -> dict[str, bool]:
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
     user_store.set_password(claims["ad_id"], pw_hash)
+    # Issue the user's long-lived EA API key now so it's ready when
+    # they download the copy-trading EA. Idempotent on re-activation.
+    try:
+        user_store.ensure_ea_api_key(claims["ad_id"])
+    except Exception:
+        log.exception("ensure_ea_api_key failed for %s", claims["ad_id"])
     return {"activated": True}
 
 
