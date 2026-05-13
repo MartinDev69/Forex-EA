@@ -511,8 +511,8 @@ class TradeResponse(BaseModel):
     close_reason: str | None = None
 
 
-def _open_positions() -> int:
-    rows = journal.recent(limit=200)
+def _open_positions(since_iso: str | None = None) -> int:
+    rows = journal.recent(limit=200, since_iso=since_iso)
     return sum(1 for r in rows if r.get("status") == "OPEN")
 
 
@@ -594,10 +594,14 @@ def account(user: dict = Depends(current_user)) -> AccountResponse:
             balance = float(report.balance or 0.0)
             equity = float(report.equity or balance)
             floating = equity - balance
+            since_iso = (
+                report.first_seen_at.isoformat()
+                if report.first_seen_at else None
+            )
             return AccountResponse(
                 balance=balance,
                 equity=equity,
-                open_positions=_open_positions(),
+                open_positions=_open_positions(since_iso=since_iso),
                 daily_pnl=floating,
             )
         # No EA snapshot yet: return zeros so the user doesn't see
@@ -670,8 +674,18 @@ def toggle_strategy(name: str, _user: dict = Depends(require_2fa)) -> StrategyRe
 
 
 @app.get("/trades", response_model=list[TradeResponse])
-def trades(limit: int = 20, _user: dict = Depends(current_user)) -> list[TradeResponse]:
-    rows = journal.recent(limit=limit)
+def trades(limit: int = 20, user: dict = Depends(current_user)) -> list[TradeResponse]:
+    # Non-admin operators only see trades from the moment their EA first
+    # checked in. Before that, the master trades aren't "theirs" — the
+    # EA wasn't online to copy them.
+    since_iso: str | None = None
+    if user.get("role") != "admin":
+        username = user.get("username") or user.get("sub") or ""
+        report = ea_account_store.get(username) if username else None
+        if report is None or report.first_seen_at is None:
+            return []
+        since_iso = report.first_seen_at.isoformat()
+    rows = journal.recent(limit=limit, since_iso=since_iso)
     out: list[TradeResponse] = []
     for r in rows:
         sl = r.get("stop_loss")

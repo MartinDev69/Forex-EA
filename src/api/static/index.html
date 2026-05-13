@@ -585,6 +585,18 @@
       margin-top: 6px; padding-left: 10px;
       border-left: 2px solid var(--edge);
     }
+    .ea-toggle {
+      cursor: pointer; user-select: none;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px;
+    }
+    .ea-toggle:hover { color: var(--green); }
+    .ea-chev {
+      display: inline-block; font-size: 10px;
+      transition: transform 0.15s ease;
+      color: var(--muted);
+    }
+    .ea-chev.open { transform: rotate(90deg); color: var(--green); }
     .ea-os-tab-row {
       display: flex; gap: 4px; margin-top: 12px;
       background: var(--surface); border: 1px solid var(--edge);
@@ -759,9 +771,13 @@
       <!-- Your EA Setup — only shown to non-admin operators. This is
            the bridge between their AntiGreed access and the MetaTrader
            EA that actually copies the bot's trades onto their account. -->
-      <div x-show="!isAdmin" class="section" x-data="eaSetup" x-init="load()">
-        <div class="sec-hd">Your copy-trading EA</div>
-        <div class="panel">
+      <div x-show="!isAdmin" class="section" x-data="eaSetup">
+        <div class="sec-hd ea-toggle" @click="toggle()" role="button" tabindex="0"
+             @keydown.enter.prevent="toggle()" @keydown.space.prevent="toggle()">
+          <span>Your copy-trading EA</span>
+          <span class="ea-chev" :class="expanded ? 'open' : ''" aria-hidden="true">▸</span>
+        </div>
+        <div class="panel" x-show="expanded" x-transition>
           <div class="panel-body" style="display:flex;flex-direction:column;gap:14px">
             <div style="font-size:13px;color:var(--text2);line-height:1.55">
               The AntiGreed bot runs on the admin's account. To mirror its trades

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/client.dart';
@@ -8,6 +9,7 @@ import '../models/broker.dart';
 import '../models/calendar.dart';
 import '../models/correlation.dart';
 import '../models/drift.dart';
+import '../models/ea_config.dart';
 import '../models/fill_stats.dart';
 import '../models/regime.dart';
 import '../models/status.dart';
@@ -46,6 +48,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // always pass; non-admins see the welcome panel until this is true,
   // then the full dashboard.
   bool _hasBroker = false;
+  EaConfig? _eaConfig;
   String _blackoutSymbol = _kDefaultBlackoutSymbol;
   bool _loading = true;
   String? _error;
@@ -106,6 +109,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _loading = false;
         _error = null;
       });
+      // Pull EA config out-of-band for non-admins so we can render the
+      // copy-trading panel. Done after the main payload so a failure
+      // here doesn't blow up the dashboard.
+      if (!_isAdmin && _eaConfig == null) {
+        try {
+          final c = await widget.apiClient.eaConfig();
+          if (mounted) setState(() => _eaConfig = c);
+        } catch (_) {
+          // Silent — the panel just stays unfilled and the user sees a
+          // refresh button. Common case is a transient network blip.
+        }
+      }
     } on UnauthorizedException {
       // Token expired — bail back to login. ApiClient already cleared it.
       _timer?.cancel();
@@ -148,6 +163,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _blackoutSymbol = next);
     await _saveSymbol(next);
     await _refresh();
+  }
+
+  Future<void> _rotateEaKey() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rotate EA API key?'),
+        content: const Text(
+          'Your installed AntiGreedCopier EA will stop working until you '
+          'paste the new key into its Inputs tab.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Rotate'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      final c = await widget.apiClient.rotateEaKey();
+      if (!mounted) return;
+      setState(() => _eaConfig = c);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('New key generated — paste it into your EA.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Rotate failed: $e')),
+      );
+    }
   }
 
   Future<void> _toggleBot() async {
@@ -276,6 +328,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             if (!_canSeeDashboard)
               _WelcomeCard(adId: widget.apiClient.username ?? 'operator'),
 
+            // Copy-trading EA setup — collapsible, hidden by default
+            // for non-admins so it doesn't dominate the dashboard.
+            if (!_isAdmin) _EaSetupCard(config: _eaConfig, onRotate: _rotateEaKey),
+
             if (_canSeeDashboard && _account != null) _AccountCard(account: _account!),
             if (_canSeeDashboard && _account != null && _status != null)
               _KpiGrid(account: _account!, status: _status!, trades: _trades),
@@ -369,6 +425,291 @@ class _WelcomeCard extends StatelessWidget {
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EaSetupCard extends StatefulWidget {
+  const _EaSetupCard({required this.config, required this.onRotate});
+  final EaConfig? config;
+  final Future<void> Function() onRotate;
+
+  @override
+  State<_EaSetupCard> createState() => _EaSetupCardState();
+}
+
+class _EaSetupCardState extends State<_EaSetupCard> {
+  bool _showKey = false;
+  bool _rotating = false;
+
+  Future<void> _copy(String value, String label) async {
+    if (value.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: value));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$label copied to clipboard.')),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final accent = isDark ? kNeonGreen : kLightWin;
+    final cfg = widget.config;
+    final keyDisplay = cfg == null
+        ? '—'
+        : (_showKey ? cfg.apiKey : _mask(cfg.apiKey));
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+      decoration: BoxDecoration(
+        color: isDark ? kSurface : kLightSurface,
+        border: Border.all(color: isDark ? kEdge : kLightEdge),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Theme(
+        // Strip ExpansionTile's default top/bottom divider — the card
+        // already has its own border.
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          iconColor: accent,
+          collapsedIconColor: mutedColor(context),
+          title: Row(
+            children: [
+              Icon(Icons.precision_manufacturing_outlined, size: 18, color: accent),
+              const SizedBox(width: 10),
+              Text(
+                'Your copy-trading EA',
+                style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w700,
+                  color: isDark ? kText : kLightText,
+                ),
+              ),
+            ],
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              cfg == null
+                  ? 'Loading…'
+                  : 'API key + install steps for AntiGreedCopier',
+              style: TextStyle(color: mutedColor(context), fontSize: 11),
+            ),
+          ),
+          children: [
+            Text(
+              'The AntiGreed bot runs on the admin\'s account. To mirror its '
+              'trades onto your MT5, install the AntiGreedCopier EA and paste '
+              'these three values into its Inputs tab.',
+              style: TextStyle(color: mutedColor(context), fontSize: 12, height: 1.5),
+            ),
+            const SizedBox(height: 12),
+            _EaField(
+              label: 'API URL',
+              value: cfg?.apiBaseUrl ?? '—',
+              onCopy: () => _copy(cfg?.apiBaseUrl ?? '', 'API URL'),
+            ),
+            _EaField(
+              label: 'API key',
+              value: keyDisplay,
+              monospace: true,
+              onCopy: () => _copy(cfg?.apiKey ?? '', 'API key'),
+              trailing: IconButton(
+                tooltip: _showKey ? 'Hide' : 'Show',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(
+                  _showKey ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                  size: 18,
+                ),
+                onPressed: () => setState(() => _showKey = !_showKey),
+              ),
+            ),
+            _EaField(
+              label: 'AD-ID',
+              value: cfg?.adId ?? '—',
+              monospace: true,
+              onCopy: () => _copy(cfg?.adId ?? '', 'AD-ID'),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _rotating ? null : () async {
+                    setState(() => _rotating = true);
+                    await widget.onRotate();
+                    if (mounted) setState(() => _rotating = false);
+                  },
+                  icon: const Icon(Icons.refresh, size: 16),
+                  label: Text(_rotating ? 'Rotating…' : 'Rotate key'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            const Divider(),
+            const SizedBox(height: 6),
+            Text(
+              'INSTALL · 5 STEPS',
+              style: TextStyle(
+                color: accent, fontSize: 10, letterSpacing: 2.6,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 10),
+            ..._installSteps(context).asMap().entries.map((e) {
+              return _EaStep(n: e.key + 1, body: e.value);
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _mask(String key) {
+    if (key.length <= 12) return '••••••••';
+    return '${key.substring(0, 4)}••••••••${key.substring(key.length - 4)}';
+  }
+
+  List<Widget> _installSteps(BuildContext context) {
+    final muted = mutedColor(context);
+    final code = TextStyle(
+      fontFamily: 'monospace', fontSize: 11.5,
+      color: Theme.of(context).brightness == Brightness.dark ? kText : kLightText,
+    );
+    return [
+      Text.rich(TextSpan(style: TextStyle(color: muted, fontSize: 12, height: 1.5), children: [
+        const TextSpan(text: 'Download '),
+        TextSpan(text: 'AntiGreedCopier.mq5', style: code),
+        const TextSpan(text: ' from the web dashboard and drop it into MT5\'s data folder under '),
+        TextSpan(text: 'MQL5/Experts/', style: code),
+        const TextSpan(text: '. (File → Open Data Folder inside MT5 opens the right place.)'),
+      ])),
+      Text.rich(TextSpan(style: TextStyle(color: muted, fontSize: 12, height: 1.5), children: [
+        const TextSpan(text: 'In MT5 press '),
+        TextSpan(text: 'F4', style: code),
+        const TextSpan(text: ' to open MetaEditor, open the file, press '),
+        TextSpan(text: 'F7', style: code),
+        const TextSpan(text: ' to compile. Should report 0 errors.'),
+      ])),
+      Text.rich(TextSpan(style: TextStyle(color: muted, fontSize: 12, height: 1.5), children: [
+        const TextSpan(text: 'Tools → Options → Expert Advisors → tick '),
+        const TextSpan(text: '"Allow WebRequest for listed URL"', style: TextStyle(fontStyle: FontStyle.italic)),
+        const TextSpan(text: ' and add the API URL above.'),
+      ])),
+      Text.rich(TextSpan(style: TextStyle(color: muted, fontSize: 12, height: 1.5), children: [
+        const TextSpan(text: 'Drag AntiGreedCopier from the Navigator onto any chart. In the Inputs tab, paste the three values above.'),
+      ])),
+      Text.rich(TextSpan(style: TextStyle(color: muted, fontSize: 12, height: 1.5), children: [
+        const TextSpan(text: 'Click the green '),
+        const TextSpan(text: 'Algo Trading', style: TextStyle(fontWeight: FontWeight.w700)),
+        const TextSpan(text: ' button. The 😊 in the chart\'s top-right means the EA is live.'),
+      ])),
+    ];
+  }
+}
+
+class _EaField extends StatelessWidget {
+  const _EaField({
+    required this.label,
+    required this.value,
+    required this.onCopy,
+    this.trailing,
+    this.monospace = false,
+  });
+  final String label;
+  final String value;
+  final VoidCallback onCopy;
+  final Widget? trailing;
+  final bool monospace;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+        decoration: BoxDecoration(
+          color: isDark ? kSurface2 : kLightSurface2,
+          border: Border.all(color: isDark ? kEdge : kLightEdge),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: mutedColor(context),
+                      fontSize: 9, letterSpacing: 1.6,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    value,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontFamily: monospace ? 'monospace' : null,
+                      color: isDark ? kText : kLightText,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            ?trailing,
+            IconButton(
+              tooltip: 'Copy',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.copy_outlined, size: 18),
+              onPressed: onCopy,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EaStep extends StatelessWidget {
+  const _EaStep({required this.n, required this.body});
+  final int n;
+  final Widget body;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final accent = isDark ? kNeonGreen : kLightWin;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 22, height: 22,
+            margin: const EdgeInsets.only(right: 10, top: 1),
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.18),
+              border: Border.all(color: accent.withValues(alpha: 0.6)),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              '$n',
+              style: TextStyle(
+                color: accent, fontFamily: 'monospace',
+                fontWeight: FontWeight.w700, fontSize: 11,
+              ),
+            ),
+          ),
+          Expanded(child: body),
         ],
       ),
     );

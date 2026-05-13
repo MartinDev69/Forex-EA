@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/allocator.dart';
 import '../models/broker.dart';
+import '../models/ea_config.dart';
 import '../models/calendar.dart';
 import '../models/correlation.dart';
 import '../models/drift.dart';
@@ -161,6 +162,18 @@ class ApiClient {
   Future<void> clearBrokerConfig() async {
     final r = await http.delete(_u('/broker/config'), headers: _headers);
     _check(r);
+  }
+
+  Future<EaConfig> eaConfig() async {
+    final r = await http.get(_u('/me/ea-config'), headers: _headers);
+    _check(r);
+    return EaConfig.fromJson(json.decode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<EaConfig> rotateEaKey() async {
+    final r = await http.post(_u('/me/ea-config/rotate'), headers: _headers);
+    _check(r);
+    return EaConfig.fromJson(json.decode(r.body) as Map<String, dynamic>);
   }
 
   Future<BrokerTestResult> testBroker({

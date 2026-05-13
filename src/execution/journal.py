@@ -138,12 +138,24 @@ class TradeJournal:
                 ),
             )
 
-    def recent(self, limit: int = 20) -> list[dict]:
+    def recent(self, limit: int = 20, since_iso: str | None = None) -> list[dict]:
+        """Most recent trades, newest first. Pass since_iso to clip the
+        window to trades opened on/after that timestamp — used for
+        copy-trading operators so they only see trades from when their
+        EA was online.
+        """
         with self._conn() as c:
-            rows = c.execute(
-                "SELECT * FROM trades ORDER BY opened_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+            if since_iso:
+                rows = c.execute(
+                    "SELECT * FROM trades WHERE opened_at >= ? "
+                    "ORDER BY opened_at DESC LIMIT ?",
+                    (since_iso, limit),
+                ).fetchall()
+            else:
+                rows = c.execute(
+                    "SELECT * FROM trades ORDER BY opened_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
         return [dict(r) for r in rows]
 
     def summary_today(self) -> dict:

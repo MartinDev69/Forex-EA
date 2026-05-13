@@ -902,10 +902,18 @@ document.addEventListener("alpine:init", () => {
     busy: false,
     msg: "",
     msgOk: true,
+    expanded: localStorage.getItem("ea_panel_expanded") === "1",
+    loaded: false,
+    toggle() {
+      this.expanded = !this.expanded;
+      localStorage.setItem("ea_panel_expanded", this.expanded ? "1" : "0");
+      if (this.expanded && !this.loaded) this.load();
+    },
     async load() {
       if (!this.token) return;
       try {
         this.cfg = await api("/me/ea-config", { token: this.token });
+        this.loaded = true;
       } catch (e) {
         this.msg = `Couldn't load EA config: ${e.message || e}`;
         this.msgOk = false;

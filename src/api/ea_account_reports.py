@@ -15,16 +15,17 @@ from pathlib import Path
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ea_account_reports (
-    username     TEXT PRIMARY KEY,
-    balance      REAL,
-    equity       REAL,
-    margin       REAL,
-    free_margin  REAL,
-    login        INTEGER,
-    server       TEXT,
-    broker       TEXT,
-    currency     TEXT,
-    updated_at   TEXT NOT NULL
+    username       TEXT PRIMARY KEY,
+    balance        REAL,
+    equity         REAL,
+    margin         REAL,
+    free_margin    REAL,
+    login          INTEGER,
+    server         TEXT,
+    broker         TEXT,
+    currency       TEXT,
+    updated_at     TEXT NOT NULL,
+    first_seen_at  TEXT
 );
 """
 
@@ -41,6 +42,7 @@ class EAAccountReport:
     broker: str | None
     currency: str | None
     updated_at: datetime
+    first_seen_at: datetime | None
 
 
 class EAAccountReportStore:
@@ -48,6 +50,18 @@ class EAAccountReportStore:
         self.db_path = Path(db_path)
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            # Additive migration: pre-existing installs need first_seen_at.
+            cols = {r["name"] for r in c.execute(
+                "PRAGMA table_info(ea_account_reports)"
+            ).fetchall()}
+            if "first_seen_at" not in cols:
+                c.execute("ALTER TABLE ea_account_reports ADD COLUMN first_seen_at TEXT")
+                # Backfill: treat their first-known check-in as their join point
+                # rather than the epoch (which would expose master trades).
+                c.execute(
+                    "UPDATE ea_account_reports SET first_seen_at = updated_at "
+                    "WHERE first_seen_at IS NULL"
+                )
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.db_path)
@@ -70,11 +84,15 @@ class EAAccountReportStore:
     ) -> None:
         now = now or datetime.now(timezone.utc)
         with self._conn() as c:
+            # first_seen_at is set on the first INSERT and preserved through
+            # every UPDATE — that's the moment the operator's EA first came
+            # online, which we use to clip their visible trade history so
+            # they don't see master trades from before they joined.
             c.execute(
                 "INSERT INTO ea_account_reports "
                 "(username, balance, equity, margin, free_margin, login, "
-                " server, broker, currency, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?) "
+                " server, broker, currency, updated_at, first_seen_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(username) DO UPDATE SET "
                 "  balance = excluded.balance, "
                 "  equity = excluded.equity, "
@@ -88,6 +106,7 @@ class EAAccountReportStore:
                 (
                     username, balance, equity, margin, free_margin,
                     login, server, broker, currency, now.isoformat(),
+                    now.isoformat(),
                 ),
             )
 
@@ -95,7 +114,7 @@ class EAAccountReportStore:
         with self._conn() as c:
             row = c.execute(
                 "SELECT username, balance, equity, margin, free_margin, "
-                "login, server, broker, currency, updated_at "
+                "login, server, broker, currency, updated_at, first_seen_at "
                 "FROM ea_account_reports WHERE username = ?",
                 (username,),
             ).fetchone()
@@ -112,4 +131,8 @@ class EAAccountReportStore:
             broker=row["broker"],
             currency=row["currency"],
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            first_seen_at=(
+                datetime.fromisoformat(row["first_seen_at"])
+                if row["first_seen_at"] else None
+            ),
         )
