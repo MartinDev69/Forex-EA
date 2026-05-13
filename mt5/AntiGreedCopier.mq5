@@ -40,11 +40,24 @@ input int     PollSeconds       = 5;                             // how often to
 input double  RiskMultiplier    = 1.0;                           // scale every signal's lot
 input double  MaxLotPerTrade    = 1.0;                           // hard cap
 input string  SymbolSuffix      = "";                            // e.g. "m" if your broker uses EURUSDm
+input string  EnabledSymbols    = "";                            // comma-separated whitelist (empty = all)
 input bool    PlaceTakeProfit   = true;                          // mirror admin's TP
 input bool    PlaceStopLoss     = true;                          // mirror admin's SL
 input long    Magic             = 271828;                        // ours-vs-theirs filter
 input bool    Verbose           = true;                          // chatty journal logging
 input int     AccountReportSeconds = 60;                         // how often to push account snapshot
+
+input group "═══ On-chart panel ═══"
+input bool                ShowPanel         = true;              // render the status panel
+input int                 PanelOffsetX      = 14;                // px from chart's left edge
+input int                 PanelOffsetY      = 14;                // px from chart's top edge
+input color               PanelBgColor      = C'10,14,20';       // panel background
+input color               PanelBorderColor  = C'34,238,136';     // brand neon green
+input color               PanelTextColor    = C'232,240,255';    // body text
+input color               PanelMutedColor   = C'130,148,176';    // labels
+input color               PanelAccentColor  = C'34,238,136';     // numbers / accent
+input color               PanelDangerColor  = C'255,84,116';     // stopped / errors
+input string              PanelLogoFile     = "antigreed-logo.bmp"; // place in MQL5\Files
 
 CTrade trade;
 
@@ -53,6 +66,23 @@ string g_bookmark = "";
 
 // Wall clock of the last successful account snapshot POST.
 datetime g_last_account_report = 0;
+
+// Filter state — parsed once from EnabledSymbols input on init.
+string   g_enabled_symbols[];
+int      g_enabled_count    = 0;
+bool     g_filter_active    = false;
+
+// Panel state — counters/strings the redraw reads from.
+int      g_copies_today     = 0;       // resets on local date roll-over
+string   g_today_key        = "";      // YYYY-MM-DD we last counted under
+string   g_last_copy_text   = "—";     // "BUY EURUSD 0.10 · 14:23"
+datetime g_last_copy_time   = 0;
+string   g_last_status      = "live";  // "live" | "blocked" | "stopped"
+string   g_last_error       = "";
+datetime g_last_poll_ok     = 0;
+
+// Object-name prefix so we can delete only our objects on shutdown.
+#define PNL "AGC_pnl_"
 
 // Map of source bot's trade_id → user's MT5 position ticket. Persisted
 // via Terminal global variables so a restart can still close the
@@ -78,25 +108,32 @@ int OnInit()
       // MT5 globals are numeric only. Read from there.
    }
    g_bookmark = ReadBookmark();
+   ParseEnabledSymbols();
    Print("AntiGreedCopier started · base=", ApiBaseUrl,
          " · token=", StringSubstr(ApiToken, 0, 8), "..." ,
+         " · symbols=", (g_filter_active ? IntegerToString(g_enabled_count) : "all"),
          " · bookmark=", (g_bookmark == "" ? "<none>" : g_bookmark));
 
+   if(ShowPanel) BuildPanel();
    EventSetTimer(MathMax(2, PollSeconds));
    Poll();
    ReportAccount();  // first snapshot immediately so the dashboard lights up
+   if(ShowPanel) RedrawPanel();
    return INIT_SUCCEEDED;
 }
 
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   ObjectsDeleteAll(0, PNL);
+   ChartRedraw();
 }
 
 void OnTimer()
 {
    Poll();
    MaybeReportAccount();
+   if(ShowPanel) RedrawPanel();
 }
 
 void OnTick()
@@ -127,18 +164,27 @@ void Poll()
       {
          Print("AntiGreedCopier: WebRequest blocked — add ",
                ApiBaseUrl, " to Tools → Options → Expert Advisors → Allow WebRequest.");
+         g_last_status = "blocked";
+         g_last_error  = "WebRequest needs URL whitelist";
       }
       else if(Verbose)
       {
          Print("AntiGreedCopier: WebRequest error ", err);
+         g_last_status = "stopped";
+         g_last_error  = "WebRequest error " + IntegerToString(err);
       }
       return;
    }
    if(code != 200)
    {
       Print("AntiGreedCopier: HTTP ", code, " from /signals/feed");
+      g_last_status = "stopped";
+      g_last_error  = "HTTP " + IntegerToString(code);
       return;
    }
+   g_last_status   = "live";
+   g_last_error    = "";
+   g_last_poll_ok  = TimeCurrent();
 
    string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
    string new_bookmark = JsonStringField(body, "bookmark");
@@ -190,6 +236,14 @@ void HandleOpen(long trade_id, const string &symbol, const string &side,
       if(Verbose) Print("AntiGreedCopier: skip duplicate OPEN trade_id=", trade_id);
       return;
    }
+   // Whitelist filter — when EnabledSymbols is set, skip anything not
+   // on the list. Match against both the source symbol (pre-suffix-map)
+   // and the resolved local symbol so users can write either form.
+   if(g_filter_active && !IsSymbolEnabled(symbol))
+   {
+      if(Verbose) Print("AntiGreedCopier: ", symbol, " not in EnabledSymbols — skipping.");
+      return;
+   }
    if(!SymbolSelect(symbol, true))
    {
       Print("AntiGreedCopier: symbol ", symbol, " not available on this broker — skipping.");
@@ -223,6 +277,13 @@ void HandleOpen(long trade_id, const string &symbol, const string &side,
    GlobalVariableSet(GV_PREFIX + (string)trade_id, (double)ticket);
    if(Verbose)
       Print("AntiGreedCopier: OPEN ", side, " ", symbol, " ", lot, " lot ticket=", ticket);
+   // Panel counters
+   MaybeResetDailyCounter();
+   g_copies_today++;
+   g_last_copy_time = TimeCurrent();
+   g_last_copy_text = StringFormat("%s %s %s",
+      side, symbol, DoubleToString(lot, 2));
+   if(ShowPanel) RedrawPanel();
 }
 
 void HandleClose(long trade_id, const string &symbol)
@@ -494,5 +555,309 @@ string UrlEncode(const string &s)
          out += StringFormat("%%%02X", ch);
    }
    return out;
+}
+
+//+==================================================================+
+//|                      SYMBOL WHITELIST                              |
+//+==================================================================+
+void ParseEnabledSymbols()
+{
+   ArrayResize(g_enabled_symbols, 0);
+   g_enabled_count = 0;
+   string s = EnabledSymbols;
+   StringTrimLeft(s); StringTrimRight(s);
+   if(StringLen(s) == 0)
+   {
+      g_filter_active = false;
+      return;
+   }
+   g_filter_active = true;
+   string parts[];
+   int n = StringSplit(s, (ushort)',', parts);
+   for(int i = 0; i < n; i++)
+   {
+      string p = parts[i];
+      StringTrimLeft(p); StringTrimRight(p);
+      StringToUpper(p);
+      if(StringLen(p) == 0) continue;
+      int sz = ArraySize(g_enabled_symbols);
+      ArrayResize(g_enabled_symbols, sz + 1);
+      g_enabled_symbols[sz] = p;
+      g_enabled_count++;
+   }
+}
+
+bool IsSymbolEnabled(const string &symbol)
+{
+   if(!g_filter_active) return true;
+   string up = symbol; StringToUpper(up);
+   // Match the local symbol as well as the stripped form so users can
+   // list either "EURUSD" or "EURUSDm" — whichever they're familiar with.
+   string stripped = up;
+   if(StringLen(SymbolSuffix) > 0 &&
+      StringLen(up) > StringLen(SymbolSuffix))
+   {
+      string sufx = SymbolSuffix; StringToUpper(sufx);
+      if(StringSubstr(up, StringLen(up) - StringLen(sufx)) == sufx)
+         stripped = StringSubstr(up, 0, StringLen(up) - StringLen(sufx));
+   }
+   for(int i = 0; i < g_enabled_count; i++)
+   {
+      if(g_enabled_symbols[i] == up) return true;
+      if(g_enabled_symbols[i] == stripped) return true;
+   }
+   return false;
+}
+
+//+==================================================================+
+//|                      ON-CHART PANEL                                |
+//+==================================================================+
+// Layout constants — px from the panel's top-left corner.
+#define P_WIDTH        300
+#define P_PAD          14
+#define P_HEADER_H     46
+#define P_ROW_H        18
+#define P_SECTION_GAP  10
+#define P_FONT         "Consolas"
+#define P_FONT_BODY    "Segoe UI"
+
+// Object builders ---------------------------------------------------
+void MakeRect(const string name, int xoff, int yoff, int xsize, int ysize,
+              color bg, color border, int border_w = 1)
+{
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, xoff);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, yoff);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, xsize);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, ysize);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, border);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, border_w);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+}
+
+void MakeLabel(const string name, int xoff, int yoff, const string text,
+               color clr, int size, const string font, ENUM_ANCHOR_POINT anchor = ANCHOR_LEFT_UPPER)
+{
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, xoff);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, yoff);
+   ObjectSetString (0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetString (0, name, OBJPROP_FONT, font);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, anchor);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+}
+
+void MakeBitmap(const string name, int xoff, int yoff, const string file, int xsize, int ysize)
+{
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_BITMAP_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, xoff);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, yoff);
+   ObjectSetString (0, name, OBJPROP_BMPFILE, 0, "\\Files\\" + file);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, xsize);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, ysize);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+}
+
+// Sizing ------------------------------------------------------------
+int PanelHeight()
+{
+   int symbol_rows = MathMax(1, (int)MathCeil((g_filter_active ? g_enabled_count : 1) / 3.0));
+   int body_rows  = 4 /* status, copies, open, last */
+                  + 1 /* symbols header */
+                  + symbol_rows
+                  + 3 /* balance, equity, risk */;
+   return P_HEADER_H + (body_rows * P_ROW_H) + (2 * P_SECTION_GAP) + (P_PAD * 2);
+}
+
+// One-time build — everything else is a redraw of text values.
+void BuildPanel()
+{
+   ObjectsDeleteAll(0, PNL);
+   int h = PanelHeight();
+   int x = PanelOffsetX;
+   int y = PanelOffsetY;
+
+   // Outer card + neon header strip.
+   MakeRect(PNL + "card", x, y, P_WIDTH, h, PanelBgColor, PanelBorderColor, 1);
+   MakeRect(PNL + "hdr",  x, y, P_WIDTH, P_HEADER_H,
+            C'18,22,32', PanelBorderColor, 1);
+   // Thin neon underline beneath the header.
+   MakeRect(PNL + "uline", x, y + P_HEADER_H, P_WIDTH, 2,
+            PanelAccentColor, PanelAccentColor, 1);
+
+   // Header: logo (or fallback bullet), title, status dot.
+   MakeBitmap(PNL + "logo", x + 12, y + 7, PanelLogoFile, 32, 32);
+   MakeLabel(PNL + "title", x + 56, y + 12,
+             "ANTIGREED · COPIER", PanelTextColor, 11, P_FONT_BODY);
+   MakeLabel(PNL + "sub",   x + 56, y + 28,
+             "live signal copier", PanelMutedColor, 8, P_FONT_BODY);
+   MakeLabel(PNL + "dot",   x + P_WIDTH - 18, y + P_HEADER_H / 2 - 6,
+             "●", PanelAccentColor, 14, P_FONT_BODY);
+}
+
+string ShortTime(datetime t)
+{
+   if(t == 0) return "—";
+   return TimeToString(t, TIME_MINUTES);
+}
+
+void MaybeResetDailyCounter()
+{
+   string today = TimeToString(TimeCurrent(), TIME_DATE);
+   if(today != g_today_key)
+   {
+      g_today_key      = today;
+      g_copies_today   = 0;
+   }
+}
+
+// Count our own positions live so the panel always tells the truth.
+int OurOpenPositions()
+{
+   int n = 0;
+   int total = PositionsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong tkt = PositionGetTicket(i);
+      if(tkt == 0 || !PositionSelectByTicket(tkt)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) == Magic) n++;
+   }
+   return n;
+}
+
+void RedrawPanel()
+{
+   MaybeResetDailyCounter();
+   int x = PanelOffsetX;
+   int y = PanelOffsetY + P_HEADER_H + P_SECTION_GAP;
+
+   // Status dot color
+   color dot_clr = PanelAccentColor;
+   if(g_last_status == "blocked") dot_clr = C'255,179,0';
+   else if(g_last_status == "stopped") dot_clr = PanelDangerColor;
+   ObjectSetInteger(0, PNL + "dot", OBJPROP_COLOR, dot_clr);
+   // Header sub-line tells the operator what live really means.
+   string sub = "polling every " + IntegerToString(MathMax(2, PollSeconds)) + "s";
+   if(g_last_status == "blocked") sub = g_last_error;
+   else if(g_last_status == "stopped") sub = g_last_error;
+   ObjectSetString(0, PNL + "sub", OBJPROP_TEXT, sub);
+
+   // ── Section: KPIs ──────────────────────────────
+   DrawKv("k_status", y, "STATUS", g_last_status, dot_clr);
+   y += P_ROW_H;
+   DrawKv("k_today",  y, "COPIED TODAY", IntegerToString(g_copies_today), PanelAccentColor);
+   y += P_ROW_H;
+   DrawKv("k_open",   y, "OPEN POSITIONS", IntegerToString(OurOpenPositions()), PanelAccentColor);
+   y += P_ROW_H;
+   string last = g_last_copy_text;
+   if(g_last_copy_time > 0) last = last + "  " + ShortTime(g_last_copy_time);
+   DrawKv("k_last",   y, "LAST COPY", last, PanelTextColor);
+   y += P_ROW_H + P_SECTION_GAP;
+
+   // ── Section: Symbol whitelist ──────────────────
+   string syms_hdr = g_filter_active
+      ? "SYMBOLS (" + IntegerToString(g_enabled_count) + " enabled)"
+      : "SYMBOLS (all admin signals)";
+   MakeLabel(PNL + "syms_hdr", x + P_PAD, y, syms_hdr, PanelMutedColor, 8, P_FONT_BODY);
+   y += P_ROW_H;
+   // Three chips per row.
+   ClearSymbolChips();
+   if(g_filter_active)
+   {
+      int per_row = 3, chip_w = (P_WIDTH - (P_PAD * 2) - 12) / per_row;
+      for(int i = 0; i < g_enabled_count; i++)
+      {
+         int col = i % per_row;
+         int row = i / per_row;
+         int cx = x + P_PAD + col * (chip_w + 6);
+         int cy = y + row * (P_ROW_H + 2);
+         string nm = PNL + "chip_" + IntegerToString(i);
+         MakeRect(nm + "_bg", cx, cy - 1, chip_w, P_ROW_H - 2,
+                  C'22,30,44', PanelBorderColor, 1);
+         MakeLabel(nm,        cx + 6, cy + 2, g_enabled_symbols[i],
+                   PanelAccentColor, 8, P_FONT);
+      }
+      int rows = (int)MathCeil(g_enabled_count / 3.0);
+      y += rows * (P_ROW_H + 2);
+   }
+   else
+   {
+      MakeLabel(PNL + "syms_all", x + P_PAD, y,
+                "(set EnabledSymbols to filter)", PanelMutedColor, 8, P_FONT_BODY);
+      y += P_ROW_H;
+   }
+   y += P_SECTION_GAP;
+
+   // ── Section: Account snapshot ──────────────────
+   string cur = AccountInfoString(ACCOUNT_CURRENCY);
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+   double eq  = AccountInfoDouble(ACCOUNT_EQUITY);
+   DrawKv("k_bal",  y, "BALANCE", FmtMoney(bal, cur), PanelAccentColor);
+   y += P_ROW_H;
+   double floating = eq - bal;
+   color eq_clr = (floating >= 0) ? PanelAccentColor : PanelDangerColor;
+   DrawKv("k_eq",   y, "EQUITY",  FmtMoney(eq, cur),  eq_clr);
+   y += P_ROW_H;
+   string risk_line = StringFormat("× %.2f  ·  max %.2f lot",
+                                   RiskMultiplier, MaxLotPerTrade);
+   DrawKv("k_risk", y, "RISK",    risk_line, PanelTextColor);
+
+   ChartRedraw();
+}
+
+void DrawKv(const string id, int y, const string label, const string value, color val_clr)
+{
+   int x = PanelOffsetX;
+   MakeLabel(PNL + id + "_l", x + P_PAD,             y, label, PanelMutedColor, 8, P_FONT_BODY);
+   MakeLabel(PNL + id + "_v", x + P_WIDTH - P_PAD,   y, value, val_clr,         9, P_FONT, ANCHOR_RIGHT_UPPER);
+}
+
+void ClearSymbolChips()
+{
+   for(int i = 0; i < 50; i++)
+   {
+      ObjectDelete(0, PNL + "chip_" + IntegerToString(i));
+      ObjectDelete(0, PNL + "chip_" + IntegerToString(i) + "_bg");
+   }
+   ObjectDelete(0, PNL + "syms_all");
+}
+
+string FmtMoney(double v, const string &cur)
+{
+   string body = DoubleToString(v, 2);
+   // Insert a thousands separator the cheap way.
+   int dot = StringFind(body, ".");
+   string left = (dot >= 0) ? StringSubstr(body, 0, dot) : body;
+   string frac = (dot >= 0) ? StringSubstr(body, dot)    : "";
+   bool neg = StringGetCharacter(left, 0) == '-';
+   if(neg) left = StringSubstr(left, 1);
+   string out = "";
+   // Walk the integer portion (cents are in 'frac' already), inserting a
+   // comma after each digit that has a multiple-of-3 remainder ahead.
+   int len = StringLen(left);
+   for(int i = 0; i < len; i++)
+   {
+      out += ShortToString(StringGetCharacter(left, i));
+      int rem = len - i - 1;
+      if(rem > 0 && rem % 3 == 0) out += ",";
+   }
+   string sym = (cur == "USD") ? "$" : (cur == "EUR" ? "€" : (cur + " "));
+   return (neg ? "-" : "") + sym + out + frac;
 }
 //+------------------------------------------------------------------+

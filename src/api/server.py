@@ -42,7 +42,7 @@ load_dotenv()
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from src.api import brokers as broker_presets
@@ -2232,11 +2232,56 @@ _MT5_DIR = Path(__file__).parent.parent.parent / "mt5"
 
 
 @app.get("/download/ea", include_in_schema=False)
-def download_ea() -> FileResponse:
-    """Serve AntiGreedCopier.mq5 with a Content-Disposition attachment
-    header so the browser actually downloads it instead of rendering
-    the source. The GitHub raw link displayed it inline because the
-    download attribute is ignored cross-origin without that header.
+def download_ea() -> Response:
+    """Serve AntiGreedCopier bundled as a zip — the .mq5 itself plus the
+    BMP assets the on-chart panel uses. Single click in the dashboard,
+    user unzips into MQL5\\ where the structure matches (Experts/ for the
+    .mq5, Files/ for the BMPs).
+    """
+    import io
+    import zipfile
+
+    mq5 = (_MT5_DIR / "AntiGreedCopier.mq5").resolve()
+    if not mq5.is_file():
+        raise HTTPException(404, "AntiGreedCopier.mq5 not found on server")
+    bmps = [p for p in [
+        _MT5_DIR / "antigreed-logo.bmp",
+        _MT5_DIR / "antigreed-buy.bmp",
+        _MT5_DIR / "antigreed-sell.bmp",
+    ] if p.is_file()]
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(mq5, arcname="Experts/AntiGreedCopier.mq5")
+        for bmp in bmps:
+            zf.write(bmp, arcname=f"Files/{bmp.name}")
+        zf.writestr(
+            "README.txt",
+            "AntiGreed Copier — install\n"
+            "==========================\n"
+            "1. In MetaTrader 5: File → Open Data Folder\n"
+            "2. Open the MQL5 folder inside.\n"
+            "3. Copy this zip's Experts/ contents into MQL5/Experts/.\n"
+            "4. Copy this zip's Files/ contents into MQL5/Files/.\n"
+            "5. In MetaEditor (F4): open AntiGreedCopier.mq5, press F7.\n"
+            "6. In MT5: Tools → Options → Expert Advisors → whitelist your\n"
+            "   API URL, then drag the EA onto any chart.\n"
+        )
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Cache-Control": "no-store, must-revalidate",
+            "Content-Disposition": 'attachment; filename="AntiGreedCopier.zip"',
+        },
+    )
+
+
+@app.get("/download/ea/mq5", include_in_schema=False)
+def download_ea_mq5() -> FileResponse:
+    """Raw .mq5 — for users who already have the BMP assets and just
+    want the latest source to recompile.
     """
     candidate = (_MT5_DIR / "AntiGreedCopier.mq5").resolve()
     if not candidate.is_file():

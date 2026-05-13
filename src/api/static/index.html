@@ -889,15 +889,15 @@
                   <div>
                     <div class="ea-step-h">Download AntiGreedCopier</div>
                     <div class="ea-step-b" x-show="os === 'win'">
-                      Save <code>AntiGreedCopier.mq5</code> into your MetaTrader 5 data folder under <code>MQL5\Experts\</code>.
-                      <div class="ea-step-tip">Easiest way to find the folder: in MT5 click <b>File → Open Data Folder</b>, then open <code>MQL5\Experts</code>.</div>
+                      Download the bundle, unzip, and merge into MT5's data folder under <code>MQL5\</code>: the <code>Experts</code> folder contents go in <code>MQL5\Experts\</code>, the <code>Files</code> folder contents in <code>MQL5\Files\</code> (these are the icons the chart panel renders).
+                      <div class="ea-step-tip">Easiest way to find the folder: in MT5 click <b>File → Open Data Folder</b>, then open <code>MQL5</code>.</div>
                     </div>
                     <div class="ea-step-b" x-show="os === 'mac'">
-                      MT5 has no native Mac build — download the Mac wrapper from your broker (Exness: <a href="https://www.exness.com/downloads/mt5/macos/" target="_blank" rel="noopener">exness.com/downloads/mt5/macos</a>) and install it. Then drop <code>AntiGreedCopier.mq5</code> into the data folder under <code>MQL5/Experts/</code>.
-                      <div class="ea-step-tip">In MT5 click <b>File → Open Data Folder</b> — it opens the right path inside the Wine prefix (somewhere under <code>~/Library/Application Support/…/drive_c/…</code>). Drop the file in <code>MQL5/Experts/</code> from there. On Apple Silicon expect a small first-launch delay while Rosetta translates the .exe.</div>
+                      MT5 has no native Mac build — download the Mac wrapper from your broker (Exness: <a href="https://www.exness.com/downloads/mt5/macos/" target="_blank" rel="noopener">exness.com/downloads/mt5/macos</a>) and install it. Then download the bundle below, unzip, and merge into the data folder under <code>MQL5/</code> — <code>Experts/</code> contents into <code>MQL5/Experts/</code>, <code>Files/</code> contents into <code>MQL5/Files/</code>.
+                      <div class="ea-step-tip">In MT5 click <b>File → Open Data Folder</b> — it opens the right path inside the Wine prefix (somewhere under <code>~/Library/Application Support/…/drive_c/…</code>). On Apple Silicon expect a small first-launch delay while Rosetta translates the .exe.</div>
                     </div>
                     <a class="btn-sl-g" style="margin-top:6px;display:inline-block;padding:7px 14px;font-size:11px;text-decoration:none"
-                       href="/download/ea" download="AntiGreedCopier.mq5">Download .mq5</a>
+                       href="/download/ea" download="AntiGreedCopier.zip">Download bundle (.zip)</a>
                   </div>
                 </div>
                 <div class="ea-step">
@@ -925,10 +925,13 @@
                   <div class="ea-step-n">4</div>
                   <div>
                     <div class="ea-step-h">Attach to any chart</div>
-                    <div class="ea-step-b" x-show="os === 'win'">Drag the EA from Navigator onto any chart (symbol doesn't matter — the EA picks symbols from the signals). In the Inputs tab, paste the API URL, the API key, and your AD-ID from above.</div>
+                    <div class="ea-step-b" x-show="os === 'win'">
+                      Drag the EA from Navigator onto any chart (symbol doesn't matter — the EA picks symbols from the signals). In the Inputs tab, paste the API URL, the API key, and your AD-ID from above.
+                      <div class="ea-step-tip">Optional: leave <code>EnabledSymbols</code> empty to copy <i>every</i> trade the admin opens, or list specific pairs (e.g. <code>EURUSD,GBPUSD,XAUUSD</code>) to only copy those. The on-chart panel will show the active whitelist.</div>
+                    </div>
                     <div class="ea-step-b" x-show="os === 'mac'">
                       In the Navigator panel (<b>⌘+N</b> to toggle), expand <b>Expert Advisors</b>, then drag <code>AntiGreedCopier</code> onto any chart (the symbol doesn't matter — the EA picks symbols from the signals). In the Inputs tab, paste the API URL, the API key, and your AD-ID from above.
-                      <div class="ea-step-tip">If you don't see the EA in the Navigator after compiling, right-click <b>Expert Advisors</b> → <b>Refresh</b>.</div>
+                      <div class="ea-step-tip">If you don't see the EA in the Navigator after compiling, right-click <b>Expert Advisors</b> → <b>Refresh</b>. Optional: <code>EnabledSymbols</code> lets you filter — leave empty to copy every trade, or list pairs (e.g. <code>EURUSD,GBPUSD,XAUUSD</code>).</div>
                     </div>
                   </div>
                 </div>
