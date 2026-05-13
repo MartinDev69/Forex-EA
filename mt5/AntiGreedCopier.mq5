@@ -626,7 +626,7 @@ bool IsSymbolEnabled(const string &symbol)
 //+==================================================================+
 // Layout constants — px from the panel's top-left corner.
 #define P_PAD          16
-#define P_HEADER_H     52
+#define P_HEADER_H     66
 #define P_ROW_H        20
 #define P_SECTION_GAP  12
 #define P_FONT         "Consolas"
@@ -709,11 +709,11 @@ void MakeBitmap(const string name, int xoff, int yoff, const string file, int xs
 
 // Sizing ------------------------------------------------------------
 // Layout heights for the Figma-inspired sections.
-#define P_HERO_H       96   // big balance number + label + last-sync line
-#define P_TILE_H       82   // KPI tile (3-up row)
-#define P_BIGTILE_H    98   // larger info tiles (2-up row)
-#define P_FOOTER_H     22   // developer attribution line
-#define P_GRAD_H       4    // bottom rainbow gradient strip
+#define P_HERO_H       132  // big balance number + label + last-sync line
+#define P_TILE_H       118  // KPI tile (3-up row)
+#define P_BIGTILE_H    132  // larger info tiles (2-up row)
+#define P_FOOTER_H     26   // developer attribution line
+#define P_GRAD_H       8    // bottom rainbow gradient strip
 
 int PanelHeight()
 {
@@ -879,18 +879,18 @@ void RedrawPanel()
       double pct = (floating / bal) * 100.0;
       equity_pct_text = StringFormat("%s%.2f%%", (pct >= 0 ? "+" : ""), pct);
    }
-   MakeLabel(PNL + "hero_l", x + P_PAD, y,
-             "BALANCE", COL_MUTED, 9, P_FONT_BODY);
-   MakeLabel(PNL + "hero_v", x + P_PAD, y + 18,
-             FmtMoney(bal, cur), COL_HERO, 32, "Segoe UI Semibold");
+   MakeLabel(PNL + "hero_l", x + P_PAD, y + 4,
+             "BALANCE", COL_MUTED, 10, P_FONT_BODY);
+   MakeLabel(PNL + "hero_v", x + P_PAD, y + 26,
+             FmtMoney(bal, cur), COL_HERO, 40, "Segoe UI Semibold");
    // Lightning bolt accent next to the number — the Figma touch.
-   MakeLabel(PNL + "hero_bolt", x + g_panel_w - 32, y + 28,
-             "⚡", COL_HERO, 18, "Segoe UI Semibold");
+   MakeLabel(PNL + "hero_bolt", x + g_panel_w - 36, y + 38,
+             "⚡", COL_HERO, 24, "Segoe UI Semibold");
    string sync = (g_last_poll_ok > 0)
       ? "Last sync: " + TimeToString(g_last_poll_ok, TIME_SECONDS)
       : "Last sync: —";
-   MakeLabel(PNL + "hero_sub", x + P_PAD, y + 64,
-             sync, COL_MUTED, 8, P_FONT_BODY);
+   MakeLabel(PNL + "hero_sub", x + P_PAD, y + 96,
+             sync, COL_MUTED, 9, P_FONT_BODY);
 
    y += P_HERO_H + P_SECTION_GAP;
 
@@ -957,17 +957,18 @@ void DrawColouredTile(const string id, int xoff, int yoff, int w, int h,
 {
    MakeBox  (PNL + id + "_bg",   xoff,            yoff,             w, h,
              bg, accent);
-   MakeBox  (PNL + id + "_top",  xoff,            yoff,             w, 3,
+   MakeBox  (PNL + id + "_top",  xoff,            yoff,             w, 4,
              accent, accent);
    // Coloured icon badge
-   MakeBox  (PNL + id + "_icon", xoff + 10,       yoff + 12,        24, 24,
+   MakeBox  (PNL + id + "_icon", xoff + 12,       yoff + 16,        28, 28,
              accent, accent);
-   MakeLabel(PNL + id + "_glyph",xoff + 22,       yoff + 16,        icon,
-             C'10,18,24', 11, "Segoe UI Black", ANCHOR_UPPER);
-   MakeLabel(PNL + id + "_l",    xoff + 42,       yoff + 18,        label,
-             COL_MUTED, 8, P_FONT_BODY);
-   MakeLabel(PNL + id + "_v",    xoff + 10,       yoff + 50,        value,
-             accent, 18, "Segoe UI Semibold");
+   MakeLabel(PNL + id + "_glyph",xoff + 26,       yoff + 21,        icon,
+             C'10,18,24', 12, "Segoe UI Black", ANCHOR_UPPER);
+   MakeLabel(PNL + id + "_l",    xoff + 48,       yoff + 24,        label,
+             COL_MUTED, 9, P_FONT_BODY);
+   // Big number anchored toward the bottom so taller tiles still look balanced.
+   MakeLabel(PNL + id + "_v",    xoff + 14,       yoff + h - 44,    value,
+             accent, 24, "Segoe UI Semibold");
 }
 
 // The two larger "BUY SIGNAL / SELL SIGNAL" style tiles at the bottom.
@@ -976,15 +977,15 @@ void DrawSignalTile(const string id, int xoff, int yoff, int w, int h,
                     const string value, const string subline)
 {
    MakeBox  (PNL + id + "_bg",  xoff, yoff,            w, h, bg, accent);
-   MakeBox  (PNL + id + "_top", xoff, yoff,            w, 3, accent, accent);
-   MakeLabel(PNL + id + "_l",   xoff + 14, yoff + 14,  label,
-             accent, 9, "Segoe UI Semibold");
-   MakeLabel(PNL + id + "_dot", xoff + w - 22, yoff + 14, "●",
-             accent, 9, P_FONT_BODY);
-   MakeLabel(PNL + id + "_v",   xoff + 14, yoff + 38,  value,
-             accent, 22, "Segoe UI Semibold");
-   MakeLabel(PNL + id + "_s",   xoff + 14, yoff + 72,  subline,
-             COL_MUTED, 8, P_FONT_BODY);
+   MakeBox  (PNL + id + "_top", xoff, yoff,            w, 4, accent, accent);
+   MakeLabel(PNL + id + "_l",   xoff + 16, yoff + 18,  label,
+             accent, 10, "Segoe UI Semibold");
+   MakeLabel(PNL + id + "_dot", xoff + w - 26, yoff + 18, "●",
+             accent, 10, P_FONT_BODY);
+   MakeLabel(PNL + id + "_v",   xoff + 16, yoff + 50,  value,
+             accent, 28, "Segoe UI Semibold");
+   MakeLabel(PNL + id + "_s",   xoff + 16, yoff + h - 26, subline,
+             COL_MUTED, 9, P_FONT_BODY);
 }
 
 // Cyan → blue → purple progression along the bottom of the card. Uses
