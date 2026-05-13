@@ -961,13 +961,19 @@
                 </template>
               </div>
             </div>
-            <!-- Form is available to every operator — each user has their
-                 own broker_config row keyed by username. The bot's actual
-                 MT5 session is still single-tenant for now (admin only),
-                 so a non-admin's saved config currently just earns them a
-                 dashboard preview rather than a separate trading session. -->
+            <!-- Form is available to every operator. For admins it's the
+                 live MT5 session the bot trades on. For copy-trading users
+                 it's informational — their actual MT5 runs on their own
+                 machine via the AntiGreedCopier EA; we just record the
+                 broker name/login here for display on their dashboard. -->
             <template x-if="true">
               <div>
+                <div x-show="!isAdmin" style="font-size:11px;color:var(--muted);margin:-4px 0 14px;line-height:1.55">
+                  You're a copy-trading operator — your MT5 runs on your own
+                  machine via the AntiGreedCopier EA above. The fields below
+                  just record your broker for display; we don't connect to
+                  them from this server.
+                </div>
                 <div class="field-row">
                   <div class="field-block">
                     <label>Broker</label>
@@ -989,18 +995,18 @@
                   </div>
                   <div class="field-block"><label>Password</label><input type="password" x-model="form.password" :placeholder="savedConfig?.password_set ? '•••••••• (leave blank to keep)' : 'Investor / trade password'" /></div>
                 </div>
-                <div class="field-row">
+                <div class="field-row" x-show="isAdmin">
                   <div class="field-block full-width">
                     <label>MT5 path <span style="color:var(--muted);text-transform:none;letter-spacing:0;font-size:9px">(Windows, optional)</span></label>
                     <input type="text" x-model="form.mt5_path" placeholder="C:\Program Files\MetaTrader 5\terminal64.exe" style="font-family:var(--mono);font-size:11px" />
                   </div>
                 </div>
                 <div class="btn-row">
-                  <button class="btn-ol-g" @click="test()" :disabled="disableSubmit()">
+                  <button x-show="isAdmin" class="btn-ol-g" @click="test()" :disabled="disableSubmit()">
                     <span x-text="testing ? 'Testing…' : 'Test connection'"></span>
                   </button>
                   <button class="btn-sl-g" @click="save()" :disabled="disableSubmit()">
-                    <span x-text="saving ? 'Saving…' : 'Connect & save'"></span>
+                    <span x-text="saving ? (isAdmin ? 'Saving…' : 'Saving…') : (isAdmin ? 'Connect & save' : 'Save broker info')"></span>
                   </button>
                   <button x-show="savedConfig" class="btn-ol-r" @click="clear()">Forget creds</button>
                   <span x-show="message" :class="messageTone === 'text-win' ? 'ok-flash' : 'err-flash'" style="font-size:12px;margin-left:8px" x-text="message"></span>
