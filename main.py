@@ -57,6 +57,7 @@ from src.propfirm import PropFirmGuard, PropFirmStore, policy_from_env
 from src.replay import PathRecorder, PathStore
 from src.utils import get_logger
 from src.voice import KillSwitchFlag
+from src.api.bot_control import BotControlStore
 from src.watchdog import HeartbeatStore
 
 
@@ -353,6 +354,10 @@ def main() -> None:
             if os.getenv("VOICE_KILLSWITCH_ENABLED", "0").strip() not in ("0", "false", "False", "")
             else None
         ),
+        # Cross-process Start/Stop. The API writes this when an operator
+        # clicks the toggle in the dashboard; the bot polls it each tick.
+        # Always on — operators expect Stop to mean stop.
+        bot_control_store=BotControlStore(Path("data/trades.db")),
         # Tick refreshes broker_status_store with live equity + floating P&L
         # so the API can compute Today P&L (realized + open) without owning
         # its own MT5 connection (only one Python process can attach).

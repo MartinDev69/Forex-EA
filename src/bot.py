@@ -42,6 +42,7 @@ from src.risk.position_sizing import lot_size_from_risk, pip_size
 from src.risk.risk_manager import RiskManager
 from src.strategies.base import Signal, SignalType, Strategy
 from src.voice.killswitch import KillSwitchFlag
+from src.api.bot_control import BotControlStore
 from src.watchdog.heartbeat import HeartbeatStore
 
 log = logging.getLogger(__name__)
@@ -123,6 +124,7 @@ class Bot:
         narrator: NarratorComposer | None = None,
         path_recorder: PathRecorder | None = None,
         kill_switch_flag: KillSwitchFlag | None = None,
+        bot_control_store: BotControlStore | None = None,
         broker_status_store: BrokerStatusStore | None = None,
         pending_orders_store: PendingOrderStore | None = None,
         signal_dedup_store: SignalDedupStore | None = None,
@@ -180,6 +182,12 @@ class Bot:
         # at the top of each tick and halts cleanly if an operator has
         # tripped it from the API.
         self.kill_switch_flag = kill_switch_flag
+        # None = lifecycle pause control off (legacy behaviour). When set,
+        # the bot polls this single-row flag every tick and skips work
+        # when the operator clicks Stop on the dashboard. The bot stays
+        # alive and keeps writing heartbeats so the dashboard can show
+        # "paused" rather than "wedged".
+        self.bot_control_store = bot_control_store
         # None = the bot won't refresh broker_status periodically. main.py
         # passes a store + the broker id so the API can read live equity
         # without owning its own MT5 connection.
@@ -298,7 +306,21 @@ class Bot:
     def run_forever(self) -> None:
         self.state.running = True
         log.info("Bot loop starting — symbols=%s, tf=%s", self.config.symbols, self.config.timeframe)
+        was_paused = False
         while self.state.running:
+            # Lifecycle pause: when an operator clicks Stop on the dashboard
+            # we keep the process alive and keep writing heartbeats but skip
+            # the tick body so no new trades fire. Start flips it back.
+            if self.bot_control_store is not None and not self.bot_control_store.should_run():
+                if not was_paused:
+                    log.info("Bot paused by operator — skipping ticks until Start is pressed")
+                    was_paused = True
+                self._write_heartbeat("paused by operator")
+                time.sleep(self.config.poll_interval_s)
+                continue
+            if was_paused:
+                log.info("Bot resumed by operator")
+                was_paused = False
             try:
                 acted = self.tick()
                 if acted:

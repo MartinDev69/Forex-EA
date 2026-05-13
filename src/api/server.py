@@ -67,6 +67,7 @@ from src.api.totp import generate_secret, provisioning_uri, verify_code
 from src.api.totp_store import TOTPStore
 from src.api.ea_signals import SignalFeed
 from src.api.ea_account_reports import EAAccountReportStore
+from src.api.bot_control import BotControlStore
 from src.api.subscription_requests import (
     SubscriptionRequest,
     SubscriptionRequestStore,
@@ -216,6 +217,7 @@ user_store = UserStore(_DB)
 subscription_request_store = SubscriptionRequestStore(_DB)
 signal_feed = SignalFeed(_DB)
 ea_account_store = EAAccountReportStore(_DB)
+bot_control_store = BotControlStore(_DB)
 SIGNUP_BOT_TOKEN = os.environ.get("SIGNUP_TELEGRAM_BOT_TOKEN", "").strip() or None
 ADMIN_TG_CHAT_ID = (
     int(os.environ["TELEGRAM_CHAT_ID"])
@@ -564,16 +566,20 @@ def health() -> dict[str, str]:
 @app.get("/status", response_model=StatusResponse)
 def get_status(_user: dict = Depends(current_user)) -> StatusResponse:
     bs = broker_status_store.read()
-    # The bot writes a heartbeat each tick — if it's been written within the
-    # last 3 minutes, the bot is genuinely alive regardless of whether the
-    # operator pressed Start in the UI. Fall back to state.running only when
-    # we have no heartbeat yet (cold dashboard, bot hasn't ticked).
+    # "running" reflects the operator's intent stored in bot_control —
+    # the bot process polls that flag and pauses when False. We also
+    # require a recent heartbeat: should_run=True but no heartbeat in
+    # the last 3 minutes means the bot crashed / is wedged, which the
+    # dashboard should show as not running (so the user sees a real
+    # problem rather than a false-positive green dot).
     bot_hb = heartbeat_store.read("bot")
-    bot_running = state.running
+    should_run = bot_control_store.should_run()
     bot_last_hb = state.last_heartbeat
+    hb_fresh = False
     if bot_hb is not None:
         bot_last_hb = bot_hb.last_tick_at
-        bot_running = (datetime.now(timezone.utc) - bot_hb.last_tick_at).total_seconds() < 180
+        hb_fresh = (datetime.now(timezone.utc) - bot_hb.last_tick_at).total_seconds() < 180
+    bot_running = should_run and hb_fresh
     return StatusResponse(
         running=bot_running,
         mt5_connected=bool(bs.connected) if bs else False,
@@ -713,15 +719,17 @@ def trades(limit: int = 20, user: dict = Depends(current_user)) -> list[TradeRes
 
 
 @app.post("/bot/start")
-def start_bot(_user: dict = Depends(require_2fa)) -> dict[str, str]:
+def start_bot(user: dict = Depends(require_2fa)) -> dict[str, str]:
     state.running = True
     state.last_heartbeat = datetime.utcnow()
+    bot_control_store.set(True, by=user.get("username"))
     return {"status": "started"}
 
 
 @app.post("/bot/stop")
-def stop_bot(_user: dict = Depends(require_2fa)) -> dict[str, str]:
+def stop_bot(user: dict = Depends(require_2fa)) -> dict[str, str]:
     state.running = False
+    bot_control_store.set(False, by=user.get("username"))
     return {"status": "stopped"}
 
 
