@@ -708,24 +708,24 @@ void MakeBitmap(const string name, int xoff, int yoff, const string file, int xs
 }
 
 // Sizing ------------------------------------------------------------
+// Layout heights for the Figma-inspired sections.
+#define P_HERO_H       96   // big balance number + label + last-sync line
+#define P_TILE_H       82   // KPI tile (3-up row)
+#define P_BIGTILE_H    98   // larger info tiles (2-up row)
+#define P_GRAD_H       4    // bottom rainbow gradient strip
+
 int PanelHeight()
 {
-   int symbol_rows = MathMax(1, (int)MathCeil((g_filter_active ? g_enabled_count : 1) / 4.0));
-   int chip_h = 22;
-   // KPI tile row (64h) + last-copy line + 2 dividers (with surrounding
-   // gaps) + symbol-header row + symbol-chip rows + 3 account rows + pad.
-   int height = P_HEADER_H
-              + P_SECTION_GAP            // gap below header
-              + 64                       // tile row
-              + P_SECTION_GAP
-              + P_ROW_H                  // last-copy detail line
-              + P_SECTION_GAP * 2 + 1    // div1 + gaps
-              + P_ROW_H + 2              // SYMBOLS heading
-              + symbol_rows * (chip_h + 4)
-              + P_SECTION_GAP * 2 + 1    // div2 + gaps
-              + 3 * P_ROW_H              // balance, equity, risk
-              + P_PAD;
-   return height;
+   return P_HEADER_H
+        + P_SECTION_GAP
+        + P_HERO_H
+        + P_SECTION_GAP
+        + P_TILE_H
+        + P_SECTION_GAP
+        + P_BIGTILE_H
+        + P_SECTION_GAP
+        + P_GRAD_H
+        + 4;
 }
 
 // Recompute where the panel's top-left should sit on the chart, based
@@ -751,6 +751,23 @@ void LayoutPanel()
    }
 }
 
+// ===== Figma-inspired palette ======================================
+// All colours kept as C'r,g,b' literals so they're easy to read/tweak.
+#define COL_BG          C'14,18,32'      // panel backdrop
+#define COL_BG_2        C'22,26,42'      // header band (slightly lifted)
+#define COL_BG_TILE     C'24,30,48'      // tile body
+#define COL_TXT         C'232,240,255'   // body text
+#define COL_MUTED       C'130,148,176'   // labels
+#define COL_HERO        C'255,128,90'    // hero number (orange-coral)
+#define COL_GREEN       C'80,220,150'    // positive / buy / balance
+#define COL_RED         C'255,100,120'   // negative / sell / drawdown
+#define COL_CYAN        C'88,210,231'    // primary accent
+#define COL_BLUE        C'120,170,255'   // info tile
+#define COL_PURPLE      C'170,130,255'   // accent for the bottom strip
+#define COL_GREEN_TILE  C'18,42,32'      // green-tinted tile body
+#define COL_RED_TILE    C'46,22,30'      // red-tinted tile body
+#define COL_BLUE_TILE   C'22,30,58'      // blue/purple-tinted tile body
+
 // One-time build — everything else is a redraw of text values.
 void BuildPanel()
 {
@@ -760,42 +777,31 @@ void BuildPanel()
    int x = g_panel_x;
    int y = g_panel_y;
 
-   // ── Backdrop: full-panel filled box (chart can't bleed through). ──
-   MakeBox(PNL + "card", x, y, g_panel_w, h,
-           PanelBgColor, PanelBorderColor);
+   // ── Backdrop (chart can't bleed through). ─────────────────────────
+   MakeBox(PNL + "card", x, y, g_panel_w, h, COL_BG, COL_BG_2);
 
-   // ── Header strip: subtle gradient feel via a second slightly-lighter
-   //    band, plus a neon accent strip on the very left edge. ──────────
-   MakeBox(PNL + "hdr", x, y, g_panel_w, P_HEADER_H,
-           C'18,24,38', PanelBorderColor);
-   // Left vertical neon bar — bright brand stripe.
-   MakeBox(PNL + "bar", x, y, 6, P_HEADER_H + 2,
-           PanelAccentColor, PanelAccentColor);
-   // Thin underline beneath the header to separate it from the body.
-   MakeBox(PNL + "uline", x, y + P_HEADER_H, g_panel_w, 2,
-           PanelAccentColor, PanelAccentColor);
+   // ── Header band ───────────────────────────────────────────────────
+   MakeBox(PNL + "hdr", x, y, g_panel_w, P_HEADER_H, COL_BG_2, COL_BG_2);
 
-   // ── "AG" badge — replaces the unreliable BMP with a solid colored
-   //    box and bold letterform. ──────────────────────────────────────
-   MakeBox(PNL + "badge", x + 16, y + 10, 34, 32,
-           PanelAccentColor, PanelAccentColor);
-   MakeLabel(PNL + "badge_t", x + 33, y + 14, "AG",
-             C'8,18,12', 14, "Segoe UI Black", ANCHOR_UPPER);
+   // Cyan "AG" badge in the top-left — stand-in for the Figma pulse icon.
+   MakeBox(PNL + "badge", x + 16, y + 11, 32, 30, COL_CYAN, COL_CYAN);
+   MakeLabel(PNL + "badge_t", x + 32, y + 15, "AG",
+             C'10,18,28', 13, "Segoe UI Black", ANCHOR_UPPER);
 
-   // ── Title + tagline ───────────────────────────────────────────────
-   MakeLabel(PNL + "title", x + 62, y + 11,
-             "ANTIGREED  COPIER", PanelTextColor, 13, "Segoe UI Semibold");
-   MakeLabel(PNL + "sub",   x + 62, y + 31,
-             "live signal mirror", PanelMutedColor, 8, P_FONT_BODY);
+   // Title + sub
+   MakeLabel(PNL + "title", x + 60, y + 12,
+             "LIVE TRADE COPIER", COL_TXT, 12, "Segoe UI Semibold");
+   MakeLabel(PNL + "sub",   x + 60, y + 32,
+             "AntiGreed signal mirror", COL_MUTED, 8, P_FONT_BODY);
 
-   // ── Status pill on the right side of the header ──────────────────
-   int pill_w = 96;
-   MakeBox(PNL + "pill", x + g_panel_w - pill_w - 14, y + 14, pill_w, 24,
-           C'30,44,28', PanelAccentColor);
-   MakeLabel(PNL + "dot",   x + g_panel_w - pill_w - 4, y + 19,
-             "●", PanelAccentColor, 11, P_FONT_BODY);
-   MakeLabel(PNL + "pill_t", x + g_panel_w - pill_w + 14, y + 17,
-             "LIVE", PanelAccentColor, 9, "Segoe UI Semibold");
+   // Status pill on the right (dynamic colour set in RedrawPanel).
+   int pill_w = 110;
+   MakeBox(PNL + "pill", x + g_panel_w - pill_w - 14, y + 13, pill_w, 26,
+           C'42,22,32', COL_RED);
+   MakeLabel(PNL + "pill_arrow", x + g_panel_w - pill_w - 2, y + 17,
+             "↘", COL_RED, 11, "Segoe UI Semibold");
+   MakeLabel(PNL + "pill_t",     x + g_panel_w - pill_w + 18, y + 17,
+             "OFFLINE", COL_RED, 9, "Segoe UI Semibold");
 }
 
 string ShortTime(datetime t)
@@ -832,147 +838,179 @@ void RedrawPanel()
 {
    MaybeResetDailyCounter();
    int x = g_panel_x;
-   int y = g_panel_y + P_HEADER_H + P_SECTION_GAP;
 
-   // Status colors derive from g_last_status — used for the pill and dot.
-   color st_clr = PanelAccentColor;
-   color st_bg  = C'30,44,28';
-   string st_text = "LIVE";
+   // ── Status pill colours derive from health. ──────────────────────
+   color st_clr = COL_GREEN;
+   color st_bg  = C'18,42,32';
+   string st_text  = "LIVE";
+   string st_arrow = "↗";
    if(g_last_status == "blocked")
    {
-      st_clr = C'255,179,0'; st_bg = C'52,38,8'; st_text = "BLOCKED";
+      st_clr = C'255,179,0'; st_bg = C'52,38,8';
+      st_text = "BLOCKED"; st_arrow = "⚠";
    }
    else if(g_last_status == "stopped")
    {
-      st_clr = PanelDangerColor; st_bg = C'58,18,28'; st_text = "STOPPED";
+      st_clr = COL_RED; st_bg = C'46,22,30';
+      st_text = "OFFLINE"; st_arrow = "↘";
    }
-   ObjectSetInteger(0, PNL + "dot",    OBJPROP_COLOR, st_clr);
-   ObjectSetInteger(0, PNL + "pill",   OBJPROP_BGCOLOR, st_bg);
-   ObjectSetInteger(0, PNL + "pill",   OBJPROP_BORDER_COLOR, st_clr);
-   ObjectSetInteger(0, PNL + "pill_t", OBJPROP_COLOR, st_clr);
-   ObjectSetString (0, PNL + "pill_t", OBJPROP_TEXT, st_text);
-   // Tagline reflects health.
-   string sub = "live signal mirror · poll " +
+   ObjectSetInteger(0, PNL + "pill",      OBJPROP_BGCOLOR, st_bg);
+   ObjectSetInteger(0, PNL + "pill",      OBJPROP_BORDER_COLOR, st_clr);
+   ObjectSetInteger(0, PNL + "pill_t",    OBJPROP_COLOR, st_clr);
+   ObjectSetInteger(0, PNL + "pill_arrow",OBJPROP_COLOR, st_clr);
+   ObjectSetString (0, PNL + "pill_t",    OBJPROP_TEXT, st_text);
+   ObjectSetString (0, PNL + "pill_arrow",OBJPROP_TEXT, st_arrow);
+   string sub = "AntiGreed signal mirror · poll " +
                 IntegerToString(MathMax(2, PollSeconds)) + "s";
    if(g_last_status != "live" && StringLen(g_last_error) > 0) sub = g_last_error;
    ObjectSetString(0, PNL + "sub", OBJPROP_TEXT, sub);
 
-   // ─── KPI tile row: three side-by-side metric cards. ──────────────
-   int gap = 8;
-   int tile_w = (g_panel_w - (P_PAD * 2) - (gap * 2)) / 3;
-   int tile_h = 64;
-   DrawTile("t_today", x + P_PAD,                    y, tile_w, tile_h,
-            "COPIED TODAY", IntegerToString(g_copies_today), PanelAccentColor);
-   DrawTile("t_open",  x + P_PAD + tile_w + gap,     y, tile_w, tile_h,
-            "OPEN POSITIONS", IntegerToString(OurOpenPositions()), PanelAccentColor);
-   DrawTile("t_last",  x + P_PAD + (tile_w + gap)*2, y, tile_w, tile_h,
-            "LAST COPY",
-            (g_last_copy_time > 0 ? ShortTime(g_last_copy_time) : "—"),
-            PanelTextColor);
-   y += tile_h + P_SECTION_GAP;
-
-   // Sub-row beneath the last-copy tile showing the actual trade text.
-   string last = (g_last_copy_text == "—") ? "no copies yet" : g_last_copy_text;
-   MakeLabel(PNL + "last_full", x + P_PAD, y, "↗  " + last,
-             PanelMutedColor, 9, P_FONT_BODY);
-   y += P_ROW_H;
-
-   // ─── Section divider ─────────────────────────────────────────────
-   DrawDivider("div1", x, y);
-   y += P_SECTION_GAP;
-
-   // ─── Symbol whitelist chips ──────────────────────────────────────
-   string syms_hdr = g_filter_active
-      ? "SYMBOLS  ·  " + IntegerToString(g_enabled_count) + " enabled"
-      : "SYMBOLS  ·  all admin signals";
-   MakeLabel(PNL + "syms_hdr", x + P_PAD, y, syms_hdr, PanelMutedColor, 9, P_FONT_BODY);
-   y += P_ROW_H + 2;
-   ClearSymbolChips();
-   if(g_filter_active)
-   {
-      int per_row = 4, chip_w = (g_panel_w - (P_PAD * 2) - 18) / per_row;
-      int chip_h = 22;
-      for(int i = 0; i < g_enabled_count; i++)
-      {
-         int col = i % per_row;
-         int row = i / per_row;
-         int cx = x + P_PAD + col * (chip_w + 6);
-         int cy = y + row * (chip_h + 4);
-         string nm = PNL + "chip_" + IntegerToString(i);
-         MakeBox(nm + "_bg", cx, cy, chip_w, chip_h,
-                 C'22,32,48', PanelBorderColor,
-                 g_enabled_symbols[i], PanelAccentColor, 9,
-                 "Segoe UI Semibold", ALIGN_CENTER);
-      }
-      int rows = (int)MathCeil(g_enabled_count / 4.0);
-      y += rows * (chip_h + 4);
-   }
-   else
-   {
-      MakeLabel(PNL + "syms_all", x + P_PAD, y,
-                "set EnabledSymbols=EURUSD,GBPUSD,... to filter",
-                PanelMutedColor, 8, P_FONT_BODY);
-      y += P_ROW_H;
-   }
-   y += P_SECTION_GAP;
-
-   // ─── Section divider ─────────────────────────────────────────────
-   DrawDivider("div2", x, y);
-   y += P_SECTION_GAP;
-
-   // ─── Account snapshot ────────────────────────────────────────────
+   // ── Hero block — big balance number, label, last-sync line. ──────
+   int y = g_panel_y + P_HEADER_H + P_SECTION_GAP;
    string cur = AccountInfoString(ACCOUNT_CURRENCY);
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
    double eq  = AccountInfoDouble(ACCOUNT_EQUITY);
    double floating = eq - bal;
-   color eq_clr = (floating >= 0) ? PanelAccentColor : PanelDangerColor;
-   DrawKv("k_bal",  y, "BALANCE", FmtMoney(bal, cur), PanelTextColor);
-   y += P_ROW_H;
-   DrawKv("k_eq",   y, "EQUITY",  FmtMoney(eq,  cur), eq_clr);
-   y += P_ROW_H;
-   string risk_line = StringFormat("x %.2f  ·  max %.2f lot",
-                                   RiskMultiplier, MaxLotPerTrade);
-   DrawKv("k_risk", y, "RISK",    risk_line, PanelMutedColor);
+   string equity_pct_text = "";
+   if(bal > 0.01)
+   {
+      double pct = (floating / bal) * 100.0;
+      equity_pct_text = StringFormat("%s%.2f%%", (pct >= 0 ? "+" : ""), pct);
+   }
+   MakeLabel(PNL + "hero_l", x + P_PAD, y,
+             "BALANCE", COL_MUTED, 9, P_FONT_BODY);
+   MakeLabel(PNL + "hero_v", x + P_PAD, y + 18,
+             FmtMoney(bal, cur), COL_HERO, 26, "Segoe UI Semibold");
+   // Lightning bolt accent next to the number — the Figma touch.
+   MakeLabel(PNL + "hero_bolt", x + g_panel_w - 32, y + 28,
+             "⚡", COL_HERO, 18, "Segoe UI Semibold");
+   string sync = (g_last_poll_ok > 0)
+      ? "Last sync: " + TimeToString(g_last_poll_ok, TIME_SECONDS)
+      : "Last sync: —";
+   MakeLabel(PNL + "hero_sub", x + P_PAD, y + 64,
+             sync, COL_MUTED, 8, P_FONT_BODY);
+
+   y += P_HERO_H + P_SECTION_GAP;
+
+   // ── 3 KPI tiles: green / red / blue tinted, with coloured top stripes
+   //    + an "icon" letter badge at the top-left of each tile. ────────
+   int gap = 10;
+   int tile_w = (g_panel_w - (P_PAD * 2) - (gap * 2)) / 3;
+   string copy_text;
+   if(g_last_copy_text == "—") copy_text = "—";
+   else copy_text = g_last_copy_text;
+
+   DrawColouredTile("t_today", x + P_PAD,                    y, tile_w, P_TILE_H,
+                    "$", COL_GREEN_TILE, COL_GREEN,
+                    "COPIED TODAY", IntegerToString(g_copies_today));
+   DrawColouredTile("t_open",  x + P_PAD + tile_w + gap,     y, tile_w, P_TILE_H,
+                    "$", COL_RED_TILE,   COL_RED,
+                    "OPEN POSITIONS", IntegerToString(OurOpenPositions()));
+   DrawColouredTile("t_equity",x + P_PAD + (tile_w + gap)*2, y, tile_w, P_TILE_H,
+                    "≡", COL_BLUE_TILE,  COL_BLUE,
+                    "EQUITY", (equity_pct_text == "" ? FmtMoney(eq, cur) : equity_pct_text));
+
+   y += P_TILE_H + P_SECTION_GAP;
+
+   // ── 2 big tiles below: SYMBOLS + RISK summary. ───────────────────
+   int big_w = (g_panel_w - (P_PAD * 2) - gap) / 2;
+   // Left — symbols summary, coloured like a BUY signal tile (green).
+   string sym_value = g_filter_active
+      ? IntegerToString(g_enabled_count)
+      : "ALL";
+   string sym_sub = g_filter_active
+      ? "Filtered whitelist"
+      : "Mirror every admin trade";
+   DrawSignalTile("s_buy",  x + P_PAD,                  y, big_w, P_BIGTILE_H,
+                  COL_GREEN_TILE, COL_GREEN, "SYMBOLS",
+                  sym_value, sym_sub);
+   // Right — risk summary, coloured like a SELL signal tile (red).
+   string risk_value = StringFormat("x%.2f", RiskMultiplier);
+   string risk_sub   = StringFormat("max %.2f lot per trade", MaxLotPerTrade);
+   DrawSignalTile("s_sell", x + P_PAD + big_w + gap,    y, big_w, P_BIGTILE_H,
+                  COL_RED_TILE, COL_RED, "RISK",
+                  risk_value, risk_sub);
+
+   y += P_BIGTILE_H + P_SECTION_GAP;
+
+   // ── Bottom rainbow strip — cyan → indigo → purple, faked with
+   //    stacked narrow rectangles. The Figma "glow" along the bottom. ─
+   DrawGradientStrip(x, y, g_panel_w, P_GRAD_H);
 
    ChartRedraw();
 }
 
-void DrawTile(const string id, int xoff, int yoff, int w, int h,
-              const string label, const string value, color val_clr)
+// One of the three coloured KPI tiles. Top stripe in the accent color,
+// dollar/icon glyph in the top-left, label below it, big number at bottom.
+void DrawColouredTile(const string id, int xoff, int yoff, int w, int h,
+                      const string icon, color bg, color accent,
+                      const string label, const string value)
 {
-   MakeBox(PNL + id + "_bg",  xoff, yoff, w, h,
-           C'14,20,32', PanelBorderColor);
-   // Top accent strip on each tile for that "live ticker" feel.
-   MakeBox(PNL + id + "_top", xoff, yoff, w, 3,
-           val_clr, val_clr);
-   MakeLabel(PNL + id + "_l", xoff + 10, yoff + 9,
-             label, PanelMutedColor, 8, P_FONT_BODY);
-   MakeLabel(PNL + id + "_v", xoff + 10, yoff + 26,
-             value, val_clr, 18, "Segoe UI Semibold");
+   MakeBox  (PNL + id + "_bg",   xoff,            yoff,             w, h,
+             bg, accent);
+   MakeBox  (PNL + id + "_top",  xoff,            yoff,             w, 3,
+             accent, accent);
+   // Coloured icon badge
+   MakeBox  (PNL + id + "_icon", xoff + 10,       yoff + 12,        24, 24,
+             accent, accent);
+   MakeLabel(PNL + id + "_glyph",xoff + 22,       yoff + 16,        icon,
+             C'10,18,24', 11, "Segoe UI Black", ANCHOR_UPPER);
+   MakeLabel(PNL + id + "_l",    xoff + 42,       yoff + 18,        label,
+             COL_MUTED, 8, P_FONT_BODY);
+   MakeLabel(PNL + id + "_v",    xoff + 10,       yoff + 50,        value,
+             accent, 18, "Segoe UI Semibold");
 }
 
-void DrawDivider(const string id, int x_anchor, int y)
+// The two larger "BUY SIGNAL / SELL SIGNAL" style tiles at the bottom.
+void DrawSignalTile(const string id, int xoff, int yoff, int w, int h,
+                    color bg, color accent, const string label,
+                    const string value, const string subline)
 {
-   // Subtle horizontal line that sits inset from the panel edges.
-   MakeBox(PNL + id, x_anchor + P_PAD, y, g_panel_w - (P_PAD * 2), 1,
-           C'40,52,72', C'40,52,72');
+   MakeBox  (PNL + id + "_bg",  xoff, yoff,            w, h, bg, accent);
+   MakeBox  (PNL + id + "_top", xoff, yoff,            w, 3, accent, accent);
+   MakeLabel(PNL + id + "_l",   xoff + 14, yoff + 14,  label,
+             accent, 9, "Segoe UI Semibold");
+   MakeLabel(PNL + id + "_dot", xoff + w - 22, yoff + 14, "●",
+             accent, 9, P_FONT_BODY);
+   MakeLabel(PNL + id + "_v",   xoff + 14, yoff + 38,  value,
+             accent, 22, "Segoe UI Semibold");
+   MakeLabel(PNL + id + "_s",   xoff + 14, yoff + 72,  subline,
+             COL_MUTED, 8, P_FONT_BODY);
 }
 
-void DrawKv(const string id, int y, const string label, const string value, color val_clr)
+// Cyan → blue → purple progression along the bottom of the card. Uses
+// ~24 narrow rectangles with linearly-interpolated RGB stops.
+void DrawGradientStrip(int xoff, int yoff, int w, int h)
 {
-   int x = g_panel_x;
-   MakeLabel(PNL + id + "_l", x + P_PAD,             y, label, PanelMutedColor, 9, P_FONT_BODY);
-   MakeLabel(PNL + id + "_v", x + g_panel_w - P_PAD, y, value, val_clr,         11, "Segoe UI Semibold", ANCHOR_RIGHT_UPPER);
-}
-
-void ClearSymbolChips()
-{
-   for(int i = 0; i < 50; i++)
+   int steps = 24;
+   double strip_w = (double)w / (double)steps;
+   // Three stops: cyan (0%) → blue (50%) → purple (100%)
+   int r1 = 34,  g1 = 200, b1 = 230;   // cyan
+   int r2 = 90,  g2 = 130, b2 = 245;   // mid blue
+   int r3 = 185, g3 = 80,  b3 = 215;   // purple
+   for(int i = 0; i < steps; i++)
    {
-      ObjectDelete(0, PNL + "chip_" + IntegerToString(i));
-      ObjectDelete(0, PNL + "chip_" + IntegerToString(i) + "_bg");
+      double t = (double)i / (double)(steps - 1);
+      int r, g, b;
+      if(t < 0.5)
+      {
+         double u = t * 2.0;
+         r = (int)(r1 + (r2 - r1) * u);
+         g = (int)(g1 + (g2 - g1) * u);
+         b = (int)(b1 + (b2 - b1) * u);
+      }
+      else
+      {
+         double u = (t - 0.5) * 2.0;
+         r = (int)(r2 + (r3 - r2) * u);
+         g = (int)(g2 + (g3 - g2) * u);
+         b = (int)(b2 + (b3 - b2) * u);
+      }
+      color c = (color)((b & 0xFF) << 16 | (g & 0xFF) << 8 | (r & 0xFF));
+      MakeBox(PNL + "g_" + IntegerToString(i),
+              xoff + (int)(i * strip_w), yoff,
+              (int)(strip_w) + 2, h, c, c);
    }
-   ObjectDelete(0, PNL + "syms_all");
 }
 
 string FmtMoney(double v, const string &cur)
