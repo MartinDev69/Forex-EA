@@ -612,6 +612,15 @@
       .ea-cfg-grid { grid-template-columns: 1fr; }
     }
 
+    /* Trades section header — wraps gracefully on narrow screens. */
+    .trades-hd {
+      display: flex; align-items: center; gap: 14px;
+      margin-bottom: 14px; flex-wrap: wrap;
+    }
+    .trades-hd-title { margin-bottom: 0; flex: 1; min-width: 140px; }
+    .trades-hd-date { display: flex; align-items: center; gap: 6px; }
+    .trades-hd-pnl { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
     /* Trade tabs */
     .trade-tabs {
       display: flex; gap: 4px;
@@ -660,15 +669,60 @@
       .login-page { grid-template-columns: 1fr; }
       .login-visual { display: none; }
     }
+    @media (max-width: 820px) {
+      /* Panel heads with right-side controls — let the controls drop
+         underneath the title rather than overlap on narrow screens. */
+      .panel-head { flex-direction: column; align-items: stretch; gap: 10px; }
+      /* Wider explain grid (open-trade why-detail) folds early. */
+      .explain-grid { grid-template-columns: repeat(2,1fr); }
+    }
     @media (max-width: 700px) {
       .main { padding: 16px 14px 60px; }
       .topbar { padding: 0 14px; gap: 8px; }
       .topbar-user, .role-badge, .topbar-status-word { display: none; }
       .acct-grid { grid-template-columns: 1fr 1fr; }
       .field-row { grid-template-columns: 1fr; }
-      .hero-copy { left: 18px; bottom: 18px; }
-      .hero-title { font-size: 22px; }
+      .hero { margin-bottom: 18px; border-radius: 14px; }
+      .hero-copy { left: 16px; right: 16px; bottom: 16px; }
+      .hero-title { font-size: 20px; line-height: 1.2; }
+      .hero-sub { font-size: 12px; }
       .users-form { grid-template-columns: 1fr; }
+      .panel-body { padding: 14px 16px; }
+      .panel-head { padding: 14px 16px 12px; }
+      .section { margin-bottom: 22px; }
+      /* Trade tabs become a full-width strip, and the surrounding header
+         items stack neatly thanks to existing flex-wrap. */
+      .trade-tabs { width: 100%; justify-content: space-between; }
+      .trade-tab { flex: 1; justify-content: center; }
+      /* Tables overflow the panel on narrow widths — give the panel an
+         x-scroll so users can swipe through wide tables instead of
+         columns getting squished into one another. */
+      .panel { overflow-x: auto; overflow-y: hidden; }
+      .trades-table thead th,
+      .trades-table tbody td { padding: 10px 12px; white-space: nowrap; }
+      .trades-table { font-size: 12px; }
+    }
+    @media (max-width: 480px) {
+      /* Very narrow phones (≤ 480px): collapse 2-column grids to a
+         single column and shrink chrome so nothing overlaps. */
+      .main { padding: 12px 10px 60px; }
+      .topbar { padding: 0 10px; gap: 6px; height: 52px; }
+      .topbar-name { font-size: 14px; }
+      .topbar-logo { width: 26px; height: 26px; }
+      .kpi-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+      .kpi-card { padding: 12px 14px; }
+      .acct-grid { grid-template-columns: 1fr 1fr; }
+      .explain-grid { grid-template-columns: 1fr; }
+      .hero-title { font-size: 18px; }
+      .hero-eyebrow { font-size: 9px; letter-spacing: 0.3em; }
+      .sec-hd { letter-spacing: 0.16em; font-size: 10px; }
+      .sec-hd::after { display: none; }
+      /* Trade tabs: drop the count chip's right padding so labels fit. */
+      .trade-tab { padding: 6px 8px; font-size: 10px; }
+      .trade-tab-count { font-size: 9px; padding: 1px 5px; }
+      .btn-row { gap: 8px; }
+      /* Date picker + Clear button shouldn't push session-pnl off-screen. */
+      .date-picker { font-size: 10px; padding: 5px 8px; }
     }
   </style>
 </head>
@@ -1241,8 +1295,8 @@
 
       <!-- Trades — global bot state, visible once broker configured -->
       <div class="section" x-show="canSeeDashboard">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:14px;flex-wrap:wrap">
-          <div class="sec-hd" style="margin-bottom:0;flex:1;min-width:140px">Recent trades</div>
+        <div class="trades-hd">
+          <div class="sec-hd trades-hd-title">Recent trades</div>
           <div class="trade-tabs">
             <button class="trade-tab" :class="{ active: tradeTab === 'open' }" @click="tradeTab = 'open'">
               Open <span class="trade-tab-count" x-text="tradeCounts.open"></span>
@@ -1254,11 +1308,11 @@
               Closed <span class="trade-tab-count" x-text="tradeCounts.closed"></span>
             </button>
           </div>
-          <div style="display:flex;align-items:center;gap:6px">
+          <div class="trades-hd-date">
             <input type="date" x-model="tradeDate" class="date-picker" />
             <button x-show="tradeDate" class="btn-ol-g" style="padding:6px 10px;font-size:11px" @click="tradeDate = ''">Clear</button>
           </div>
-          <span style="font-size:12px;color:var(--muted)">
+          <span class="trades-hd-pnl">
             Session PnL&nbsp;
             <span style="font-family:var(--mono);font-weight:700" :style="sessionPnl >= 0 ? 'color:var(--green)' : 'color:var(--red)'" x-text="(sessionPnl >= 0 ? '+' : '') + sessionPnl.toFixed(2)"></span>
           </span>
