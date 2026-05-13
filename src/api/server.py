@@ -66,6 +66,7 @@ from src.api.setup_tokens import SETUP_TTL_S, create_setup_token, decode_setup_t
 from src.api.totp import generate_secret, provisioning_uri, verify_code
 from src.api.totp_store import TOTPStore
 from src.api.ea_signals import SignalFeed
+from src.api.ea_account_reports import EAAccountReportStore
 from src.api.subscription_requests import (
     SubscriptionRequest,
     SubscriptionRequestStore,
@@ -214,6 +215,7 @@ toggle_store.initialize_defaults({
 user_store = UserStore(_DB)
 subscription_request_store = SubscriptionRequestStore(_DB)
 signal_feed = SignalFeed(_DB)
+ea_account_store = EAAccountReportStore(_DB)
 SIGNUP_BOT_TOKEN = os.environ.get("SIGNUP_TELEGRAM_BOT_TOKEN", "").strip() or None
 ADMIN_TG_CHAT_ID = (
     int(os.environ["TELEGRAM_CHAT_ID"])
@@ -581,7 +583,29 @@ def get_status(_user: dict = Depends(current_user)) -> StatusResponse:
 
 
 @app.get("/account", response_model=AccountResponse)
-def account(_user: dict = Depends(current_user)) -> AccountResponse:
+def account(user: dict = Depends(current_user)) -> AccountResponse:
+    # Non-admin operators run MT5 on their own machine. Their EA POSTs
+    # an account snapshot every 60s — prefer that over admin's MT5 so
+    # the dashboard shows the operator's actual numbers, not the master.
+    if user.get("role") != "admin":
+        username = user.get("username") or user.get("sub") or ""
+        report = ea_account_store.get(username) if username else None
+        if report is not None:
+            balance = float(report.balance or 0.0)
+            equity = float(report.equity or balance)
+            floating = equity - balance
+            return AccountResponse(
+                balance=balance,
+                equity=equity,
+                open_positions=_open_positions(),
+                daily_pnl=floating,
+            )
+        # No EA snapshot yet: return zeros so the user doesn't see
+        # admin's account while their EA is still booting.
+        return AccountResponse(
+            balance=0.0, equity=0.0, open_positions=0, daily_pnl=0.0,
+        )
+
     today = journal.summary_today()
     status = broker_status_store.read()
     info = status.account_info if status and status.connected else None
@@ -823,6 +847,18 @@ class EAConfigResponse(BaseModel):
     instructions_url: str | None = None
 
 
+class EAAccountReportRequest(BaseModel):
+    """Account snapshot POSTed by AntiGreedCopier every 60s."""
+    balance: float | None = None
+    equity: float | None = None
+    margin: float | None = None
+    free_margin: float | None = None
+    login: int | None = None
+    server: str | None = None
+    broker: str | None = None
+    currency: str | None = None
+
+
 @app.get("/me/ea-config", response_model=EAConfigResponse)
 def my_ea_config(user: dict = Depends(current_user)) -> EAConfigResponse:
     """Return the current user's copy-trading EA config — base URL,
@@ -924,8 +960,58 @@ def signal_feed_endpoint(
     }
 
 
+@app.post("/me/ea-account")
+def report_ea_account(
+    body: EAAccountReportRequest,
+    username: str = Depends(ea_caller),
+) -> dict:
+    """Called by AntiGreedCopier every 60s with the operator's local
+    MT5 account snapshot. Stored per-user; the dashboard's /account
+    endpoint reads it back so non-admins see *their* numbers, not
+    admin's. EA-key authenticated.
+    """
+    ea_account_store.upsert(
+        username,
+        balance=body.balance,
+        equity=body.equity,
+        margin=body.margin,
+        free_margin=body.free_margin,
+        login=body.login,
+        server=body.server,
+        broker=body.broker,
+        currency=body.currency,
+    )
+    return {"ok": True}
+
+
 @app.get("/broker/status", response_model=BrokerStatusResponse)
-def get_broker_status(_user: dict = Depends(current_user)) -> BrokerStatusResponse:
+def get_broker_status(user: dict = Depends(current_user)) -> BrokerStatusResponse:
+    # Non-admin: project the operator's own EA-reported snapshot as the
+    # "broker status". connected = EA has POSTed in the last 5 minutes.
+    if user.get("role") != "admin":
+        username = user.get("username") or user.get("sub") or ""
+        report = ea_account_store.get(username) if username else None
+        if report is None:
+            return BrokerStatusResponse(connected=False)
+        age = (datetime.now(report.updated_at.tzinfo) - report.updated_at).total_seconds()
+        info = {
+            "balance": report.balance,
+            "equity": report.equity,
+            "margin": report.margin,
+            "free_margin": report.free_margin,
+            "currency": report.currency,
+        }
+        return BrokerStatusResponse(
+            connected=age < 300,
+            broker=report.broker,
+            server=report.server,
+            login=report.login,
+            account_info=info,
+            last_error=None,
+            updated_at=report.updated_at,
+            stale_s=age,
+        )
+
     s = broker_status_store.read()
     if s is None:
         return BrokerStatusResponse(connected=False)

@@ -44,11 +44,15 @@ input bool    PlaceTakeProfit   = true;                          // mirror admin
 input bool    PlaceStopLoss     = true;                          // mirror admin's SL
 input long    Magic             = 271828;                        // ours-vs-theirs filter
 input bool    Verbose           = true;                          // chatty journal logging
+input int     AccountReportSeconds = 60;                         // how often to push account snapshot
 
 CTrade trade;
 
 // Bookmark we send back as ?since= on the next poll. ISO-8601.
 string g_bookmark = "";
+
+// Wall clock of the last successful account snapshot POST.
+datetime g_last_account_report = 0;
 
 // Map of source bot's trade_id → user's MT5 position ticket. Persisted
 // via Terminal global variables so a restart can still close the
@@ -80,6 +84,7 @@ int OnInit()
 
    EventSetTimer(MathMax(2, PollSeconds));
    Poll();
+   ReportAccount();  // first snapshot immediately so the dashboard lights up
    return INIT_SUCCEEDED;
 }
 
@@ -91,6 +96,7 @@ void OnDeinit(const int reason)
 void OnTimer()
 {
    Poll();
+   MaybeReportAccount();
 }
 
 void OnTick()
@@ -401,6 +407,78 @@ string JsonNextObject(const string &arr, int &pos)
       pos++;
    }
    return "";
+}
+
+//+------------------------------------------------------------------+
+//| Account reporting — POST balance/equity/etc. to /me/ea-account    |
+//| so the dashboard can show this operator's own numbers instead of  |
+//| the admin master account.                                          |
+//+------------------------------------------------------------------+
+void MaybeReportAccount()
+{
+   if(AccountReportSeconds <= 0) return;
+   datetime now = TimeCurrent();
+   if(g_last_account_report > 0 &&
+      (now - g_last_account_report) < AccountReportSeconds) return;
+   ReportAccount();
+}
+
+void ReportAccount()
+{
+   double balance     = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity      = AccountInfoDouble(ACCOUNT_EQUITY);
+   double margin      = AccountInfoDouble(ACCOUNT_MARGIN);
+   double free_margin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   long   login       = AccountInfoInteger(ACCOUNT_LOGIN);
+   string server      = AccountInfoString(ACCOUNT_SERVER);
+   string company     = AccountInfoString(ACCOUNT_COMPANY);
+   string currency    = AccountInfoString(ACCOUNT_CURRENCY);
+
+   string body = StringFormat(
+      "{\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,"
+      "\"free_margin\":%.2f,\"login\":%I64d,"
+      "\"server\":\"%s\",\"broker\":\"%s\",\"currency\":\"%s\"}",
+      balance, equity, margin, free_margin, login,
+      JsonEscape(server), JsonEscape(company), JsonEscape(currency));
+
+   string url = ApiBaseUrl + "/me/ea-account";
+   string headers = "Authorization: Bearer " + ApiToken + "\r\n" +
+                    "Content-Type: application/json\r\n";
+   char post[];
+   StringToCharArray(body, post, 0, StringLen(body), CP_UTF8);
+   char result[];
+   string result_headers;
+   ResetLastError();
+   int code = WebRequest("POST", url, headers, 8000, post, result, result_headers);
+   if(code == 200)
+   {
+      g_last_account_report = TimeCurrent();
+      if(Verbose) Print("AntiGreedCopier: account snapshot reported.");
+   }
+   else if(code == -1)
+   {
+      int err = GetLastError();
+      if(err == 4014 && Verbose)
+         Print("AntiGreedCopier: account report blocked — WebRequest needs ", ApiBaseUrl, " whitelisted.");
+   }
+   else if(Verbose)
+   {
+      Print("AntiGreedCopier: account report HTTP ", code);
+   }
+}
+
+// Minimal JSON-string escape — handles backslash and quote so broker
+// names with apostrophes etc. don't break the payload.
+string JsonEscape(const string &s)
+{
+   string out = "";
+   for(int i = 0; i < StringLen(s); i++)
+   {
+      ushort ch = StringGetCharacter(s, i);
+      if(ch == '\\' || ch == '"') out += "\\";
+      out += ShortToString(ch);
+   }
+   return out;
 }
 
 string UrlEncode(const string &s)
