@@ -26,7 +26,7 @@
 //|    a terminal restart doesn't lose track.                        |
 //|                                                                  |
 //+------------------------------------------------------------------+
-#property copyright "AntiGreed"
+#property copyright "Martin Kristof"
 #property link      "https://github.com/MartinDev69/Forex-EA"
 #property version   "1.00"
 #property strict
@@ -50,7 +50,7 @@ input int     AccountReportSeconds = 60;                         // how often to
 input group "═══ On-chart panel ═══"
 input bool                ShowPanel         = true;              // render the status panel
 input bool                PanelCentered     = true;              // auto-center on the chart (overrides offsets)
-input int                 PanelWidth        = 420;               // panel width in px
+input int                 PanelWidth        = 720;               // panel width in px
 input int                 PanelOffsetX      = 0;                 // nudge X (px) — relative to centered position or top-left
 input int                 PanelOffsetY      = 0;                 // nudge Y (px)
 input color               PanelBgColor      = C'10,14,20';       // panel background
@@ -635,7 +635,7 @@ bool IsSymbolEnabled(const string &symbol)
 // Panel width (live; pulled from PanelWidth input on init) and its
 // computed top-left position in chart pixels. Refreshed whenever the
 // chart resizes via OnChartEvent.
-int g_panel_w = 420;
+int g_panel_w = 620;
 int g_panel_x = 0;
 int g_panel_y = 0;
 
@@ -712,6 +712,7 @@ void MakeBitmap(const string name, int xoff, int yoff, const string file, int xs
 #define P_HERO_H       96   // big balance number + label + last-sync line
 #define P_TILE_H       82   // KPI tile (3-up row)
 #define P_BIGTILE_H    98   // larger info tiles (2-up row)
+#define P_FOOTER_H     22   // developer attribution line
 #define P_GRAD_H       4    // bottom rainbow gradient strip
 
 int PanelHeight()
@@ -724,6 +725,7 @@ int PanelHeight()
         + P_SECTION_GAP
         + P_BIGTILE_H
         + P_SECTION_GAP
+        + P_FOOTER_H
         + P_GRAD_H
         + 4;
 }
@@ -880,7 +882,7 @@ void RedrawPanel()
    MakeLabel(PNL + "hero_l", x + P_PAD, y,
              "BALANCE", COL_MUTED, 9, P_FONT_BODY);
    MakeLabel(PNL + "hero_v", x + P_PAD, y + 18,
-             FmtMoney(bal, cur), COL_HERO, 26, "Segoe UI Semibold");
+             FmtMoney(bal, cur), COL_HERO, 32, "Segoe UI Semibold");
    // Lightning bolt accent next to the number — the Figma touch.
    MakeLabel(PNL + "hero_bolt", x + g_panel_w - 32, y + 28,
              "⚡", COL_HERO, 18, "Segoe UI Semibold");
@@ -932,6 +934,13 @@ void RedrawPanel()
                   risk_value, risk_sub);
 
    y += P_BIGTILE_H + P_SECTION_GAP;
+
+   // Developer attribution — centered above the gradient strip.
+   MakeLabel(PNL + "footer", x + g_panel_w / 2, y + 4,
+             "Developed by Martin Kristof", COL_MUTED, 8, P_FONT_BODY,
+             ANCHOR_UPPER);
+
+   y += P_FOOTER_H;
 
    // ── Bottom rainbow strip — cyan → indigo → purple, faked with
    //    stacked narrow rectangles. The Figma "glow" along the bottom. ─
