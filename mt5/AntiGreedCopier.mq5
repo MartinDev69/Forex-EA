@@ -640,23 +640,36 @@ int g_panel_x = 0;
 int g_panel_y = 0;
 
 // Object builders ---------------------------------------------------
-void MakeRect(const string name, int xoff, int yoff, int xsize, int ysize,
-              color bg, color border, int border_w = 1)
+// We use OBJ_BUTTON for ALL filled rectangles. OBJ_RECTANGLE_LABEL's
+// fill is unreliable on Wine MT5 (the chart shows through). Buttons
+// fill consistently across native Windows and Wine, and with
+// READONLY+disabled-state they're visually inert.
+void MakeBox(const string name, int xoff, int yoff, int xsize, int ysize,
+             color bg, color border, const string text = "",
+             color text_clr = clrWhite, int text_size = 9,
+             const string text_font = "Segoe UI",
+             ENUM_ALIGN_MODE align = ALIGN_LEFT)
 {
    if(ObjectFind(0, name) < 0)
-      ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+      ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, xoff);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, yoff);
    ObjectSetInteger(0, name, OBJPROP_XSIZE, xsize);
    ObjectSetInteger(0, name, OBJPROP_YSIZE, ysize);
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
-   ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
    ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, border);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, border_w);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, text_clr);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, text_size);
+   ObjectSetString (0, name, OBJPROP_FONT, text_font);
+   ObjectSetString (0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_ALIGN, align);
+   ObjectSetInteger(0, name, OBJPROP_STATE, false);
+   ObjectSetInteger(0, name, OBJPROP_READONLY, true);
    ObjectSetInteger(0, name, OBJPROP_BACK, false);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 100);
 }
 
 void MakeLabel(const string name, int xoff, int yoff, const string text,
@@ -675,6 +688,8 @@ void MakeLabel(const string name, int xoff, int yoff, const string text,
    ObjectSetInteger(0, name, OBJPROP_BACK, false);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   // Labels go ABOVE the filled boxes from MakeBox.
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 200);
 }
 
 void MakeBitmap(const string name, int xoff, int yoff, const string file, int xsize, int ysize)
@@ -696,11 +711,21 @@ void MakeBitmap(const string name, int xoff, int yoff, const string file, int xs
 int PanelHeight()
 {
    int symbol_rows = MathMax(1, (int)MathCeil((g_filter_active ? g_enabled_count : 1) / 4.0));
-   int body_rows  = 4 /* status, copies, open, last */
-                  + 1 /* symbols header */
-                  + symbol_rows
-                  + 3 /* balance, equity, risk */;
-   return P_HEADER_H + (body_rows * P_ROW_H) + (2 * P_SECTION_GAP) + (P_PAD * 2);
+   int chip_h = 22;
+   // KPI tile row (64h) + last-copy line + 2 dividers (with surrounding
+   // gaps) + symbol-header row + symbol-chip rows + 3 account rows + pad.
+   int height = P_HEADER_H
+              + P_SECTION_GAP            // gap below header
+              + 64                       // tile row
+              + P_SECTION_GAP
+              + P_ROW_H                  // last-copy detail line
+              + P_SECTION_GAP * 2 + 1    // div1 + gaps
+              + P_ROW_H + 2              // SYMBOLS heading
+              + symbol_rows * (chip_h + 4)
+              + P_SECTION_GAP * 2 + 1    // div2 + gaps
+              + 3 * P_ROW_H              // balance, equity, risk
+              + P_PAD;
+   return height;
 }
 
 // Recompute where the panel's top-left should sit on the chart, based
@@ -735,22 +760,42 @@ void BuildPanel()
    int x = g_panel_x;
    int y = g_panel_y;
 
-   // Outer card + neon header strip.
-   MakeRect(PNL + "card", x, y, g_panel_w, h, PanelBgColor, PanelBorderColor, 1);
-   MakeRect(PNL + "hdr",  x, y, g_panel_w, P_HEADER_H,
-            C'18,22,32', PanelBorderColor, 1);
-   // Thin neon underline beneath the header.
-   MakeRect(PNL + "uline", x, y + P_HEADER_H, g_panel_w, 2,
-            PanelAccentColor, PanelAccentColor, 1);
+   // ── Backdrop: full-panel filled box (chart can't bleed through). ──
+   MakeBox(PNL + "card", x, y, g_panel_w, h,
+           PanelBgColor, PanelBorderColor);
 
-   // Header: logo (or fallback bullet), title, status dot.
-   MakeBitmap(PNL + "logo", x + 14, y + 10, PanelLogoFile, 32, 32);
-   MakeLabel(PNL + "title", x + 60, y + 14,
-             "ANTIGREED · COPIER", PanelTextColor, 12, P_FONT_BODY);
-   MakeLabel(PNL + "sub",   x + 60, y + 32,
-             "live signal copier", PanelMutedColor, 8, P_FONT_BODY);
-   MakeLabel(PNL + "dot",   x + g_panel_w - 22, y + P_HEADER_H / 2 - 7,
-             "●", PanelAccentColor, 16, P_FONT_BODY);
+   // ── Header strip: subtle gradient feel via a second slightly-lighter
+   //    band, plus a neon accent strip on the very left edge. ──────────
+   MakeBox(PNL + "hdr", x, y, g_panel_w, P_HEADER_H,
+           C'18,24,38', PanelBorderColor);
+   // Left vertical neon bar — bright brand stripe.
+   MakeBox(PNL + "bar", x, y, 6, P_HEADER_H + 2,
+           PanelAccentColor, PanelAccentColor);
+   // Thin underline beneath the header to separate it from the body.
+   MakeBox(PNL + "uline", x, y + P_HEADER_H, g_panel_w, 2,
+           PanelAccentColor, PanelAccentColor);
+
+   // ── "AG" badge — replaces the unreliable BMP with a solid colored
+   //    box and bold letterform. ──────────────────────────────────────
+   MakeBox(PNL + "badge", x + 16, y + 10, 34, 32,
+           PanelAccentColor, PanelAccentColor);
+   MakeLabel(PNL + "badge_t", x + 33, y + 14, "AG",
+             C'8,18,12', 14, "Segoe UI Black", ANCHOR_UPPER);
+
+   // ── Title + tagline ───────────────────────────────────────────────
+   MakeLabel(PNL + "title", x + 62, y + 11,
+             "ANTIGREED  COPIER", PanelTextColor, 13, "Segoe UI Semibold");
+   MakeLabel(PNL + "sub",   x + 62, y + 31,
+             "live signal mirror", PanelMutedColor, 8, P_FONT_BODY);
+
+   // ── Status pill on the right side of the header ──────────────────
+   int pill_w = 96;
+   MakeBox(PNL + "pill", x + g_panel_w - pill_w - 14, y + 14, pill_w, 24,
+           C'30,44,28', PanelAccentColor);
+   MakeLabel(PNL + "dot",   x + g_panel_w - pill_w - 4, y + 19,
+             "●", PanelAccentColor, 11, P_FONT_BODY);
+   MakeLabel(PNL + "pill_t", x + g_panel_w - pill_w + 14, y + 17,
+             "LIVE", PanelAccentColor, 9, "Segoe UI Semibold");
 }
 
 string ShortTime(datetime t)
@@ -789,85 +834,135 @@ void RedrawPanel()
    int x = g_panel_x;
    int y = g_panel_y + P_HEADER_H + P_SECTION_GAP;
 
-   // Status dot color
-   color dot_clr = PanelAccentColor;
-   if(g_last_status == "blocked") dot_clr = C'255,179,0';
-   else if(g_last_status == "stopped") dot_clr = PanelDangerColor;
-   ObjectSetInteger(0, PNL + "dot", OBJPROP_COLOR, dot_clr);
-   // Header sub-line tells the operator what live really means.
-   string sub = "polling every " + IntegerToString(MathMax(2, PollSeconds)) + "s";
-   if(g_last_status == "blocked") sub = g_last_error;
-   else if(g_last_status == "stopped") sub = g_last_error;
+   // Status colors derive from g_last_status — used for the pill and dot.
+   color st_clr = PanelAccentColor;
+   color st_bg  = C'30,44,28';
+   string st_text = "LIVE";
+   if(g_last_status == "blocked")
+   {
+      st_clr = C'255,179,0'; st_bg = C'52,38,8'; st_text = "BLOCKED";
+   }
+   else if(g_last_status == "stopped")
+   {
+      st_clr = PanelDangerColor; st_bg = C'58,18,28'; st_text = "STOPPED";
+   }
+   ObjectSetInteger(0, PNL + "dot",    OBJPROP_COLOR, st_clr);
+   ObjectSetInteger(0, PNL + "pill",   OBJPROP_BGCOLOR, st_bg);
+   ObjectSetInteger(0, PNL + "pill",   OBJPROP_BORDER_COLOR, st_clr);
+   ObjectSetInteger(0, PNL + "pill_t", OBJPROP_COLOR, st_clr);
+   ObjectSetString (0, PNL + "pill_t", OBJPROP_TEXT, st_text);
+   // Tagline reflects health.
+   string sub = "live signal mirror · poll " +
+                IntegerToString(MathMax(2, PollSeconds)) + "s";
+   if(g_last_status != "live" && StringLen(g_last_error) > 0) sub = g_last_error;
    ObjectSetString(0, PNL + "sub", OBJPROP_TEXT, sub);
 
-   // ── Section: KPIs ──────────────────────────────
-   DrawKv("k_status", y, "STATUS", g_last_status, dot_clr);
-   y += P_ROW_H;
-   DrawKv("k_today",  y, "COPIED TODAY", IntegerToString(g_copies_today), PanelAccentColor);
-   y += P_ROW_H;
-   DrawKv("k_open",   y, "OPEN POSITIONS", IntegerToString(OurOpenPositions()), PanelAccentColor);
-   y += P_ROW_H;
-   string last = g_last_copy_text;
-   if(g_last_copy_time > 0) last = last + "  " + ShortTime(g_last_copy_time);
-   DrawKv("k_last",   y, "LAST COPY", last, PanelTextColor);
-   y += P_ROW_H + P_SECTION_GAP;
+   // ─── KPI tile row: three side-by-side metric cards. ──────────────
+   int gap = 8;
+   int tile_w = (g_panel_w - (P_PAD * 2) - (gap * 2)) / 3;
+   int tile_h = 64;
+   DrawTile("t_today", x + P_PAD,                    y, tile_w, tile_h,
+            "COPIED TODAY", IntegerToString(g_copies_today), PanelAccentColor);
+   DrawTile("t_open",  x + P_PAD + tile_w + gap,     y, tile_w, tile_h,
+            "OPEN POSITIONS", IntegerToString(OurOpenPositions()), PanelAccentColor);
+   DrawTile("t_last",  x + P_PAD + (tile_w + gap)*2, y, tile_w, tile_h,
+            "LAST COPY",
+            (g_last_copy_time > 0 ? ShortTime(g_last_copy_time) : "—"),
+            PanelTextColor);
+   y += tile_h + P_SECTION_GAP;
 
-   // ── Section: Symbol whitelist ──────────────────
-   string syms_hdr = g_filter_active
-      ? "SYMBOLS (" + IntegerToString(g_enabled_count) + " enabled)"
-      : "SYMBOLS (all admin signals)";
-   MakeLabel(PNL + "syms_hdr", x + P_PAD, y, syms_hdr, PanelMutedColor, 8, P_FONT_BODY);
+   // Sub-row beneath the last-copy tile showing the actual trade text.
+   string last = (g_last_copy_text == "—") ? "no copies yet" : g_last_copy_text;
+   MakeLabel(PNL + "last_full", x + P_PAD, y, "↗  " + last,
+             PanelMutedColor, 9, P_FONT_BODY);
    y += P_ROW_H;
-   // Three chips per row.
+
+   // ─── Section divider ─────────────────────────────────────────────
+   DrawDivider("div1", x, y);
+   y += P_SECTION_GAP;
+
+   // ─── Symbol whitelist chips ──────────────────────────────────────
+   string syms_hdr = g_filter_active
+      ? "SYMBOLS  ·  " + IntegerToString(g_enabled_count) + " enabled"
+      : "SYMBOLS  ·  all admin signals";
+   MakeLabel(PNL + "syms_hdr", x + P_PAD, y, syms_hdr, PanelMutedColor, 9, P_FONT_BODY);
+   y += P_ROW_H + 2;
    ClearSymbolChips();
    if(g_filter_active)
    {
       int per_row = 4, chip_w = (g_panel_w - (P_PAD * 2) - 18) / per_row;
+      int chip_h = 22;
       for(int i = 0; i < g_enabled_count; i++)
       {
          int col = i % per_row;
          int row = i / per_row;
          int cx = x + P_PAD + col * (chip_w + 6);
-         int cy = y + row * (P_ROW_H + 2);
+         int cy = y + row * (chip_h + 4);
          string nm = PNL + "chip_" + IntegerToString(i);
-         MakeRect(nm + "_bg", cx, cy - 1, chip_w, P_ROW_H - 2,
-                  C'22,30,44', PanelBorderColor, 1);
-         MakeLabel(nm,        cx + 6, cy + 2, g_enabled_symbols[i],
-                   PanelAccentColor, 8, P_FONT);
+         MakeBox(nm + "_bg", cx, cy, chip_w, chip_h,
+                 C'22,32,48', PanelBorderColor,
+                 g_enabled_symbols[i], PanelAccentColor, 9,
+                 "Segoe UI Semibold", ALIGN_CENTER);
       }
       int rows = (int)MathCeil(g_enabled_count / 4.0);
-      y += rows * (P_ROW_H + 2);
+      y += rows * (chip_h + 4);
    }
    else
    {
       MakeLabel(PNL + "syms_all", x + P_PAD, y,
-                "(set EnabledSymbols to filter)", PanelMutedColor, 8, P_FONT_BODY);
+                "set EnabledSymbols=EURUSD,GBPUSD,... to filter",
+                PanelMutedColor, 8, P_FONT_BODY);
       y += P_ROW_H;
    }
    y += P_SECTION_GAP;
 
-   // ── Section: Account snapshot ──────────────────
+   // ─── Section divider ─────────────────────────────────────────────
+   DrawDivider("div2", x, y);
+   y += P_SECTION_GAP;
+
+   // ─── Account snapshot ────────────────────────────────────────────
    string cur = AccountInfoString(ACCOUNT_CURRENCY);
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
    double eq  = AccountInfoDouble(ACCOUNT_EQUITY);
-   DrawKv("k_bal",  y, "BALANCE", FmtMoney(bal, cur), PanelAccentColor);
-   y += P_ROW_H;
    double floating = eq - bal;
    color eq_clr = (floating >= 0) ? PanelAccentColor : PanelDangerColor;
-   DrawKv("k_eq",   y, "EQUITY",  FmtMoney(eq, cur),  eq_clr);
+   DrawKv("k_bal",  y, "BALANCE", FmtMoney(bal, cur), PanelTextColor);
    y += P_ROW_H;
-   string risk_line = StringFormat("× %.2f  ·  max %.2f lot",
+   DrawKv("k_eq",   y, "EQUITY",  FmtMoney(eq,  cur), eq_clr);
+   y += P_ROW_H;
+   string risk_line = StringFormat("x %.2f  ·  max %.2f lot",
                                    RiskMultiplier, MaxLotPerTrade);
-   DrawKv("k_risk", y, "RISK",    risk_line, PanelTextColor);
+   DrawKv("k_risk", y, "RISK",    risk_line, PanelMutedColor);
 
    ChartRedraw();
+}
+
+void DrawTile(const string id, int xoff, int yoff, int w, int h,
+              const string label, const string value, color val_clr)
+{
+   MakeBox(PNL + id + "_bg",  xoff, yoff, w, h,
+           C'14,20,32', PanelBorderColor);
+   // Top accent strip on each tile for that "live ticker" feel.
+   MakeBox(PNL + id + "_top", xoff, yoff, w, 3,
+           val_clr, val_clr);
+   MakeLabel(PNL + id + "_l", xoff + 10, yoff + 9,
+             label, PanelMutedColor, 8, P_FONT_BODY);
+   MakeLabel(PNL + id + "_v", xoff + 10, yoff + 26,
+             value, val_clr, 18, "Segoe UI Semibold");
+}
+
+void DrawDivider(const string id, int x_anchor, int y)
+{
+   // Subtle horizontal line that sits inset from the panel edges.
+   MakeBox(PNL + id, x_anchor + P_PAD, y, g_panel_w - (P_PAD * 2), 1,
+           C'40,52,72', C'40,52,72');
 }
 
 void DrawKv(const string id, int y, const string label, const string value, color val_clr)
 {
    int x = g_panel_x;
-   MakeLabel(PNL + id + "_l", x + P_PAD,               y, label, PanelMutedColor, 9, P_FONT_BODY);
-   MakeLabel(PNL + id + "_v", x + g_panel_w - P_PAD,   y, value, val_clr,         10, P_FONT, ANCHOR_RIGHT_UPPER);
+   MakeLabel(PNL + id + "_l", x + P_PAD,             y, label, PanelMutedColor, 9, P_FONT_BODY);
+   MakeLabel(PNL + id + "_v", x + g_panel_w - P_PAD, y, value, val_clr,         11, "Segoe UI Semibold", ANCHOR_RIGHT_UPPER);
 }
 
 void ClearSymbolChips()
