@@ -580,6 +580,22 @@
       background: var(--surface2); border: 1px solid var(--edge); padding: 1px 6px;
       border-radius: 4px; font-family: var(--mono); font-size: 11px;
     }
+    .ea-step-tip {
+      font-size: 11px; color: var(--muted); line-height: 1.5;
+      margin-top: 6px; padding-left: 10px;
+      border-left: 2px solid var(--edge);
+    }
+    .ea-os-tab-row {
+      display: flex; gap: 4px; margin-top: 12px;
+      background: var(--surface); border: 1px solid var(--edge);
+      border-radius: 10px; padding: 3px; width: fit-content;
+    }
+    .ea-os-tab {
+      padding: 5px 14px; border-radius: 7px; font-size: 11px; font-weight: 600;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      background: transparent; color: var(--muted); border: none; cursor: pointer;
+    }
+    .ea-os-tab.on { background: var(--gdim); color: var(--green); border: 1px solid var(--gglow); }
     @media (max-width: 700px) {
       .ea-cfg-grid { grid-template-columns: 1fr; }
     }
@@ -791,42 +807,71 @@
               </div>
             </div>
 
-            <div class="ea-steps">
-              <div class="ea-step">
-                <div class="ea-step-n">1</div>
-                <div>
-                  <div class="ea-step-h">Download AntiGreedCopier</div>
-                  <div class="ea-step-b">Save <code>AntiGreedCopier.mq5</code> into your MetaTrader 5 data folder under <code>MQL5\Experts\</code>.</div>
-                  <a class="btn-sl-g" style="margin-top:6px;display:inline-block;padding:7px 14px;font-size:11px;text-decoration:none"
-                     href="/download/ea" download="AntiGreedCopier.mq5">Download .mq5</a>
-                </div>
+            <div class="ea-os-tabs" x-data="{ os: (navigator.userAgent.indexOf('Mac') > -1 ? 'mac' : 'win') }">
+              <div class="ea-os-tab-row">
+                <button type="button" class="ea-os-tab" :class="os === 'win' ? 'on' : ''" @click="os = 'win'">Windows</button>
+                <button type="button" class="ea-os-tab" :class="os === 'mac' ? 'on' : ''" @click="os = 'mac'">macOS</button>
               </div>
-              <div class="ea-step">
-                <div class="ea-step-n">2</div>
-                <div>
-                  <div class="ea-step-h">Compile in MetaEditor</div>
-                  <div class="ea-step-b">Open MT5 → press F4 → open <code>AntiGreedCopier.mq5</code> → press F7. Should report "0 errors, 0 warnings".</div>
+
+              <div class="ea-steps">
+                <div class="ea-step">
+                  <div class="ea-step-n">1</div>
+                  <div>
+                    <div class="ea-step-h">Download AntiGreedCopier</div>
+                    <div class="ea-step-b" x-show="os === 'win'">
+                      Save <code>AntiGreedCopier.mq5</code> into your MetaTrader 5 data folder under <code>MQL5\Experts\</code>.
+                      <div class="ea-step-tip">Easiest way to find the folder: in MT5 click <b>File → Open Data Folder</b>, then open <code>MQL5\Experts</code>.</div>
+                    </div>
+                    <div class="ea-step-b" x-show="os === 'mac'">
+                      MT5 has no native Mac build — download the Mac wrapper from your broker (Exness: <a href="https://www.exness.com/downloads/mt5/macos/" target="_blank" rel="noopener">exness.com/downloads/mt5/macos</a>) and install it. Then drop <code>AntiGreedCopier.mq5</code> into the data folder under <code>MQL5/Experts/</code>.
+                      <div class="ea-step-tip">In MT5 click <b>File → Open Data Folder</b> — it opens the right path inside the Wine prefix (somewhere under <code>~/Library/Application Support/…/drive_c/…</code>). Drop the file in <code>MQL5/Experts/</code> from there. On Apple Silicon expect a small first-launch delay while Rosetta translates the .exe.</div>
+                    </div>
+                    <a class="btn-sl-g" style="margin-top:6px;display:inline-block;padding:7px 14px;font-size:11px;text-decoration:none"
+                       href="/download/ea" download="AntiGreedCopier.mq5">Download .mq5</a>
+                  </div>
                 </div>
-              </div>
-              <div class="ea-step">
-                <div class="ea-step-n">3</div>
-                <div>
-                  <div class="ea-step-h">Whitelist the API URL</div>
-                  <div class="ea-step-b">In MT5: <b>Tools → Options → Expert Advisors</b> → tick <em>"Allow WebRequest for listed URL"</em> and add the API base URL above. Otherwise MT5 blocks outbound HTTP.</div>
+                <div class="ea-step">
+                  <div class="ea-step-n">2</div>
+                  <div>
+                    <div class="ea-step-h">Compile in MetaEditor</div>
+                    <div class="ea-step-b" x-show="os === 'win'">Open MT5 → press <b>F4</b> → open <code>AntiGreedCopier.mq5</code> → press <b>F7</b>. Should report "0 errors, 0 warnings".</div>
+                    <div class="ea-step-b" x-show="os === 'mac'">
+                      Open MT5 → press <b>F4</b> (or <b>Tools → MetaQuotes Language Editor</b>) → open <code>AntiGreedCopier.mq5</code> → press <b>F7</b>. Should report "0 errors, 0 warnings".
+                      <div class="ea-step-tip">If F4 doesn't fire under macOS, check <b>System Settings → Keyboard</b> — function keys may be assigned to media controls; hold <b>fn</b> with F4/F7, or untick "Use F1, F2, etc. keys as standard function keys".</div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-              <div class="ea-step">
-                <div class="ea-step-n">4</div>
-                <div>
-                  <div class="ea-step-h">Attach to any chart</div>
-                  <div class="ea-step-b">Drag the EA from Navigator onto any chart (symbol doesn't matter — the EA picks symbols from the signals). In the Inputs tab, paste the API URL, the API key, and your AD-ID from above.</div>
+                <div class="ea-step">
+                  <div class="ea-step-n">3</div>
+                  <div>
+                    <div class="ea-step-h">Whitelist the API URL</div>
+                    <div class="ea-step-b" x-show="os === 'win'">In MT5: <b>Tools → Options → Expert Advisors</b> → tick <em>"Allow WebRequest for listed URL"</em> and add the API base URL above. Otherwise MT5 blocks outbound HTTP.</div>
+                    <div class="ea-step-b" x-show="os === 'mac'">
+                      In MT5: <b>MetaTrader 5 → Settings → Expert Advisors</b> (or <b>Tools → Options</b> in older builds) → tick <em>"Allow WebRequest for listed URL"</em> and add the API base URL above. Otherwise MT5 blocks outbound HTTP and you'll see <code>WebRequest error 4014</code> in the journal.
+                    </div>
+                  </div>
                 </div>
-              </div>
-              <div class="ea-step">
-                <div class="ea-step-n">5</div>
-                <div>
-                  <div class="ea-step-h">Enable Algo Trading</div>
-                  <div class="ea-step-b">Click the green <b>Algo Trading</b> button in the MT5 toolbar. The EA's smiley face should appear in the top-right of the chart. You're done.</div>
+                <div class="ea-step">
+                  <div class="ea-step-n">4</div>
+                  <div>
+                    <div class="ea-step-h">Attach to any chart</div>
+                    <div class="ea-step-b" x-show="os === 'win'">Drag the EA from Navigator onto any chart (symbol doesn't matter — the EA picks symbols from the signals). In the Inputs tab, paste the API URL, the API key, and your AD-ID from above.</div>
+                    <div class="ea-step-b" x-show="os === 'mac'">
+                      In the Navigator panel (<b>⌘+N</b> to toggle), expand <b>Expert Advisors</b>, then drag <code>AntiGreedCopier</code> onto any chart (the symbol doesn't matter — the EA picks symbols from the signals). In the Inputs tab, paste the API URL, the API key, and your AD-ID from above.
+                      <div class="ea-step-tip">If you don't see the EA in the Navigator after compiling, right-click <b>Expert Advisors</b> → <b>Refresh</b>.</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="ea-step">
+                  <div class="ea-step-n">5</div>
+                  <div>
+                    <div class="ea-step-h">Enable Algo Trading</div>
+                    <div class="ea-step-b" x-show="os === 'win'">Click the green <b>Algo Trading</b> button in the MT5 toolbar. The EA's smiley face should appear in the top-right of the chart. You're done.</div>
+                    <div class="ea-step-b" x-show="os === 'mac'">
+                      Click the green <b>Algo Trading</b> button in the MT5 toolbar (or <b>⌘+E</b>). The EA's smiley face should appear in the top-right of the chart. You're done.
+                      <div class="ea-step-tip">If MT5 quits or sleeps, the EA stops copying. Either disable App Nap on the MT5 app (right-click MT5 in Finder → Get Info → tick "Prevent App Nap" if shown) or keep the laptop awake while trades are open — most operators just run MT5 on an always-on cheap VPS.</div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
