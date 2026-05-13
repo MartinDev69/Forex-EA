@@ -49,8 +49,10 @@ input int     AccountReportSeconds = 60;                         // how often to
 
 input group "═══ On-chart panel ═══"
 input bool                ShowPanel         = true;              // render the status panel
-input int                 PanelOffsetX      = 14;                // px from chart's left edge
-input int                 PanelOffsetY      = 14;                // px from chart's top edge
+input bool                PanelCentered     = true;              // auto-center on the chart (overrides offsets)
+input int                 PanelWidth        = 420;               // panel width in px
+input int                 PanelOffsetX      = 0;                 // nudge X (px) — relative to centered position or top-left
+input int                 PanelOffsetY      = 0;                 // nudge Y (px)
 input color               PanelBgColor      = C'10,14,20';       // panel background
 input color               PanelBorderColor  = C'34,238,136';     // brand neon green
 input color               PanelTextColor    = C'232,240,255';    // body text
@@ -139,6 +141,16 @@ void OnTimer()
 void OnTick()
 {
    // Pure timer-driven — OnTick is a no-op.
+}
+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+{
+   // Re-center the panel when the chart window resizes.
+   if(id == CHARTEVENT_CHART_CHANGE && ShowPanel)
+   {
+      BuildPanel();
+      RedrawPanel();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -613,13 +625,19 @@ bool IsSymbolEnabled(const string &symbol)
 //|                      ON-CHART PANEL                                |
 //+==================================================================+
 // Layout constants — px from the panel's top-left corner.
-#define P_WIDTH        300
-#define P_PAD          14
-#define P_HEADER_H     46
-#define P_ROW_H        18
-#define P_SECTION_GAP  10
+#define P_PAD          16
+#define P_HEADER_H     52
+#define P_ROW_H        20
+#define P_SECTION_GAP  12
 #define P_FONT         "Consolas"
 #define P_FONT_BODY    "Segoe UI"
+
+// Panel width (live; pulled from PanelWidth input on init) and its
+// computed top-left position in chart pixels. Refreshed whenever the
+// chart resizes via OnChartEvent.
+int g_panel_w = 420;
+int g_panel_x = 0;
+int g_panel_y = 0;
 
 // Object builders ---------------------------------------------------
 void MakeRect(const string name, int xoff, int yoff, int xsize, int ysize,
@@ -677,7 +695,7 @@ void MakeBitmap(const string name, int xoff, int yoff, const string file, int xs
 // Sizing ------------------------------------------------------------
 int PanelHeight()
 {
-   int symbol_rows = MathMax(1, (int)MathCeil((g_filter_active ? g_enabled_count : 1) / 3.0));
+   int symbol_rows = MathMax(1, (int)MathCeil((g_filter_active ? g_enabled_count : 1) / 4.0));
    int body_rows  = 4 /* status, copies, open, last */
                   + 1 /* symbols header */
                   + symbol_rows
@@ -685,30 +703,54 @@ int PanelHeight()
    return P_HEADER_H + (body_rows * P_ROW_H) + (2 * P_SECTION_GAP) + (P_PAD * 2);
 }
 
+// Recompute where the panel's top-left should sit on the chart, based
+// on PanelCentered + PanelWidth + nudge offsets. Called on init and
+// whenever the chart resizes.
+void LayoutPanel()
+{
+   g_panel_w = MathMax(280, PanelWidth);
+   int h = PanelHeight();
+   if(PanelCentered)
+   {
+      int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
+      int ch = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
+      // Centered horizontally + vertically — falls back to a safe top-left
+      // if MT5 hasn't reported chart dimensions yet.
+      g_panel_x = (cw > g_panel_w ? (cw - g_panel_w) / 2 : 20) + PanelOffsetX;
+      g_panel_y = (ch > h         ? (ch - h)         / 2 : 20) + PanelOffsetY;
+   }
+   else
+   {
+      g_panel_x = MathMax(0, PanelOffsetX);
+      g_panel_y = MathMax(0, PanelOffsetY);
+   }
+}
+
 // One-time build — everything else is a redraw of text values.
 void BuildPanel()
 {
    ObjectsDeleteAll(0, PNL);
+   LayoutPanel();
    int h = PanelHeight();
-   int x = PanelOffsetX;
-   int y = PanelOffsetY;
+   int x = g_panel_x;
+   int y = g_panel_y;
 
    // Outer card + neon header strip.
-   MakeRect(PNL + "card", x, y, P_WIDTH, h, PanelBgColor, PanelBorderColor, 1);
-   MakeRect(PNL + "hdr",  x, y, P_WIDTH, P_HEADER_H,
+   MakeRect(PNL + "card", x, y, g_panel_w, h, PanelBgColor, PanelBorderColor, 1);
+   MakeRect(PNL + "hdr",  x, y, g_panel_w, P_HEADER_H,
             C'18,22,32', PanelBorderColor, 1);
    // Thin neon underline beneath the header.
-   MakeRect(PNL + "uline", x, y + P_HEADER_H, P_WIDTH, 2,
+   MakeRect(PNL + "uline", x, y + P_HEADER_H, g_panel_w, 2,
             PanelAccentColor, PanelAccentColor, 1);
 
    // Header: logo (or fallback bullet), title, status dot.
-   MakeBitmap(PNL + "logo", x + 12, y + 7, PanelLogoFile, 32, 32);
-   MakeLabel(PNL + "title", x + 56, y + 12,
-             "ANTIGREED · COPIER", PanelTextColor, 11, P_FONT_BODY);
-   MakeLabel(PNL + "sub",   x + 56, y + 28,
+   MakeBitmap(PNL + "logo", x + 14, y + 10, PanelLogoFile, 32, 32);
+   MakeLabel(PNL + "title", x + 60, y + 14,
+             "ANTIGREED · COPIER", PanelTextColor, 12, P_FONT_BODY);
+   MakeLabel(PNL + "sub",   x + 60, y + 32,
              "live signal copier", PanelMutedColor, 8, P_FONT_BODY);
-   MakeLabel(PNL + "dot",   x + P_WIDTH - 18, y + P_HEADER_H / 2 - 6,
-             "●", PanelAccentColor, 14, P_FONT_BODY);
+   MakeLabel(PNL + "dot",   x + g_panel_w - 22, y + P_HEADER_H / 2 - 7,
+             "●", PanelAccentColor, 16, P_FONT_BODY);
 }
 
 string ShortTime(datetime t)
@@ -744,8 +786,8 @@ int OurOpenPositions()
 void RedrawPanel()
 {
    MaybeResetDailyCounter();
-   int x = PanelOffsetX;
-   int y = PanelOffsetY + P_HEADER_H + P_SECTION_GAP;
+   int x = g_panel_x;
+   int y = g_panel_y + P_HEADER_H + P_SECTION_GAP;
 
    // Status dot color
    color dot_clr = PanelAccentColor;
@@ -780,7 +822,7 @@ void RedrawPanel()
    ClearSymbolChips();
    if(g_filter_active)
    {
-      int per_row = 3, chip_w = (P_WIDTH - (P_PAD * 2) - 12) / per_row;
+      int per_row = 4, chip_w = (g_panel_w - (P_PAD * 2) - 18) / per_row;
       for(int i = 0; i < g_enabled_count; i++)
       {
          int col = i % per_row;
@@ -793,7 +835,7 @@ void RedrawPanel()
          MakeLabel(nm,        cx + 6, cy + 2, g_enabled_symbols[i],
                    PanelAccentColor, 8, P_FONT);
       }
-      int rows = (int)MathCeil(g_enabled_count / 3.0);
+      int rows = (int)MathCeil(g_enabled_count / 4.0);
       y += rows * (P_ROW_H + 2);
    }
    else
@@ -823,9 +865,9 @@ void RedrawPanel()
 
 void DrawKv(const string id, int y, const string label, const string value, color val_clr)
 {
-   int x = PanelOffsetX;
-   MakeLabel(PNL + id + "_l", x + P_PAD,             y, label, PanelMutedColor, 8, P_FONT_BODY);
-   MakeLabel(PNL + id + "_v", x + P_WIDTH - P_PAD,   y, value, val_clr,         9, P_FONT, ANCHOR_RIGHT_UPPER);
+   int x = g_panel_x;
+   MakeLabel(PNL + id + "_l", x + P_PAD,               y, label, PanelMutedColor, 9, P_FONT_BODY);
+   MakeLabel(PNL + id + "_v", x + g_panel_w - P_PAD,   y, value, val_clr,         10, P_FONT, ANCHOR_RIGHT_UPPER);
 }
 
 void ClearSymbolChips()
