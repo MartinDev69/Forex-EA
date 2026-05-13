@@ -51,6 +51,7 @@ input group "═══ On-chart panel ═══"
 input bool                ShowPanel         = true;              // render the status panel
 input bool                PanelCentered     = true;              // auto-center on the chart (overrides offsets)
 input int                 PanelWidth        = 720;               // panel width in px
+input int                 PanelHeight       = 0;                 // 0 = auto-fit; otherwise px height
 input int                 PanelOffsetX      = 0;                 // nudge X (px) — relative to centered position or top-left
 input int                 PanelOffsetY      = 0;                 // nudge Y (px)
 input color               PanelBgColor      = C'10,14,20';       // panel background
@@ -715,8 +716,11 @@ void MakeBitmap(const string name, int xoff, int yoff, const string file, int xs
 #define P_FOOTER_H     26   // developer attribution line
 #define P_GRAD_H       8    // bottom rainbow gradient strip
 
-int PanelHeight()
+int ComputePanelHeight()
 {
+   // User can force a specific height via the PanelHeight input. 0 (the
+   // default) auto-fits to the section content.
+   if(PanelHeight > 0) return PanelHeight;
    return P_HEADER_H
         + P_SECTION_GAP
         + P_HERO_H
@@ -736,7 +740,7 @@ int PanelHeight()
 void LayoutPanel()
 {
    g_panel_w = MathMax(280, PanelWidth);
-   int h = PanelHeight();
+   int h = ComputePanelHeight();
    if(PanelCentered)
    {
       int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
@@ -775,7 +779,7 @@ void BuildPanel()
 {
    ObjectsDeleteAll(0, PNL);
    LayoutPanel();
-   int h = PanelHeight();
+   int h = ComputePanelHeight();
    int x = g_panel_x;
    int y = g_panel_y;
 
