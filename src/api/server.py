@@ -2206,6 +2206,27 @@ def voice_clear(user: dict = Depends(require_2fa)) -> VoiceStatusResponse:
     )
 
 
+_MT5_DIR = Path(__file__).parent.parent.parent / "mt5"
+
+
+@app.get("/download/ea", include_in_schema=False)
+def download_ea() -> FileResponse:
+    """Serve AntiGreedCopier.mq5 with a Content-Disposition attachment
+    header so the browser actually downloads it instead of rendering
+    the source. The GitHub raw link displayed it inline because the
+    download attribute is ignored cross-origin without that header.
+    """
+    candidate = (_MT5_DIR / "AntiGreedCopier.mq5").resolve()
+    if not candidate.is_file():
+        raise HTTPException(404, "AntiGreedCopier.mq5 not found on server")
+    return FileResponse(
+        candidate,
+        media_type="application/octet-stream",
+        filename="AntiGreedCopier.mq5",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
+
+
 _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.exists():
     # Serve static files ourselves so we can attach no-store headers. Using
