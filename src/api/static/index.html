@@ -747,6 +747,32 @@
     .nav-signout:hover { background: rgba(220,38,38,0.18); color: var(--red); }
     .topbar-pills { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
+    /* Drawer status block — Calendar + Regime live here on mobile. */
+    .nav-section-label {
+      margin: 18px 14px 8px; font-size: 10px; letter-spacing: 2.2px;
+      color: var(--muted); font-weight: 600;
+    }
+    .nav-status {
+      margin: 0 12px; padding: 12px 14px;
+      background: var(--surface2); border: 1px solid var(--edge);
+      border-radius: 12px; display: flex; flex-direction: column; gap: 12px;
+    }
+    .nav-status-row { display: flex; align-items: center; gap: 10px; }
+    .nav-status-label {
+      font-size: 10px; letter-spacing: 1.6px;
+      color: var(--muted); font-weight: 600;
+      min-width: 72px;
+    }
+    .nav-status-pill {
+      flex: 1; padding: 6px 10px; border-radius: 8px;
+      border: 1px solid var(--edge2); color: var(--muted);
+      font-size: 11px; font-weight: 500; line-height: 1.35;
+      background: var(--surface3, var(--surface));
+    }
+    .nav-status-pill.ok     { border-color: var(--gglow); color: var(--green); background: var(--gdim); }
+    .nav-status-pill.warn   { border-color: rgba(217,119,6,0.4); color: var(--amber); background: var(--adim); }
+    .nav-status-pill.danger { border-color: var(--rglow); color: var(--red); background: var(--rdim); }
+
     @media (max-width: 1100px) {
       .kpi-grid { grid-template-columns: repeat(2,1fr); }
       .two-col { grid-template-columns: 1fr; }
@@ -931,6 +957,23 @@
         <a x-show="isAdmin" class="nav-item" @click.prevent="goToSection('operators')">
           <span class="nav-ico">●</span> Operators
         </a>
+
+        <div class="nav-section-label">STATUS</div>
+        <div class="nav-status">
+          <div class="nav-status-row">
+            <span class="nav-status-label">CALENDAR</span>
+            <span class="nav-status-pill"
+                  :class="blackoutPill.tone === 'danger' ? 'danger' : (blackoutPill.tone === 'warn' ? 'warn' : (blackoutPill.tone === 'ok' ? 'ok' : ''))"
+                  x-text="blackoutPill.text"></span>
+          </div>
+          <div class="nav-status-row">
+            <span class="nav-status-label">REGIME</span>
+            <span class="nav-status-pill"
+                  :class="regimePill.tone === 'danger' ? 'danger' : (regimePill.tone === 'warn' ? 'warn' : (regimePill.tone === 'ok' ? 'ok' : ''))"
+                  :title="regimePill.title"
+                  x-text="regimePill.text"></span>
+          </div>
+        </div>
       </nav>
       <div class="nav-actions">
         <button x-show="isAdmin" @click="toggleBot(); navOpen = false"
