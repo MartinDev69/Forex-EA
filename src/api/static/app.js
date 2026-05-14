@@ -98,6 +98,10 @@ document.addEventListener("alpine:init", () => {
     // chosen layout sticks across refreshes. Default open on first run.
     strategiesExpanded: localStorage.getItem("antigreed:strategiesExpanded") !== "0",
     correlationsExpanded: localStorage.getItem("antigreed:correlationsExpanded") !== "0",
+    // Active symbol tab for the Strategy-drift card. Null means
+    // "first symbol in the response" — initialised on first render so
+    // we don't have to wait for /drift to resolve.
+    driftSymbol: null,
     togglePanel(name) {
       const k = name + "Expanded";
       this[k] = !this[k];
@@ -294,6 +298,25 @@ document.addEventListener("alpine:init", () => {
         else low++;
       }
       return { strong, moderate, low };
+    },
+    // Distinct symbols across the current drift response, in first-seen
+    // order so the tab strip stays stable across polls.
+    get driftSymbols() {
+      const out = [];
+      for (const r of (this.drift?.reports || [])) {
+        if (!out.includes(r.symbol)) out.push(r.symbol);
+      }
+      return out;
+    },
+    get driftActiveSymbol() {
+      const syms = this.driftSymbols;
+      if (this.driftSymbol && syms.includes(this.driftSymbol)) return this.driftSymbol;
+      return syms[0] || null;
+    },
+    get driftReportsFiltered() {
+      const active = this.driftActiveSymbol;
+      if (!active) return [];
+      return (this.drift?.reports || []).filter(r => r.symbol === active);
     },
 
     // ---- Trade filtering (tab + date) ----

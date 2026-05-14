@@ -447,6 +447,17 @@
     .drift-metric { background: var(--surface2); border: 1px solid var(--edge); border-radius: 6px; padding: 7px 9px; }
     .dm-label { font-size: 9px; color: var(--muted); text-transform: capitalize; }
     .dm-val { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--text); margin-top: 2px; }
+    .drift-symtabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+    .drift-symtab {
+      font-family: var(--mono); font-size: 11px; font-weight: 700;
+      letter-spacing: 0.06em; padding: 6px 12px; border-radius: 999px;
+      border: 1px solid var(--edge); background: var(--surface2);
+      color: var(--muted); cursor: pointer; transition: all 0.12s;
+    }
+    .drift-symtab:hover { color: var(--text); border-color: var(--edge-strong, var(--gglow)); }
+    .drift-symtab.active {
+      color: var(--text); background: var(--gdim); border-color: var(--gglow);
+    }
 
     /* Allocator */
     .alloc-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }
@@ -1464,7 +1475,16 @@
             <template x-if="!drift?.reports || drift.reports.length === 0">
               <div class="empty">No drift reports yet.</div>
             </template>
-            <template x-for="d in (drift?.reports || [])" :key="d.strategy + d.symbol">
+            <div class="drift-symtabs" x-show="driftSymbols.length > 1">
+              <template x-for="s in driftSymbols" :key="s">
+                <button type="button"
+                        class="drift-symtab"
+                        :class="{ active: s === driftActiveSymbol }"
+                        @click="driftSymbol = s"
+                        x-text="s"></button>
+              </template>
+            </div>
+            <template x-for="d in driftReportsFiltered" :key="d.strategy + d.symbol">
               <div class="drift-card" :class="d.status">
                 <div class="drift-header">
                   <span class="drift-name" x-text="d.strategy + ' · ' + d.symbol"></span>

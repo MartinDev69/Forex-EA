@@ -1876,24 +1876,66 @@ class _CorrelationRow extends StatelessWidget {
   }
 }
 
-class _DriftCard extends StatelessWidget {
+class _DriftCard extends StatefulWidget {
   const _DriftCard({required this.data});
   final DriftResponse data;
 
   @override
+  State<_DriftCard> createState() => _DriftCardState();
+}
+
+class _DriftCardState extends State<_DriftCard> {
+  String? _selectedSymbol;
+
+  @override
   Widget build(BuildContext context) {
+    // Preserve first-seen order so the tab list is stable across polls —
+    // alphabetical would shuffle when symbols drop in/out mid-session.
+    final symbols = <String>[];
+    for (final r in widget.data.reports) {
+      if (!symbols.contains(r.symbol)) symbols.add(r.symbol);
+    }
+    final active = (_selectedSymbol != null && symbols.contains(_selectedSymbol))
+        ? _selectedSymbol!
+        : (symbols.isNotEmpty ? symbols.first : '');
+    final filtered = active.isEmpty
+        ? widget.data.reports
+        : widget.data.reports.where((r) => r.symbol == active).toList();
+    final muted = Colors.grey.shade400;
+
     return _Collapsible(
       icon: Icons.insights_outlined,
       title: 'Strategy drift',
       subtitle: 'Live performance vs backtest baseline.',
       storageKey: 'card.drift',
       trailing: Text(
-        '${data.count} tracked',
-        style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+        '${widget.data.count} tracked',
+        style: TextStyle(color: muted, fontSize: 12),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: data.reports.map((r) => _DriftRow(report: r)).toList(),
+        children: [
+          if (symbols.length > 1) ...[
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: symbols.map((s) {
+                  final selected = s == active;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      label: Text(s),
+                      selected: selected,
+                      onSelected: (_) => setState(() => _selectedSymbol = s),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+          ...filtered.map((r) => _DriftRow(report: r)),
+        ],
       ),
     );
   }
