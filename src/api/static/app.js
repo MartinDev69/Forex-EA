@@ -122,7 +122,8 @@ document.addEventListener("alpine:init", () => {
     },
     get canSeeDashboard() { return this.isAdmin || this.hasBroker; },
     version: "1.0.0",
-    buildTag: "b12",
+    buildTag: "b13",
+    myPicks: { signal: [], execute: [] },
     pollMs: POLL_MS,
     paletteOpen: false,
 
@@ -176,7 +177,7 @@ document.addEventListener("alpine:init", () => {
 
     async tick() {
       try {
-        const [status, account, strategies, trades, blackout, regime, correlation, drift, fillStats, allocator, pending, brokerConfig] = await Promise.all([
+        const [status, account, strategies, trades, blackout, regime, correlation, drift, fillStats, allocator, pending, brokerConfig, myPicks] = await Promise.all([
           api("/status",     { token: this.token }),
           api("/account",    { token: this.token }),
           api("/strategies", { token: this.token }),
@@ -191,10 +192,12 @@ document.addEventListener("alpine:init", () => {
           api("/allocator", { token: this.token }).catch(() => null),
           api("/orders/pending", { token: this.token }).catch(() => []),
           api("/broker/config", { token: this.token }).catch(() => null),
+          api("/me/picks", { token: this.token }).catch(() => ({signal: [], execute: []})),
         ]);
         this.status = status;
         this.account = account;
         this.strategies = strategies;
+        this.myPicks = myPicks;
         this.blackout = blackout;
         this.regime = regime;
         this.correlation = correlation;
@@ -442,10 +445,30 @@ document.addEventListener("alpine:init", () => {
     get signalStrategies() {
       return this.strategies.filter(s => s.mode === 'signal');
     },
-    // Non-admin view: only strategies admin has marked copyable, in
-    // their enabled/disabled state. Mode doesn't matter to operators.
+    // Non-admin view: strategies the operator personally picked at
+    // signup. The 3 signal picks and the 2 execute picks, deduped if
+    // the same strategy is in both lists. Admin-side user_copyable is
+    // also enforced — if admin flipped a pick to admin-only after the
+    // user picked it, the row is dropped so the UI doesn't pretend the
+    // user still receives that strategy.
     get userCopyableStrategies() {
-      return this.strategies.filter(s => s.user_copyable !== false);
+      const picked = new Set([
+        ...(this.myPicks?.signal || []),
+        ...(this.myPicks?.execute || []),
+      ]);
+      return this.strategies.filter(
+        s => picked.has(s.name) && s.user_copyable !== false,
+      );
+    },
+    // Mode lookup so the read-only row can show "signal alerts" /
+    // "auto-copy" based on which kind the user picked this strategy as.
+    pickKindFor(name) {
+      const inSignal  = (this.myPicks?.signal  || []).includes(name);
+      const inExecute = (this.myPicks?.execute || []).includes(name);
+      if (inExecute && inSignal) return "both";
+      if (inExecute) return "execute";
+      if (inSignal)  return "signal";
+      return null;
     },
 
     async toggleBot() {

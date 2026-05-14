@@ -20,4 +20,4 @@ const appVersion = '1.0.0';
 /// Build sub-tag — bumped on every visible UI change so we can verify
 /// at a glance which APK is actually installed on a phone. Shown next
 /// to the version in the dashboard footer.
-const appBuildTag = 'b12';
+const appBuildTag = 'b13';

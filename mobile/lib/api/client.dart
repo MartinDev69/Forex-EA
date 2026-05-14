@@ -105,6 +105,19 @@ class ApiClient {
     return Strategy.fromJson(json.decode(r.body) as Map<String, dynamic>);
   }
 
+  /// The calling operator's per-strategy picks captured at signup.
+  /// `signal` = the 3 strategies they get alerts for, `execute` = the
+  /// 2 strategies their EA replicates. Admin gets empty lists.
+  Future<({Set<String> signal, Set<String> execute})> myPicks() async {
+    final r = await http.get(_u('/me/picks'), headers: _headers);
+    _check(r);
+    final body = json.decode(r.body) as Map<String, dynamic>;
+    return (
+      signal: (body['signal'] as List<dynamic>).cast<String>().toSet(),
+      execute: (body['execute'] as List<dynamic>).cast<String>().toSet(),
+    );
+  }
+
   Future<List<Trade>> trades({int limit = 20}) async {
     final r = await http.get(_u('/trades?limit=$limit'), headers: _headers);
     _check(r);

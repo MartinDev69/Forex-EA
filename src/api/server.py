@@ -916,6 +916,27 @@ class EAAccountReportRequest(BaseModel):
     currency: str | None = None
 
 
+class MyPicksResponse(BaseModel):
+    """Per-user strategy picks captured at signup."""
+    signal: list[str]
+    execute: list[str]
+
+
+@app.get("/me/picks", response_model=MyPicksResponse)
+def my_picks(user: dict = Depends(current_user)) -> MyPicksResponse:
+    """Return the calling operator's signal + execute strategy picks.
+    Admin gets back empty lists — they don't pick, they see everything.
+    """
+    username = user.get("username") or user.get("sub") or ""
+    if not username:
+        raise HTTPException(400, "username missing from token")
+    picks = user_store.get_user_picks(username)
+    return MyPicksResponse(
+        signal=sorted(picks.get("signal", set())),
+        execute=sorted(picks.get("execute", set())),
+    )
+
+
 @app.get("/me/ea-config", response_model=EAConfigResponse)
 def my_ea_config(user: dict = Depends(current_user)) -> EAConfigResponse:
     """Return the current user's copy-trading EA config — base URL,

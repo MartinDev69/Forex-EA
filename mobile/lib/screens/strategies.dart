@@ -14,6 +14,8 @@ class StrategiesScreen extends StatefulWidget {
 
 class _StrategiesScreenState extends State<StrategiesScreen> {
   List<Strategy>? _strategies;
+  Set<String> _signalPicks = const {};
+  Set<String> _executePicks = const {};
   String? _error;
   bool _loading = true;
 
@@ -25,10 +27,20 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
 
   Future<void> _load() async {
     try {
-      final s = await widget.apiClient.strategies();
+      final results = await Future.wait([
+        widget.apiClient.strategies(),
+        // Picks only matter for non-admin; admin gets empty sets.
+        widget.apiClient.myPicks().catchError(
+          (_) => (signal: <String>{}, execute: <String>{}),
+        ),
+      ]);
       if (!mounted) return;
+      final s = results[0] as List<Strategy>;
+      final picks = results[1] as ({Set<String> signal, Set<String> execute});
       setState(() {
         _strategies = s;
+        _signalPicks = picks.signal;
+        _executePicks = picks.execute;
         _loading = false;
         _error = null;
       });
@@ -102,7 +114,13 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
     final isAdmin = widget.apiClient.isAdmin;
     final exec = all.where((s) => !s.isSignalOnly).toList();
     final signal = all.where((s) => s.isSignalOnly).toList();
-    final copyable = all.where((s) => s.userCopyable).toList();
+    // Non-admin sees only the strategies they personally picked at
+    // signup. Admin's user_copyable veto still applies (if admin flips
+    // a picked strategy admin-only, the user just stops seeing it).
+    final picked = _signalPicks.union(_executePicks);
+    final mine = all
+        .where((s) => picked.contains(s.name) && s.userCopyable)
+        .toList();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Strategies')),
@@ -114,9 +132,20 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
                 ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text('Error: $_error'))])
                 : isAdmin
                     ? _adminView(exec: exec, signal: signal)
-                    : _userView(copyable),
+                    : _userView(mine),
       ),
     );
+  }
+
+  /// Which kind a user picked this strategy as: 'signal', 'execute', or
+  /// 'both'. Drives the live-status sub-label on the read-only view.
+  String _pickKindFor(String name) {
+    final inSignal = _signalPicks.contains(name);
+    final inExecute = _executePicks.contains(name);
+    if (inSignal && inExecute) return 'both';
+    if (inExecute) return 'execute';
+    if (inSignal) return 'signal';
+    return 'execute';
   }
 
   Widget _adminView({required List<Strategy> exec, required List<Strategy> signal}) {
@@ -183,10 +212,11 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
         ),
         if (copyable.isEmpty)
           const _EmptyHint(
-            text: 'No strategies enabled for operators yet — ask admin.',
+            text:
+                'No strategies for you yet — your picks from signup will appear here once admin approves your subscription.',
           ),
         for (final s in copyable)
-          _ReadOnlyStrategyTile(strategy: s),
+          _ReadOnlyStrategyTile(strategy: s, pickKind: _pickKindFor(s.name)),
       ],
     );
   }
@@ -364,8 +394,13 @@ class _StrategyTile extends StatelessWidget {
 }
 
 class _ReadOnlyStrategyTile extends StatelessWidget {
-  const _ReadOnlyStrategyTile({required this.strategy});
+  const _ReadOnlyStrategyTile({
+    required this.strategy,
+    required this.pickKind,
+  });
   final Strategy strategy;
+  /// 'signal', 'execute', or 'both' — chosen by the user at signup.
+  final String pickKind;
 
   @override
   Widget build(BuildContext context) {
@@ -375,9 +410,14 @@ class _ReadOnlyStrategyTile extends StatelessWidget {
     final borderColor = strategy.enabled
         ? accent.withValues(alpha: isDark ? 0.28 : 0.30)
         : (isDark ? kEdge : kLightEdge);
-    final modeText = strategy.isSignalOnly
-        ? '● live · signal alerts only'
-        : '● live · auto-copy on';
+    final String modeText;
+    if (pickKind == 'both') {
+      modeText = '● live · auto-copy + signal alerts';
+    } else if (pickKind == 'signal') {
+      modeText = '● live · signal alerts only';
+    } else {
+      modeText = '● live · auto-copy on';
+    }
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -393,7 +433,9 @@ class _ReadOnlyStrategyTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Icon(
-            strategy.isSignalOnly ? Icons.podcasts : Icons.precision_manufacturing_outlined,
+            pickKind == 'signal'
+                ? Icons.podcasts
+                : Icons.precision_manufacturing_outlined,
             color: strategy.enabled ? accent : muted,
             size: 20,
           ),

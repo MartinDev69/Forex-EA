@@ -228,6 +228,7 @@ class _BrokerScreenState extends State<BrokerScreen> {
                     saved: _saved,
                     activePreset: _activePreset,
                     onChanged: () => setState(() {}),
+                    isAdmin: widget.apiClient.isAdmin,
                   ),
                   const SizedBox(height: 8),
                   _ActionRow(
@@ -373,6 +374,7 @@ class _FormCard extends StatelessWidget {
     required this.saved,
     required this.activePreset,
     required this.onChanged,
+    required this.isAdmin,
   });
   final List<BrokerPreset> presets;
   final String active;
@@ -384,6 +386,10 @@ class _FormCard extends StatelessWidget {
   final BrokerConfig? saved;
   final BrokerPreset? activePreset;
   final VoidCallback onChanged;
+  /// Admin sees the MT5 terminal path field (it points at the VPS's
+  /// MT5 install). Operators don't — their MT5 runs on their own
+  /// machine via the copy-trading EA, the path is meaningless to them.
+  final bool isAdmin;
 
   @override
   Widget build(BuildContext context) {
@@ -457,18 +463,31 @@ class _FormCard extends StatelessWidget {
               ),
               onChanged: (_) => onChanged(),
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: pathCtl,
-              decoration: InputDecoration(
-                labelText: 'MT5 terminal path (Windows, optional)',
-                hintText: activePreset?.mt5PathHint.isNotEmpty == true
-                    ? activePreset!.mt5PathHint
-                    : r'C:\Program Files\MetaTrader 5\terminal64.exe',
-                border: const OutlineInputBorder(),
+            if (isAdmin) ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: pathCtl,
+                decoration: InputDecoration(
+                  labelText: 'MT5 terminal path (Windows, optional)',
+                  hintText: activePreset?.mt5PathHint.isNotEmpty == true
+                      ? activePreset!.mt5PathHint
+                      : r'C:\Program Files\MetaTrader 5\terminal64.exe',
+                  border: const OutlineInputBorder(),
+                ),
+                onChanged: (_) => onChanged(),
               ),
-              onChanged: (_) => onChanged(),
-            ),
+            ] else ...[
+              const SizedBox(height: 10),
+              Text(
+                'You\'re a copy-trading operator — your MT5 runs on your own '
+                'machine via the AntiGreedCopier EA. The fields above just '
+                'record your broker for display; we don\'t connect to them '
+                'from this server.',
+                style: TextStyle(
+                  color: Colors.grey.shade500, fontSize: 11, height: 1.45,
+                ),
+              ),
+            ],
           ],
         ),
       ),

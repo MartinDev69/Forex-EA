@@ -1241,9 +1241,11 @@
                   <div class="strat-item" :class="{ on: s.enabled }">
                     <div style="flex:1">
                       <div class="strat-name" x-text="s.name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"></div>
-                      <div class="strat-status" x-text="s.enabled
-                        ? (s.mode === 'signal' ? '● live · signal alerts' : '● live · auto-copy')
-                        : '○ paused by admin'"></div>
+                      <div class="strat-status" x-text="!s.enabled
+                        ? '○ paused by admin'
+                        : (pickKindFor(s.name) === 'execute' ? '● live · auto-copy'
+                          : (pickKindFor(s.name) === 'signal' ? '● live · signal alerts'
+                            : '● live · auto-copy + signal alerts'))"></div>
                     </div>
                   </div>
                 </template>

@@ -617,10 +617,11 @@ class TelegramSignupBot:
             username=username, first_name=first_name,
         )
         self.store.set_state_picks(chat_id, signal=[], execute=[])
-        # Drop the share-phone keyboard before sending the picker so the
-        # user's keyboard doesn't show a stale "Share my phone" button.
+        # Dismiss the share-phone reply keyboard with a tiny ack-style
+        # message so the picker arrives as a single, self-contained
+        # message — was sending the picker intro twice before.
         send_message(self.token, chat_id,
-                     PICK_INTRO_SIGNAL.format(n=0),
+                     "📞 Got it — phone saved.",
                      reply_markup=REMOVE_KEYBOARD)
         self._send_picker(chat_id, kind="signal", selected=[])
         log.info("phone captured for chat=%s, advancing to signal picker", chat_id)
