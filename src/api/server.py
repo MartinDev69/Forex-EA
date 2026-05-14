@@ -544,9 +544,30 @@ class TradeResponse(BaseModel):
     close_reason: str | None = None
 
 
-def _open_positions(since_iso: str | None = None) -> int:
+def _open_positions(
+    since_iso: str | None = None,
+    pick_filter: set[str] | None = None,
+) -> int:
     rows = journal.recent(limit=200, since_iso=since_iso)
+    if pick_filter is not None:
+        rows = [r for r in rows if (r.get("strategy") or "") in pick_filter]
     return sum(1 for r in rows if r.get("status") == "OPEN")
+
+
+def _operator_pick_filter(username: str) -> set[str] | None:
+    """The set of strategies whose journal rows the operator's EA would
+    have copied — execute_picks ∩ admin's user_copyable set. Returns None
+    on failure so callers know to skip filtering rather than show zeros.
+    """
+    if not username:
+        return set()
+    try:
+        copyable = toggle_store.user_copyable_names()
+        picks = user_store.get_user_picks(username)
+        return picks.get("execute", set()) & copyable
+    except Exception:
+        log.exception("pick filter resolve failed for %s", username)
+        return None
 
 
 def _resolve_password(body: BrokerConfigRequest, username: str) -> str:
@@ -595,7 +616,7 @@ def health() -> dict[str, str]:
 
 
 @app.get("/status", response_model=StatusResponse)
-def get_status(_user: dict = Depends(current_user)) -> StatusResponse:
+def get_status(user: dict = Depends(current_user)) -> StatusResponse:
     bs = broker_status_store.read()
     # "running" reflects the operator's intent stored in bot_control —
     # the bot process polls that flag and pauses when False. We also
@@ -611,11 +632,20 @@ def get_status(_user: dict = Depends(current_user)) -> StatusResponse:
         bot_last_hb = bot_hb.last_tick_at
         hb_fresh = (datetime.now(timezone.utc) - bot_hb.last_tick_at).total_seconds() < 180
     bot_running = should_run and hb_fresh
+    # Operators see only the positions their EA would have copied; admin
+    # sees the master journal's open count.
+    since_iso: str | None = None
+    pick_filter: set[str] | None = None
+    if user.get("role") != "admin":
+        username = user.get("username") or user.get("sub") or ""
+        report = ea_account_store.get(username) if username else None
+        since_iso = report.first_seen_at.isoformat() if (report and report.first_seen_at) else None
+        pick_filter = _operator_pick_filter(username)
     return StatusResponse(
         running=bot_running,
         mt5_connected=bool(bs.connected) if bs else False,
         last_heartbeat=bot_last_hb,
-        open_positions=_open_positions(),
+        open_positions=_open_positions(since_iso=since_iso, pick_filter=pick_filter),
     )
 
 
@@ -635,10 +665,13 @@ def account(user: dict = Depends(current_user)) -> AccountResponse:
                 report.first_seen_at.isoformat()
                 if report.first_seen_at else None
             )
+            pick_filter = _operator_pick_filter(username)
             return AccountResponse(
                 balance=balance,
                 equity=equity,
-                open_positions=_open_positions(since_iso=since_iso),
+                open_positions=_open_positions(
+                    since_iso=since_iso, pick_filter=pick_filter,
+                ),
                 daily_pnl=floating,
                 currency=report.currency,
             )
@@ -756,13 +789,7 @@ def trades(limit: int = 20, user: dict = Depends(current_user)) -> list[TradeRes
         if report is None or report.first_seen_at is None:
             return []
         since_iso = report.first_seen_at.isoformat()
-        try:
-            copyable = toggle_store.user_copyable_names()
-            picks = user_store.get_user_picks(username)
-            pick_filter = picks.get("execute", set()) & copyable
-        except Exception:
-            log.exception("trades pick-filter failed; serving unfiltered")
-            pick_filter = None
+        pick_filter = _operator_pick_filter(username)
     rows = journal.recent(limit=limit, since_iso=since_iso)
     if pick_filter is not None:
         rows = [r for r in rows if (r.get("strategy") or "") in pick_filter]
@@ -948,12 +975,17 @@ def test_broker(
 
 
 @app.get("/orders/pending")
-def list_pending_orders(_user: dict = Depends(current_user)) -> list[dict]:
+def list_pending_orders(user: dict = Depends(current_user)) -> list[dict]:
     """Pending limit/stop orders the bot has snapshotted from MT5.
 
     Empty if the bot is in mock mode or hasn't ticked yet. Each item:
     `{ ticket, symbol, order_type, price, volume, sl, tp, comment, placed_at }`.
+
+    Admin-only: the snapshot comes from admin's MT5, so showing it to
+    operators would surface tickets that don't exist on their account.
     """
+    if user.get("role") != "admin":
+        return []
     rows = pending_orders_store.read()
     return [
         {
@@ -1953,14 +1985,25 @@ def _fill_stats_ttl() -> float:
 @app.get("/fills/stats", response_model=FillStatsResponse)
 def fill_stats(
     window_hours: int = 24,
-    _user: dict = Depends(current_user),
+    user: dict = Depends(current_user),
 ) -> FillStatsResponse:
     """Per-symbol slippage and latency aggregates over the last `window_hours`.
 
     Cached briefly so dashboard polling (every few seconds) doesn't run the
     GROUP-BY scan repeatedly.
+
+    Fills are recorded on admin's MT5 — there's no per-user fill table, so
+    operators' execution-quality numbers would be admin's broker latency,
+    not theirs. Return an empty payload for non-admins so the card stays
+    blank instead of leaking admin metrics.
     """
     import time
+    if user.get("role") != "admin":
+        return FillStatsResponse(
+            symbols=[],
+            window_hours=window_hours,
+            cached_at=datetime.now(timezone.utc).isoformat(),
+        )
     now = time.monotonic()
     cached = _fill_stats_cache.get("value")
     if (
@@ -1996,8 +2039,13 @@ def fill_stats(
 @app.get("/fills", response_model=FillsResponse)
 def recent_fills(
     limit: int = 50,
-    _user: dict = Depends(current_user),
+    user: dict = Depends(current_user),
 ) -> FillsResponse:
+    # Same admin-only rule as /fills/stats: the fills table records admin's
+    # MT5 execution, not the operator's, so leaking it to operators would
+    # show borrowed numbers from another broker connection.
+    if user.get("role") != "admin":
+        return FillsResponse(fills=[], count=0)
     rows = fill_store.recent(limit=max(1, min(limit, 500)))
     return FillsResponse(
         fills=[FillRow(**{k: r.get(k) for k in FillRow.model_fields}) for r in rows],
