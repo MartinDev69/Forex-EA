@@ -18,6 +18,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Put the repo root on sys.path so `python scripts/build_baseline.py …` works
+# from the project directory without needing PYTHONPATH=. or running it as
+# `python -m scripts.build_baseline`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import pandas as pd
 
 from src.backtesting.engine import BacktestResult, run_backtest

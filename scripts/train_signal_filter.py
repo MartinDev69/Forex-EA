@@ -20,6 +20,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# Put the repo root on sys.path so `python scripts/train_signal_filter.py …` works.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import pandas as pd
 
 from src.execution.journal import TradeJournal

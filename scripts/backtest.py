@@ -18,6 +18,9 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Put the repo root on sys.path so `python scripts/backtest.py …` works.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import pandas as pd
 
 from src.backtesting.engine import BacktestResult, run_backtest

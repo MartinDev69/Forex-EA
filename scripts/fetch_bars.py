@@ -15,6 +15,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Put the repo root on sys.path so `python scripts/fetch_bars.py …` works.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from src.connection.mt5_client import MT5Client
 from src.data.bar_store import BarStore
 from src.data.mt5_ingester import MT5Ingester
