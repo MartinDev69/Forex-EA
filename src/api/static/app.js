@@ -122,7 +122,7 @@ document.addEventListener("alpine:init", () => {
     },
     get canSeeDashboard() { return this.isAdmin || this.hasBroker; },
     version: "1.0.0",
-    buildTag: "b11",
+    buildTag: "b12",
     pollMs: POLL_MS,
     paletteOpen: false,
 
@@ -424,11 +424,28 @@ document.addEventListener("alpine:init", () => {
       } catch (_) { /* next tick will reconcile */ }
     },
 
+    async setStrategyCopyable(name, value) {
+      if (!this.isAdmin) return;
+      try {
+        const updated = await api(
+          `/strategies/${encodeURIComponent(name)}/user-copyable`,
+          { method: "POST", token: this.token, body: { user_copyable: !!value } },
+        );
+        const i = this.strategies.findIndex(s => s.name === updated.name);
+        if (i >= 0) this.strategies[i] = updated;
+      } catch (_) { /* next tick will reconcile */ }
+    },
+
     get executeStrategies() {
       return this.strategies.filter(s => (s.mode || 'execute') === 'execute');
     },
     get signalStrategies() {
       return this.strategies.filter(s => s.mode === 'signal');
+    },
+    // Non-admin view: only strategies admin has marked copyable, in
+    // their enabled/disabled state. Mode doesn't matter to operators.
+    get userCopyableStrategies() {
+      return this.strategies.filter(s => s.user_copyable !== false);
     },
 
     async toggleBot() {

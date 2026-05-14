@@ -136,6 +136,11 @@ class UserStore:
         # passes it as Authorization: Bearer <key>.
         if "ea_api_key" not in cols:
             c.execute("ALTER TABLE auth_users ADD COLUMN ea_api_key TEXT")
+        # Telegram chat ID, captured when their signup request was
+        # approved. Bot uses this to fan out signal/execution alerts
+        # to each operator (filtered by user-copyable strategies).
+        if "telegram_chat_id" not in cols:
+            c.execute("ALTER TABLE auth_users ADD COLUMN telegram_chat_id INTEGER")
         # password_hash was NOT NULL pre-setup-flow; make it nullable so we can
         # pre-seed assigned users before they've chosen a password. SQLite
         # can't ALTER constraints in place, so we migrate via table rebuild
@@ -423,6 +428,46 @@ class UserStore:
                 (new_hash, username),
             )
         return cur.rowcount > 0
+
+    def set_telegram_chat_id(self, username: str, chat_id: int) -> None:
+        """Persist the operator's Telegram chat id so the bot can fan
+        signal/execution alerts out to them."""
+        with self._conn() as c:
+            c.execute(
+                "UPDATE auth_users SET telegram_chat_id = ? WHERE username = ?",
+                (int(chat_id), username),
+            )
+
+    def list_active_telegram_chats(
+        self, *, now: datetime | None = None,
+    ) -> list[tuple[str, int]]:
+        """Return (username, telegram_chat_id) for every operator who:
+          - has a chat id stored,
+          - is not the admin,
+          - has a password set (subscription is active, not pending),
+          - has not had their subscription expire.
+        Used by the bot's Telegram fan-out.
+        """
+        now = now or datetime.now(timezone.utc)
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT username, telegram_chat_id, expires_at FROM auth_users "
+                "WHERE username != ? "
+                "  AND telegram_chat_id IS NOT NULL "
+                "  AND password_hash IS NOT NULL",
+                (ADMIN_AD_ID,),
+            ).fetchall()
+        out: list[tuple[str, int]] = []
+        for r in rows:
+            ts = r["expires_at"]
+            if ts:
+                try:
+                    if datetime.fromisoformat(ts) < now:
+                        continue  # expired — skip
+                except ValueError:
+                    pass
+            out.append((r["username"], int(r["telegram_chat_id"])))
+        return out
 
     def ensure_ea_api_key(self, username: str) -> str:
         """Return the user's EA API key; generates one on first call.

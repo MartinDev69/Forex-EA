@@ -1594,15 +1594,25 @@ class _CollapsibleState extends State<_Collapsible> {
   }
 }
 
-class _CorrelationCard extends StatelessWidget {
+class _CorrelationCard extends StatefulWidget {
   const _CorrelationCard({required this.data});
   final CorrelationResponse data;
 
   @override
+  State<_CorrelationCard> createState() => _CorrelationCardState();
+}
+
+class _CorrelationCardState extends State<_CorrelationCard> {
+  // Tap a summary pill to filter the rows. 'strong' is the default
+  // because that's what most operators care about — same-side stacks
+  // double the same bet.
+  _CorrTier _filter = _CorrTier.strong;
+
+  @override
   Widget build(BuildContext context) {
+    final data = widget.data;
     final pairs = [...data.pairs]
       ..sort((a, b) => b.value.abs().compareTo(a.value.abs()));
-    final top = pairs.take(8).toList();
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     int strong = 0, moderate = 0, low = 0;
@@ -1617,15 +1627,26 @@ class _CorrelationCard extends StatelessWidget {
       }
     }
 
+    bool inTier(double v) {
+      final m = v.abs();
+      switch (_filter) {
+        case _CorrTier.strong:
+          return m >= 0.60;
+        case _CorrTier.moderate:
+          return m >= 0.30 && m < 0.60;
+        case _CorrTier.low:
+          return m < 0.30;
+      }
+    }
+
+    final filteredRows = pairs.where((p) => inTier(p.value)).take(20).toList();
+
     return _Collapsible(
       icon: Icons.hub_outlined,
       title: 'Correlations',
       subtitle:
           'Pairs that move together — taking both same-side stacks the same bet.',
       storageKey: 'card.correlations',
-      // Total-pairs count goes in the header's trailing slot so we don't
-      // need a Spacer (Spacer doesn't behave in a Wrap — was rendering
-      // as a giant gray block taking the full available height).
       trailing: Text(
         '${data.count} pairs',
         style: TextStyle(color: mutedColor(context), fontSize: 11),
@@ -1633,6 +1654,8 @@ class _CorrelationCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Tap-to-filter pill row. Selected pill is highlighted; the
+          // others fade and act as buttons.
           Wrap(
             spacing: 6,
             runSpacing: 6,
@@ -1641,11 +1664,19 @@ class _CorrelationCard extends StatelessWidget {
               _SummaryPill(
                 count: strong, label: 'strong',
                 color: isDark ? kNeonRed : kLightLoss,
+                selected: _filter == _CorrTier.strong,
+                onTap: () => setState(() => _filter = _CorrTier.strong),
               ),
-              _SummaryPill(count: moderate, label: 'moderate', color: kAmber),
+              _SummaryPill(
+                count: moderate, label: 'moderate', color: kAmber,
+                selected: _filter == _CorrTier.moderate,
+                onTap: () => setState(() => _filter = _CorrTier.moderate),
+              ),
               _SummaryPill(
                 count: low, label: 'low',
                 color: isDark ? kNeonGreen : kLightWin,
+                selected: _filter == _CorrTier.low,
+                onTap: () => setState(() => _filter = _CorrTier.low),
               ),
               const SizedBox(width: 4),
               Text(
@@ -1658,7 +1689,18 @@ class _CorrelationCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          ...top.map((p) => _CorrelationRow(pair: p)),
+          if (filteredRows.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 18),
+              child: Center(
+                child: Text(
+                  'No ${_filter.name} correlations.',
+                  style: TextStyle(color: mutedColor(context), fontSize: 12),
+                ),
+              ),
+            )
+          else
+            ...filteredRows.map((p) => _CorrelationRow(pair: p)),
         ],
       ),
     );
@@ -1670,44 +1712,62 @@ class _SummaryPill extends StatelessWidget {
     required this.count,
     required this.label,
     required this.color,
+    this.selected = false,
+    this.onTap,
   });
   final int count;
   final String label;
   final Color color;
+  final bool selected;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: isDark ? 0.10 : 0.10),
-        border: Border.all(color: color.withValues(alpha: 0.36)),
+    // When this pill is the active filter, give it a brighter fill;
+    // unselected pills sit at a low alpha so the user can read them
+    // as "tap to filter to this tier".
+    final fillAlpha = selected ? 0.26 : 0.08;
+    final borderAlpha = selected ? 0.85 : 0.30;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            '$count',
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: color,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: fillAlpha),
+            border: Border.all(
+              color: color.withValues(alpha: borderAlpha),
+              width: selected ? 1.4 : 1,
             ),
+            borderRadius: BorderRadius.circular(20),
           ),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 9,
-              letterSpacing: 1.2,
-              fontWeight: FontWeight.w600,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '$count',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
+              ),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 9,
+                  letterSpacing: 1.2,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

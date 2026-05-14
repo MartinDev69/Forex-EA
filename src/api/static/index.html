@@ -310,6 +310,17 @@
       transition: all 0.15s; margin-right: 4px;
     }
     .strat-mode-btn:hover { border-color: var(--gglow); color: var(--green); }
+    /* Copyable-by-operators toggle — same shape as the mode button. */
+    .strat-copy-btn {
+      width: 28px; height: 28px; border-radius: 8px;
+      border: 1px solid var(--edge2); background: var(--surface2);
+      cursor: pointer; font-size: 13px;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.15s; margin-right: 4px;
+    }
+    .strat-copy-btn.on  { border-color: var(--gglow); background: var(--gdim); }
+    .strat-copy-btn.off { border-color: var(--edge2); opacity: 0.55; }
+    .strat-copy-btn:hover { border-color: var(--gglow); }
 
     .tog-track {
       width: 42px; height: 24px; border-radius: 12px; position: relative;
@@ -1215,7 +1226,31 @@
               <div class="empty">No strategies loaded.</div>
             </template>
 
-            <div class="strat-group" x-show="executeStrategies.length || signalStrategies.length">
+            <!-- Non-admin read-only view: which strategies their EA
+                 will receive (admin-marked copyable). -->
+            <template x-if="!isAdmin">
+              <div class="strat-group">
+                <div class="strat-group-hd">
+                  <span>👥 Your EA copies these</span>
+                  <span class="strat-group-sub">Live signals + executions</span>
+                </div>
+                <template x-if="userCopyableStrategies.length === 0">
+                  <div class="strat-empty">No strategies enabled for operators yet — ask admin.</div>
+                </template>
+                <template x-for="s in userCopyableStrategies" :key="s.name">
+                  <div class="strat-item" :class="{ on: s.enabled }">
+                    <div style="flex:1">
+                      <div class="strat-name" x-text="s.name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"></div>
+                      <div class="strat-status" x-text="s.enabled
+                        ? (s.mode === 'signal' ? '● live · signal alerts' : '● live · auto-copy')
+                        : '○ paused by admin'"></div>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <div class="strat-group" x-show="isAdmin && (executeStrategies.length || signalStrategies.length)">
               <div class="strat-group-hd">
                 <span>⚙️ Auto-execute</span>
                 <span class="strat-group-sub">Bot places orders</span>
@@ -1229,6 +1264,12 @@
                     <div class="strat-name" x-text="s.name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"></div>
                     <div class="strat-status" x-text="s.enabled ? '● armed · executing' : '○ disarmed'"></div>
                   </div>
+                  <button x-show="isAdmin" class="strat-copy-btn"
+                          :class="s.user_copyable !== false ? 'on' : 'off'"
+                          @click.stop="setStrategyCopyable(s.name, s.user_copyable === false)"
+                          :title="s.user_copyable !== false ? 'Copyable by operators — click to keep admin-only' : 'Admin-only — click to share with operators'">
+                    <span x-text="s.user_copyable !== false ? '👥' : '🔒'"></span>
+                  </button>
                   <button x-show="isAdmin" class="strat-mode-btn" @click.stop="setStrategyMode(s.name, 'signal')" title="Move to signal-only">📡</button>
                   <div class="tog-track" :class="s.enabled ? 'on' : 'off'" @click="isAdmin && toggleStrategy(s.name)">
                     <div class="tog-thumb"></div>
@@ -1237,7 +1278,7 @@
               </template>
             </div>
 
-            <div class="strat-group" style="margin-top:14px" x-show="signalStrategies.length || executeStrategies.length">
+            <div class="strat-group" style="margin-top:14px" x-show="isAdmin && (signalStrategies.length || executeStrategies.length)">
               <div class="strat-group-hd">
                 <span>📡 Signals only</span>
                 <span class="strat-group-sub">Telegram alerts, no orders</span>
@@ -1251,6 +1292,12 @@
                     <div class="strat-name" x-text="s.name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"></div>
                     <div class="strat-status" x-text="s.enabled ? '● armed · alerts only' : '○ disarmed'"></div>
                   </div>
+                  <button x-show="isAdmin" class="strat-copy-btn"
+                          :class="s.user_copyable !== false ? 'on' : 'off'"
+                          @click.stop="setStrategyCopyable(s.name, s.user_copyable === false)"
+                          :title="s.user_copyable !== false ? 'Copyable by operators — click to keep admin-only' : 'Admin-only — click to share with operators'">
+                    <span x-text="s.user_copyable !== false ? '👥' : '🔒'"></span>
+                  </button>
                   <button x-show="isAdmin" class="strat-mode-btn" @click.stop="setStrategyMode(s.name, 'execute')" title="Move to auto-execute">⚙️</button>
                   <div class="tog-track" :class="s.enabled ? 'on' : 'off'" @click="isAdmin && toggleStrategy(s.name)">
                     <div class="tog-thumb"></div>

@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Protocol
+from typing import Callable, Protocol
 
 log = logging.getLogger(__name__)
 
@@ -132,6 +132,7 @@ class TelegramNotifier:
         chat_id: str,
         timeout_s: float = 10.0,
         setup_alert_window_min: int = 30,
+        recipients_for_strategy: "Callable[[str | None], list[int | str]] | None" = None,
     ) -> None:
         if not bot_token or not chat_id:
             raise ValueError("bot_token and chat_id required")
@@ -143,11 +144,17 @@ class TelegramNotifier:
         # surfaced as "(+N similar)" on the next message.
         self.setup_alert_window = timedelta(minutes=setup_alert_window_min)
         self._setup_throttle: dict[tuple[str, str, str], _ThrottleEntry] = {}
+        # When set, the notifier consults this callback before sending a
+        # per-trade message and fans the message out to those chat IDs
+        # in addition to the admin's. The callback receives the
+        # strategy name (or None for non-trade messages) and returns the
+        # list of operator chat IDs that should also receive it.
+        self._recipients_for_strategy = recipients_for_strategy
 
-    def send(self, text: str) -> bool:
+    def _send_one(self, chat_id: int | str, text: str) -> bool:
         url = API_URL.format(token=self.bot_token)
         data = urllib.parse.urlencode({
-            "chat_id": self.chat_id,
+            "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": "true",
@@ -156,12 +163,42 @@ class TelegramNotifier:
             with urllib.request.urlopen(url, data=data, timeout=self.timeout_s) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
                 if not payload.get("ok"):
-                    log.warning("telegram send failed: %s", payload)
+                    log.warning("telegram send failed (chat=%s): %s", chat_id, payload)
                     return False
                 return True
         except Exception as exc:
-            log.exception("telegram error: %s", exc)
+            log.warning("telegram error (chat=%s): %s", chat_id, exc)
             return False
+
+    def send(self, text: str) -> bool:
+        """Send to admin only. Used for non-trade messages (startup,
+        shutdown, daily summary, etc.) that operators don't need.
+        """
+        return self._send_one(self.chat_id, text)
+
+    def _broadcast(self, text: str, *, strategy: str | None) -> bool:
+        """Send to admin always, plus any operators whose copyable-flag
+        filter approves this strategy. Per-trade messages funnel through
+        here so operators receive notifications for the strategies the
+        admin has shared with them.
+        """
+        ok = self._send_one(self.chat_id, text)
+        cb = self._recipients_for_strategy
+        if cb is None:
+            return ok
+        try:
+            extras = list(cb(strategy))
+        except Exception:
+            log.exception("recipients_for_strategy callback failed")
+            extras = []
+        for cid in extras:
+            # Best-effort fan-out. One operator's offline phone shouldn't
+            # block delivery to anyone else.
+            try:
+                self._send_one(cid, text)
+            except Exception:
+                log.exception("fan-out to %s failed", cid)
+        return ok
 
     # --------------------------------------------------------------- startup
     def startup(
@@ -231,7 +268,7 @@ class TelegramNotifier:
             lines.append(" · ".join(meta_bits))
         if reason:
             lines.append(f"<i>{reason}</i>")
-        return self.send("\n".join(lines))
+        return self._broadcast("\n".join(lines), strategy=strategy)
 
     def trade_closed(
         self,
@@ -281,7 +318,7 @@ class TelegramNotifier:
                 f"<i>Today: <code>{today_sign}{abs(today_pnl):.2f}</code> "
                 f"on {today_trades} trade(s){wr_text}</i>"
             )
-        return self.send("\n".join(lines))
+        return self._broadcast("\n".join(lines), strategy=strategy)
 
     # --------------------------------------------------------------- daily / weekly
     def daily_summary(
@@ -403,7 +440,7 @@ class TelegramNotifier:
             )
             lines.append(f"<i>Saw: {ind_str}</i>")
         lines.append("<i>Manual — bot is not placing this.</i>")
-        return self.send("\n".join(lines))
+        return self._broadcast("\n".join(lines), strategy=strategy)
 
     def setup_alert(
         self,
@@ -458,7 +495,7 @@ class TelegramNotifier:
             lines.append(
                 f"<i>+{suppressed_before} similar suppressed in last {window_min}m</i>"
             )
-        return self.send("\n".join(lines))
+        return self._broadcast("\n".join(lines), strategy=strategy)
 
     @staticmethod
     def _gate_key(gate: str) -> str:
@@ -487,8 +524,16 @@ class TelegramNotifier:
         return f"{hours / 24:.1f}d"
 
 
-def build_notifier(bot_token: str | None, chat_id: str | None) -> Notifier:
+def build_notifier(
+    bot_token: str | None,
+    chat_id: str | None,
+    *,
+    recipients_for_strategy: Callable[[str | None], list[int | str]] | None = None,
+) -> Notifier:
     if bot_token and chat_id:
-        return TelegramNotifier(bot_token, chat_id)
+        return TelegramNotifier(
+            bot_token, chat_id,
+            recipients_for_strategy=recipients_for_strategy,
+        )
     log.info("Telegram disabled — no credentials configured")
     return NoOpNotifier()

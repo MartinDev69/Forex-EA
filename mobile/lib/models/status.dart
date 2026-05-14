@@ -46,13 +46,23 @@ class Strategy {
   final String name;
   final bool enabled;
   final String mode; // 'execute' (bot trades) | 'signal' (alerts only)
+  // Admin flag: when false, the strategy's trades stay on admin's
+  // account only and operators don't get them via the EA copier or
+  // Telegram fan-out.
+  final bool userCopyable;
 
-  Strategy({required this.name, required this.enabled, required this.mode});
+  Strategy({
+    required this.name,
+    required this.enabled,
+    required this.mode,
+    this.userCopyable = true,
+  });
 
   factory Strategy.fromJson(Map<String, dynamic> json) => Strategy(
         name: json['name'] as String,
         enabled: json['enabled'] as bool,
         mode: (json['mode'] as String?) ?? 'execute',
+        userCopyable: json['user_copyable'] as bool? ?? true,
       );
 
   bool get isSignalOnly => mode == 'signal';

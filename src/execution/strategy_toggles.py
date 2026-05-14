@@ -23,9 +23,10 @@ VALID_MODES = (MODE_EXECUTE, MODE_SIGNAL)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS strategy_toggles (
-    name     TEXT PRIMARY KEY,
-    enabled  INTEGER NOT NULL,
-    mode     TEXT NOT NULL DEFAULT 'execute'
+    name           TEXT PRIMARY KEY,
+    enabled        INTEGER NOT NULL,
+    mode           TEXT NOT NULL DEFAULT 'execute',
+    user_copyable  INTEGER NOT NULL DEFAULT 1
 );
 """
 
@@ -65,10 +66,12 @@ class StrategyToggleStore:
 
     @staticmethod
     def _ensure_mode_column(c: sqlite3.Connection) -> None:
-        """Add the ``mode`` column to pre-existing tables that predate it.
+        """Add columns to pre-existing tables that predate them.
 
         SQLite's ``CREATE TABLE IF NOT EXISTS`` doesn't add columns to an
-        already-created table, so we have to ALTER explicitly.
+        already-created table, so we have to ALTER explicitly. Each
+        additive column gets a sensible default so existing rows behave
+        the same as before the column existed.
         """
         cols = {row["name"] for row in c.execute("PRAGMA table_info(strategy_toggles)")}
         if "mode" not in cols:
@@ -76,14 +79,20 @@ class StrategyToggleStore:
                 "ALTER TABLE strategy_toggles "
                 "ADD COLUMN mode TEXT NOT NULL DEFAULT 'execute'"
             )
+        if "user_copyable" not in cols:
+            c.execute(
+                "ALTER TABLE strategy_toggles "
+                "ADD COLUMN user_copyable INTEGER NOT NULL DEFAULT 1"
+            )
 
     def initialize_defaults(self, defaults: dict[str, bool]) -> None:
         """Insert rows for any strategy not already present. Won't clobber existing flags."""
         with self._conn() as c:
             for name, enabled in defaults.items():
                 c.execute(
-                    "INSERT OR IGNORE INTO strategy_toggles (name, enabled, mode) "
-                    "VALUES (?, ?, 'execute')",
+                    "INSERT OR IGNORE INTO strategy_toggles "
+                    "(name, enabled, mode, user_copyable) "
+                    "VALUES (?, ?, 'execute', 1)",
                     (name, 1 if enabled else 0),
                 )
 
@@ -94,19 +103,56 @@ class StrategyToggleStore:
         return {r["name"]: bool(r["enabled"]) for r in rows}
 
     def list_full(self) -> list[dict]:
-        """Return [{name, enabled, mode}] sorted by name."""
+        """Return [{name, enabled, mode, user_copyable}] sorted by name."""
         with self._conn() as c:
             rows = c.execute(
-                "SELECT name, enabled, mode FROM strategy_toggles ORDER BY name"
+                "SELECT name, enabled, mode, user_copyable "
+                "FROM strategy_toggles ORDER BY name"
             ).fetchall()
         return [
             {
                 "name": r["name"],
                 "enabled": bool(r["enabled"]),
                 "mode": self._sanitize_mode(r["mode"]),
+                "user_copyable": bool(r["user_copyable"]),
             }
             for r in rows
         ]
+
+    def user_copyable_names(self) -> set[str]:
+        """Names of strategies admin has marked copyable by operators.
+        Used by the signals feed + Telegram fan-out to filter what
+        non-admin users see.
+        """
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT name FROM strategy_toggles WHERE user_copyable = 1"
+            ).fetchall()
+        return {r["name"] for r in rows}
+
+    def is_user_copyable(self, name: str) -> bool:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT user_copyable FROM strategy_toggles WHERE name = ?",
+                (name,),
+            ).fetchone()
+        return bool(row["user_copyable"]) if row else False
+
+    def set_user_copyable(self, name: str, value: bool) -> bool:
+        """Set the user-copyable flag for a strategy. Returns the new
+        value. Raises KeyError if the strategy doesn't exist.
+        """
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT 1 FROM strategy_toggles WHERE name = ?", (name,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(name)
+            c.execute(
+                "UPDATE strategy_toggles SET user_copyable = ? WHERE name = ?",
+                (1 if value else 0, name),
+            )
+        return value
 
     def is_enabled(self, name: str) -> bool:
         with self._conn() as c:
@@ -129,7 +175,8 @@ class StrategyToggleStore:
     def get_full(self, name: str) -> dict | None:
         with self._conn() as c:
             row = c.execute(
-                "SELECT name, enabled, mode FROM strategy_toggles WHERE name = ?", (name,)
+                "SELECT name, enabled, mode, user_copyable "
+                "FROM strategy_toggles WHERE name = ?", (name,)
             ).fetchone()
         if row is None:
             return None
@@ -137,13 +184,15 @@ class StrategyToggleStore:
             "name": row["name"],
             "enabled": bool(row["enabled"]),
             "mode": self._sanitize_mode(row["mode"]),
+            "user_copyable": bool(row["user_copyable"]),
         }
 
     def set(self, name: str, enabled: bool) -> None:
         with self._conn() as c:
             c.execute(
                 """
-                INSERT INTO strategy_toggles (name, enabled, mode) VALUES (?, ?, 'execute')
+                INSERT INTO strategy_toggles (name, enabled, mode, user_copyable)
+                VALUES (?, ?, 'execute', 1)
                 ON CONFLICT(name) DO UPDATE SET enabled = excluded.enabled
                 """,
                 (name, 1 if enabled else 0),

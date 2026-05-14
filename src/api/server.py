@@ -448,10 +448,18 @@ class StrategyResponse(BaseModel):
     name: str
     enabled: bool
     mode: str = "execute"  # 'execute' (bot trades) | 'signal' (alerts only)
+    # Admin flag: when False the strategy's trades stay on the admin's
+    # account only — the EA-copier feed and Telegram fan-out filter
+    # this strategy out so operators don't see it.
+    user_copyable: bool = True
 
 
 class StrategyModeRequest(BaseModel):
     mode: str = Field(pattern="^(execute|signal)$")
+
+
+class StrategyUserCopyableRequest(BaseModel):
+    user_copyable: bool
 
 
 class BrokerConfigRequest(BaseModel):
@@ -644,7 +652,10 @@ def account(user: dict = Depends(current_user)) -> AccountResponse:
 @app.get("/strategies", response_model=list[StrategyResponse])
 def list_strategies(_user: dict = Depends(current_user)) -> list[StrategyResponse]:
     return [
-        StrategyResponse(name=s["name"], enabled=s["enabled"], mode=s["mode"])
+        StrategyResponse(
+            name=s["name"], enabled=s["enabled"], mode=s["mode"],
+            user_copyable=s.get("user_copyable", True),
+        )
         for s in toggle_store.list_full()
     ]
 
@@ -662,6 +673,28 @@ def set_strategy_mode(
     full = toggle_store.get_full(name)
     return StrategyResponse(
         name=full["name"], enabled=full["enabled"], mode=full["mode"],
+        user_copyable=full.get("user_copyable", True),
+    )
+
+
+@app.post("/strategies/{name}/user-copyable", response_model=StrategyResponse)
+def set_strategy_user_copyable(
+    name: str,
+    body: StrategyUserCopyableRequest,
+    _admin: dict = Depends(require_admin),
+) -> StrategyResponse:
+    """Admin-only: control whether a strategy's trades reach operators
+    (via the EA-copier signals feed and the Telegram fan-out). Some
+    strategies the admin wants to keep on their own account only.
+    """
+    try:
+        toggle_store.set_user_copyable(name, body.user_copyable)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"unknown strategy: {name}")
+    full = toggle_store.get_full(name)
+    return StrategyResponse(
+        name=full["name"], enabled=full["enabled"], mode=full["mode"],
+        user_copyable=full.get("user_copyable", True),
     )
 
 
@@ -676,6 +709,7 @@ def toggle_strategy(name: str, _user: dict = Depends(require_2fa)) -> StrategyRe
         name=name,
         enabled=enabled,
         mode=full["mode"] if full else "execute",
+        user_copyable=full.get("user_copyable", True) if full else True,
     )
 
 
@@ -941,6 +975,16 @@ def signal_feed_endpoint(
     except Exception:
         log.exception("signal feed query failed")
         raise HTTPException(500, "feed query failed") from None
+    # Filter by admin's user-copyable flag — strategies the admin keeps
+    # private don't reach operators' EAs via this feed.
+    try:
+        copyable = toggle_store.user_copyable_names()
+        events = [
+            e for e in events
+            if e.strategy is None or e.strategy in copyable
+        ]
+    except Exception:
+        log.exception("user_copyable filter failed; serving unfiltered")
     # Always include a bookmark — the EA stores it and sends it back.
     # On the cold-start (since=None) path we still return the latest
     # known timestamp so the EA can begin polling forward from there.
@@ -1229,6 +1273,13 @@ def approve_subscription_request(
         )
     except ValueError as e:
         raise HTTPException(409, str(e)) from None
+
+    # Persist the operator's Telegram chat id on their auth row so the
+    # bot's signal/execution fan-out can reach them.
+    try:
+        user_store.set_telegram_chat_id(ad_id, req.telegram_chat_id)
+    except Exception:
+        log.exception("set_telegram_chat_id failed for %s", ad_id)
 
     # Mark the request approved before sending anything so a flaky
     # mailer or Telegram outage doesn't leave us with an approved row

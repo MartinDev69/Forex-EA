@@ -95,6 +95,16 @@ class ApiClient {
     return Strategy.fromJson(json.decode(r.body) as Map<String, dynamic>);
   }
 
+  Future<Strategy> setStrategyUserCopyable(String name, bool value) async {
+    final r = await http.post(
+      _u('/strategies/${Uri.encodeComponent(name)}/user-copyable'),
+      headers: _headers,
+      body: json.encode({'user_copyable': value}),
+    );
+    _check(r);
+    return Strategy.fromJson(json.decode(r.body) as Map<String, dynamic>);
+  }
+
   Future<List<Trade>> trades({int limit = 20}) async {
     final r = await http.get(_u('/trades?limit=$limit'), headers: _headers);
     _check(r);

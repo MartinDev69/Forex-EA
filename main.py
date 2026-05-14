@@ -224,7 +224,34 @@ def main() -> None:
     toggle_store.initialize_defaults({
         name: DEFAULT_STRATEGY_FLAGS.get(name, False) for name in STRATEGY_REGISTRY
     })
-    notifier = build_notifier(settings.telegram_bot_token, settings.telegram_chat_id)
+
+    # Telegram fan-out callback: every per-trade message lets the
+    # notifier ask "who else should receive this for strategy X?" and
+    # we return the chat IDs of active operators whose admin-marked
+    # copyable strategies include X. None → no strategy info, only
+    # admin gets it.
+    from src.api.users import UserStore
+    user_store_for_notifier = UserStore(Path("data/trades.db"))
+
+    def _telegram_recipients(strategy: str | None) -> list[int | str]:
+        if strategy is None:
+            return []  # admin-only message — handled by base send
+        try:
+            if not toggle_store.is_user_copyable(strategy):
+                return []
+            return [
+                int(cid)
+                for _, cid in user_store_for_notifier.list_active_telegram_chats()
+            ]
+        except Exception:
+            log.exception("telegram recipients lookup failed for %s", strategy)
+            return []
+
+    notifier = build_notifier(
+        settings.telegram_bot_token,
+        settings.telegram_chat_id,
+        recipients_for_strategy=_telegram_recipients,
+    )
     if hasattr(notifier, "startup") and use_mt5 and mt5_client is not None:
         # Best-effort online ping. The notifier swallows network errors so
         # this can never block the bot from starting.
