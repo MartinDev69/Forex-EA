@@ -28,13 +28,13 @@
 //+------------------------------------------------------------------+
 #property copyright "Martin Kristof"
 #property link      "https://github.com/MartinDev69/Forex-EA"
-#property version   "1.07"
+#property version   "1.08"
 #property strict
 
 // Build stamp shown on the panel's header sub-line — bumped on every
 // layout change. If the panel doesn't show this exact string, MT5 is
 // running a stale compiled binary; recompile and re-attach the EA.
-#define EA_BUILD "v1.07"
+#define EA_BUILD "v1.08"
 
 #include <Trade/Trade.mqh>
 
@@ -721,7 +721,7 @@ void MakeBitmap(const string name, int xoff, int yoff, const string file, int xs
 #define P_TILE_H       180  // KPI tile (3-up row)
 #define P_BIGTILE_H    220  // larger info tiles (2-up row)
 #define P_FOOTER_H     36   // developer attribution line
-#define P_GRAD_H       8    // bottom rainbow gradient strip
+#define P_GRAD_H       12   // bottom rainbow gradient strip
 
 int ComputePanelHeight()
 {
@@ -777,9 +777,10 @@ void LayoutPanel()
 #define COL_CYAN        C'88,210,231'    // primary accent
 #define COL_BLUE        C'120,170,255'   // info tile
 #define COL_PURPLE      C'170,130,255'   // accent for the bottom strip
-#define COL_GREEN_TILE  C'18,42,32'      // green-tinted tile body
-#define COL_RED_TILE    C'46,22,30'      // red-tinted tile body
-#define COL_BLUE_TILE   C'22,30,58'      // blue/purple-tinted tile body
+#define COL_GREEN_TILE  C'24,52,40'      // green-tinted tile body
+#define COL_RED_TILE    C'54,26,36'      // red-tinted tile body
+#define COL_BLUE_TILE   C'28,38,68'      // blue/purple-tinted tile body
+#define COL_PANEL_EDGE  C'48,62,92'      // soft inner border for sections
 
 // One-time build — everything else is a redraw of text values.
 void BuildPanel()
@@ -791,21 +792,26 @@ void BuildPanel()
    int y = g_panel_y;
 
    // ── Backdrop (chart can't bleed through). ─────────────────────────
-   MakeBox(PNL + "card", x, y, g_panel_w, h, COL_BG, COL_BG_2);
+   MakeBox(PNL + "card",       x, y, g_panel_w, h, COL_BG, COL_BG_2);
+   // Vertical neon brand stripe on the very left edge — visible even
+   // at a glance, tells you which panel this is.
+   MakeBox(PNL + "leftbar",    x, y, 5, h, COL_CYAN, COL_CYAN);
 
    // ── Header band ───────────────────────────────────────────────────
-   MakeBox(PNL + "hdr", x, y, g_panel_w, P_HEADER_H, COL_BG_2, COL_BG_2);
+   MakeBox(PNL + "hdr",        x, y, g_panel_w, P_HEADER_H, COL_BG_2, COL_BG_2);
+   // Soft 1-px divider line between header and body for more polish.
+   MakeBox(PNL + "hdr_div",    x, y + P_HEADER_H, g_panel_w, 1,
+           COL_PANEL_EDGE, COL_PANEL_EDGE);
 
-   // Cyan "AG" badge in the top-left — stand-in for the Figma pulse icon.
-   MakeBox(PNL + "badge",     x + 18, y + 18, 36, 36, COL_CYAN, COL_CYAN);
-   MakeLabel(PNL + "badge_t", x + 36, y + 24, "AG",
-             C'10,18,28', 14, "Segoe UI Black", ANCHOR_UPPER);
+   // Big "AG" badge — bumped 36 -> 44 so the brand reads at a glance.
+   MakeBox(PNL + "badge",      x + 20, y + 14, 44, 44, COL_CYAN, COL_CYAN);
+   MakeLabel(PNL + "badge_t",  x + 42, y + 20, "AG",
+             C'10,18,28', 18, "Segoe UI Black", ANCHOR_UPPER);
 
-   // Title + sub-line. Title at row 1 (y+16), sub at row 2 (y+42) —
-   // 26px gap between them so they don't bump fonts.
-   MakeLabel(PNL + "title", x + 66, y + 18,
-             "LIVE TRADE COPIER", COL_TXT, 13, "Segoe UI Semibold");
-   MakeLabel(PNL + "sub",   x + 66, y + 42,
+   // Title + sub-line.
+   MakeLabel(PNL + "title", x + 76, y + 18,
+             "LIVE TRADE COPIER", COL_TXT, 14, "Segoe UI Semibold");
+   MakeLabel(PNL + "sub",   x + 76, y + 44,
              "AntiGreed signal mirror · " + EA_BUILD, COL_MUTED, 9, P_FONT_BODY);
 
    // Status pill on the right (dynamic colour set in RedrawPanel).
@@ -900,9 +906,10 @@ void RedrawPanel()
    hy += 40;  // gap below label, before the big number
    MakeLabel(PNL + "hero_v", x + P_PAD, hy,
              FmtMoney(bal, cur), COL_HERO, 32, "Segoe UI Semibold");
-   // Lightning bolt accent — sits to the right of the big number.
-   MakeLabel(PNL + "hero_bolt", x + g_panel_w - 46, hy + 10,
-             "⚡", COL_HERO, 22, "Segoe UI Semibold");
+   // Trending-up arrow next to the big number — replaces the lightning
+   // bolt glyph, which renders as a tofu box on Wine MT5's font.
+   MakeLabel(PNL + "hero_bolt", x + g_panel_w - 56, hy + 6,
+             "↗", COL_HERO, 32, "Segoe UI Semibold");
    hy += 90;  // big enough to keep "Last sync" clear of the number above
    string sync = (g_last_poll_ok > 0)
       ? "Last sync: " + TimeToString(g_last_poll_ok, TIME_SECONDS)
@@ -978,6 +985,10 @@ void DrawColouredTile(const string id, int xoff, int yoff, int w, int h,
              bg, accent);
    MakeBox  (PNL + id + "_top",  xoff,      yoff,        w, 4,
              accent, accent);
+   // Bottom-right corner accent — small bright square, gives each tile
+   // a "live indicator" feel like the Figma's glow corners.
+   MakeBox  (PNL + id + "_corn", xoff + w - 12, yoff + h - 12, 6, 6,
+             accent, accent);
    // Top row: icon badge on the left, label sitting to its right at
    // the badge's vertical centre. Smaller icon + shorter labels so
    // the label can't overflow the tile width even on small tiles.
@@ -1002,6 +1013,9 @@ void DrawSignalTile(const string id, int xoff, int yoff, int w, int h,
    MakeBox  (PNL + id + "_bg",  xoff,           yoff,           w, h,
              bg, accent);
    MakeBox  (PNL + id + "_top", xoff,           yoff,           w, 4,
+             accent, accent);
+   // Bottom-right corner accent matching the KPI tiles.
+   MakeBox  (PNL + id + "_corn", xoff + w - 14, yoff + h - 14, 8, 8,
              accent, accent);
    // Top row: label on the left, status dot on the right.
    int top_y = yoff + 26;
