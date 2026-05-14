@@ -1491,6 +1491,10 @@ class _CollapsibleState extends State<_Collapsible> {
     // Hand-rolled card + ExpansionTile so we can pin explicit dark
     // surface colours and avoid Material 3's default surface tint
     // (which renders cards as a pale-grey block on dark themes).
+    // Hand-rolled card surface with no Material elevation/tint. The
+    // ExpansionTile inside inherits the app's theme as-is so children
+    // (correlation rows etc.) see the same brightness as everywhere
+    // else on the dashboard.
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
@@ -1499,41 +1503,38 @@ class _CollapsibleState extends State<_Collapsible> {
         borderRadius: BorderRadius.circular(12),
       ),
       clipBehavior: Clip.antiAlias,
-      child: Theme(
-        data: Theme.of(context).copyWith(
-          dividerColor: Colors.transparent,
-          // Prevent the ExpansionTile from inheriting Material 3 surface
-          // tint when expanded — keeps the body background the same as
-          // the card colour instead of going pale grey.
-          colorScheme: Theme.of(context).colorScheme.copyWith(
-                surface: isDark ? kSurface : kLightSurface,
-                surfaceTint: Colors.transparent,
-              ),
-        ),
-        child: ExpansionTile(
-          initiallyExpanded: _expanded,
-          maintainState: true,
-          tilePadding: const EdgeInsets.symmetric(horizontal: 16),
-          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          backgroundColor: isDark ? kSurface : kLightSurface,
-          collapsedBackgroundColor: isDark ? kSurface : kLightSurface,
-          iconColor: accent,
-          collapsedIconColor: mutedColor(context),
-          onExpansionChanged: (v) {
-            setState(() => _expanded = v);
-            _save(v);
-          },
-          leading: Icon(widget.icon, color: accent),
-          title: Text(
-            widget.title,
-            style: Theme.of(context).textTheme.titleMedium,
+      // Single targeted override: hide ExpansionTile's default divider
+      // (which would draw a stray line across the body when expanded).
+      // Brightness, colour scheme, etc. all inherit unchanged.
+      child: ExpansionTileTheme(
+        data: const ExpansionTileThemeData(),
+        child: Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            initiallyExpanded: _expanded,
+            maintainState: true,
+            tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            backgroundColor: isDark ? kSurface : kLightSurface,
+            collapsedBackgroundColor: isDark ? kSurface : kLightSurface,
+            iconColor: accent,
+            collapsedIconColor: mutedColor(context),
+            onExpansionChanged: (v) {
+              setState(() => _expanded = v);
+              _save(v);
+            },
+            leading: Icon(widget.icon, color: accent),
+            title: Text(
+              widget.title,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            subtitle: Text(
+              widget.subtitle,
+              style: TextStyle(color: mutedColor(context), fontSize: 11),
+            ),
+            trailing: widget.trailing,
+            children: [widget.child],
           ),
-          subtitle: Text(
-            widget.subtitle,
-            style: TextStyle(color: mutedColor(context), fontSize: 11),
-          ),
-          trailing: widget.trailing,
-          children: [widget.child],
         ),
       ),
     );
