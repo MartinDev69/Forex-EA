@@ -497,8 +497,17 @@ document.addEventListener("alpine:init", () => {
     async toggleBot() {
       if (!this.isAdmin) return;
       const path = this.status?.running ? "/bot/stop" : "/bot/start";
-      try { await api(path, { method: "POST", token: this.token }); }
-      finally { this.tick(); }
+      try {
+        await api(path, { method: "POST", token: this.token });
+      } catch (err) {
+        // api() throws "<status>: <body>" — surface it so the user can see
+        // *why* the click didn't take. Most common cause: 2FA enrolled but
+        // the dashboard didn't prompt for a code.
+        const msg = (err && err.message) || "request failed";
+        try { window.alert(`Start/Stop failed — ${msg}`); } catch (_) {}
+      } finally {
+        this.tick();
+      }
     },
 
     /**

@@ -17,8 +17,9 @@ Design notes:
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -65,9 +66,33 @@ class MT5DataFeed:
 
     We ask for bars relative to "now" rather than a wall-clock time — this
     avoids timezone mismatches between local system time and the broker server.
+
+    Self-heals from broker disconnects. When ``copy_rates_from_pos`` returns
+    empty we don't give up — Exness Trial in particular drops the terminal
+    multiple times a day, and the old behaviour ("log warning, skip symbol")
+    silently stalls the bot until someone runs ``nssm restart``. We instead:
+
+      1. Drop and re-add the symbol to Market Watch — sometimes MT5 evicts
+         a symbol on its own without bouncing the whole terminal.
+      2. If still no data, check terminal_info().connected and call the
+         injected ``reconnect`` callable to re-run mt5.initialize() with the
+         stored credentials. On success we clear the symbol cache so every
+         subsequent tick re-selects (Market Watch resets on reconnect).
+      3. Retry copy_rates one more time before raising.
+
+    A bare RuntimeError gets raised only if both attempts fail and we couldn't
+    reconnect — at which point the bot's tick error handler logs it and the
+    next tick gets another shot.
     """
 
-    def __init__(self, mt5_module: Any | None = None) -> None:
+    # Don't hammer mt5.initialize() — broker dropouts can come in bursts.
+    _RECONNECT_BACKOFF_S = 5.0
+
+    def __init__(
+        self,
+        mt5_module: Any | None = None,
+        reconnect: Callable[[], bool] | None = None,
+    ) -> None:
         self._mt5 = mt5_module if mt5_module is not None else _load_mt5()
         _require_mt5(self._mt5)
         # Track which symbols we've already pushed into Market Watch so we
@@ -76,6 +101,12 @@ class MT5DataFeed:
         # silently breaks any pair the operator adds via SYMBOLS unless we
         # do it ourselves.
         self._selected: set[str] = set()
+        # Callable that re-runs mt5.initialize() with the bot's stored
+        # credentials. Returns True on success. Set by main.py at startup;
+        # tests/local-dev usually pass None and accept that the feed can't
+        # recover from a connection drop.
+        self._reconnect = reconnect
+        self._last_reconnect_at: float = 0.0
 
     def _ensure_selected(self, symbol: str) -> None:
         """Best-effort push the symbol into Market Watch.
@@ -94,6 +125,45 @@ class MT5DataFeed:
         except Exception:
             pass
 
+    def _terminal_connected(self) -> bool:
+        """True iff MT5 reports an active broker connection. Wrapped in a
+        try/except because terminal_info() can itself throw if MT5 was
+        shut down behind our back.
+        """
+        try:
+            info = self._mt5.terminal_info()
+        except Exception:
+            return False
+        if info is None:
+            return False
+        return bool(getattr(info, "connected", False))
+
+    def _maybe_reconnect(self) -> bool:
+        """Run the injected reconnect callback, backing off so a burst of
+        empty-rate ticks doesn't fire mt5.initialize() dozens of times.
+        Returns True if we (re-)reached a connected state, False otherwise.
+        """
+        if self._reconnect is None:
+            return False
+        now = time.monotonic()
+        if now - self._last_reconnect_at < self._RECONNECT_BACKOFF_S:
+            return self._terminal_connected()
+        self._last_reconnect_at = now
+        log.warning("MT5 looks disconnected — attempting reconnect")
+        try:
+            ok = bool(self._reconnect())
+        except Exception:
+            log.exception("MT5 reconnect callback raised")
+            return False
+        if ok:
+            # Market Watch is empty after re-init; force every symbol to be
+            # re-selected on its next latest_bars call.
+            self._selected.clear()
+            log.info("MT5 reconnected")
+        else:
+            log.warning("MT5 reconnect attempt did not restore the connection")
+        return ok
+
     def latest_bars(self, symbol: str, timeframe: str, count: int) -> pd.DataFrame:
         tf = TIMEFRAME_MAP.get(timeframe.upper())
         if tf is None:
@@ -101,8 +171,26 @@ class MT5DataFeed:
         self._ensure_selected(symbol)
         rates = self._mt5.copy_rates_from_pos(symbol, tf, 0, count)
         if rates is None or len(rates) == 0:
-            last_err = getattr(self._mt5, "last_error", lambda: "unknown")()
-            raise RuntimeError(f"MT5 returned no rates for {symbol} {timeframe}: {last_err}")
+            # Round 1: MT5 sometimes evicts a symbol from Market Watch
+            # without bouncing the terminal. Re-select and retry.
+            self._selected.discard(symbol)
+            self._ensure_selected(symbol)
+            rates = self._mt5.copy_rates_from_pos(symbol, tf, 0, count)
+            if rates is None or len(rates) == 0:
+                # Round 2: terminal might be disconnected from broker.
+                # We can't fully trust terminal_info — some Exness builds
+                # keep ``connected=True`` even when the session is dead —
+                # so fire the reconnect regardless. _maybe_reconnect()
+                # has its own 5-second backoff to keep repeated empty-rate
+                # ticks from spamming mt5.initialize().
+                if self._maybe_reconnect():
+                    self._ensure_selected(symbol)
+                    rates = self._mt5.copy_rates_from_pos(symbol, tf, 0, count)
+                if rates is None or len(rates) == 0:
+                    last_err = getattr(self._mt5, "last_error", lambda: "unknown")()
+                    raise RuntimeError(
+                        f"MT5 returned no rates for {symbol} {timeframe}: {last_err}"
+                    )
         df = pd.DataFrame(rates)
         df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
         df = df.set_index("time")

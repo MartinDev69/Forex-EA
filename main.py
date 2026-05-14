@@ -167,7 +167,25 @@ def main() -> None:
                 last_error=str(e),
             )
             raise
-        data_feed = MT5DataFeed()
+        def _reconnect_mt5() -> bool:
+            """Re-run mt5.initialize() with the stored creds. Called by
+            MT5DataFeed when copy_rates returns empty — without this the
+            bot used to silently stall until an nssm restart cleared the
+            dead MT5 session. disconnect() is idempotent so we don't need
+            to gate the call on the private _connected flag.
+            """
+            try:
+                mt5_client.disconnect()
+            except Exception:
+                log.exception("MT5 disconnect during reconnect failed")
+            try:
+                mt5_client.connect()
+                return True
+            except Exception:
+                log.exception("MT5 reconnect failed")
+                return False
+
+        data_feed = MT5DataFeed(reconnect=_reconnect_mt5)
         executor = MT5Executor(symbols_filter=settings.symbols)
     else:
         data_feed = MockDataFeed()
