@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/client.dart';
+import '../api/config.dart';
 import '../models/allocator.dart';
 import '../models/broker.dart';
 import '../models/calendar.dart';
@@ -362,6 +363,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
               _ExecutionQualityCard(data: _fillStats!),
             if (_canSeeDashboard && _allocator != null && _allocator!.allocations.isNotEmpty)
               _AllocatorCard(data: _allocator!),
+            // Build stamp — bump in lib/api/config.dart on every visible
+            // change so you can confirm which APK is installed at a glance.
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 20, 0, 28),
+              child: Center(
+                child: Text(
+                  appBuildTag,
+                  style: TextStyle(
+                    color: mutedColor(context),
+                    fontSize: 10, letterSpacing: 2,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),

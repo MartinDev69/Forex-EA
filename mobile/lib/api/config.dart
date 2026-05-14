@@ -12,3 +12,8 @@ String get apiBaseUrl {
   if (override.isNotEmpty) return override;
   return _prodApiBaseUrl;
 }
+
+/// Bumped on each visible behaviour/UI change so we can verify at a
+/// glance which APK is actually installed on a phone. Show this as a
+/// small footer in the dashboard.
+const appBuildTag = 'b1.09';
