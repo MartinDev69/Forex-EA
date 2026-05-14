@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../api/client.dart';
 import '../services/quick_unlock.dart';
 import 'pin_setup.dart';
@@ -36,6 +37,11 @@ class _LoginScreenState extends State<LoginScreen> {
       final username = _user.text.trim();
       final password = _pass.text;
       await widget.apiClient.login(username, password);
+      // Tell the platform the autofill "context" is complete and that
+      // it should offer to save the credentials. Without this the
+      // password manager has no signal that login succeeded and won't
+      // prompt to remember the password.
+      TextInput.finishAutofillContext(shouldSave: true);
       // Sign-in succeeded. Offer quick unlock as an optional follow-up,
       // but never block the user from getting to the dashboard. If they
       // skip, dismiss, or any step fails, sign-in still completes.
@@ -195,27 +201,40 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
                   const SizedBox(height: 32),
-                  TextField(
-                    controller: _user,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    textInputAction: TextInputAction.next,
-                    decoration: const InputDecoration(
-                      labelText: 'AD-ID',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.badge_outlined),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _pass,
-                    obscureText: true,
-                    textInputAction: TextInputAction.done,
-                    onSubmitted: (_) => _submit(),
-                    decoration: const InputDecoration(
-                      labelText: 'Password',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.lock_outline),
+                  // AutofillGroup tells the platform these two fields
+                  // belong together as a login form. Combined with
+                  // autofillHints on each field, this is what Android's
+                  // autofill framework + iOS Password AutoFill use to
+                  // surface saved credentials and offer to save new ones.
+                  AutofillGroup(
+                    child: Column(
+                      children: [
+                        TextField(
+                          controller: _user,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          textInputAction: TextInputAction.next,
+                          autofillHints: const [AutofillHints.username],
+                          decoration: const InputDecoration(
+                            labelText: 'AD-ID',
+                            border: OutlineInputBorder(),
+                            prefixIcon: Icon(Icons.badge_outlined),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        TextField(
+                          controller: _pass,
+                          obscureText: true,
+                          textInputAction: TextInputAction.done,
+                          onSubmitted: (_) => _submit(),
+                          autofillHints: const [AutofillHints.password],
+                          decoration: const InputDecoration(
+                            labelText: 'Password',
+                            border: OutlineInputBorder(),
+                            prefixIcon: Icon(Icons.lock_outline),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   if (_error != null) ...[

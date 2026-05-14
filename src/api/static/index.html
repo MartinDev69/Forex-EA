@@ -880,11 +880,16 @@
             <span class="login-appname">AntiGreed</span>
           </div>
           <div class="login-tagline">Control plane</div>
-          <form @submit.prevent="login()">
-            <label class="fl">AD-ID</label>
-            <input class="fi" type="text" x-model="username" placeholder="your-ad-id" autocomplete="username" required />
-            <label class="fl">Password</label>
-            <input class="fi" type="password" x-model="password" placeholder="••••••••" autocomplete="current-password" required />
+          <form @submit.prevent="login()" autocomplete="on" method="post" action="#">
+            <label class="fl" for="login-username">AD-ID</label>
+            <input id="login-username" name="username" class="fi" type="text"
+                   x-model="username" placeholder="your-ad-id"
+                   autocomplete="username" autocapitalize="off" autocorrect="off"
+                   spellcheck="false" required />
+            <label class="fl" for="login-password">Password</label>
+            <input id="login-password" name="password" class="fi" type="password"
+                   x-model="password" placeholder="••••••••"
+                   autocomplete="current-password" required />
             <div x-show="error" x-text="error" class="login-error"></div>
             <button type="submit" class="login-btn" :disabled="busy">
               <span x-show="!busy">Sign in</span>
