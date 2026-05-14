@@ -130,6 +130,7 @@ async def _lifespan(app: FastAPI):
         _signup_bot = TelegramSignupBot(
             SIGNUP_BOT_TOKEN, subscription_request_store,
             admin_chat_id=ADMIN_TG_CHAT_ID,
+            toggle_store=toggle_store,
         )
         _signup_bot.start()
         # Mask all but the last 6 chars so the operator can confirm
@@ -975,16 +976,24 @@ def signal_feed_endpoint(
     except Exception:
         log.exception("signal feed query failed")
         raise HTTPException(500, "feed query failed") from None
-    # Filter by admin's user-copyable flag — strategies the admin keeps
-    # private don't reach operators' EAs via this feed.
+    # Two-stage filter applied at delivery time:
+    #
+    # 1) admin's user_copyable flag — strategies the admin keeps private
+    #    don't reach any operator's EA, period.
+    # 2) this operator's own execute picks — the 2 strategies they
+    #    chose during signup. Strategies outside their pick set don't
+    #    get replicated on their account.
     try:
         copyable = toggle_store.user_copyable_names()
+        user_picks = user_store.get_user_picks(username)
+        execute_picks = user_picks.get("execute", set())
         events = [
             e for e in events
-            if e.strategy is None or e.strategy in copyable
+            if e.strategy is None
+            or (e.strategy in copyable and e.strategy in execute_picks)
         ]
     except Exception:
-        log.exception("user_copyable filter failed; serving unfiltered")
+        log.exception("signal feed filter failed; serving unfiltered")
     # Always include a bookmark — the EA stores it and sends it back.
     # On the cold-start (since=None) path we still return the latest
     # known timestamp so the EA can begin polling forward from there.
@@ -1280,6 +1289,18 @@ def approve_subscription_request(
         user_store.set_telegram_chat_id(ad_id, req.telegram_chat_id)
     except Exception:
         log.exception("set_telegram_chat_id failed for %s", ad_id)
+
+    # Transfer the strategy picks captured during signup so the bot's
+    # filters know which trades to fan out to this operator. Locked
+    # for the subscription term — no edit path yet.
+    try:
+        user_store.set_user_picks(
+            ad_id,
+            signal=list(req.picks_signal),
+            execute=list(req.picks_execute),
+        )
+    except Exception:
+        log.exception("set_user_picks failed for %s", ad_id)
 
     # Mark the request approved before sending anything so a flaky
     # mailer or Telegram outage doesn't leave us with an approved row

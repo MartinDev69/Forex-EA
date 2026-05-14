@@ -145,10 +145,14 @@ class TelegramNotifier:
         self.setup_alert_window = timedelta(minutes=setup_alert_window_min)
         self._setup_throttle: dict[tuple[str, str, str], _ThrottleEntry] = {}
         # When set, the notifier consults this callback before sending a
-        # per-trade message and fans the message out to those chat IDs
-        # in addition to the admin's. The callback receives the
-        # strategy name (or None for non-trade messages) and returns the
-        # list of operator chat IDs that should also receive it.
+        # per-trade message and fans it out to the returned chat IDs in
+        # addition to the admin. The callback signature is
+        # ``(strategy, kind)`` where:
+        #   - strategy: the source strategy's name, or None if unknown
+        #   - kind: 'signal' for alert-only messages (signal-mode
+        #     strategies, gated-setup notices), 'execute' for actual
+        #     trade-open/close. Lets the callback fan signal-mode and
+        #     execute-mode messages to different operator picks.
         self._recipients_for_strategy = recipients_for_strategy
 
     def _send_one(self, chat_id: int | str, text: str) -> bool:
@@ -176,18 +180,22 @@ class TelegramNotifier:
         """
         return self._send_one(self.chat_id, text)
 
-    def _broadcast(self, text: str, *, strategy: str | None) -> bool:
-        """Send to admin always, plus any operators whose copyable-flag
-        filter approves this strategy. Per-trade messages funnel through
-        here so operators receive notifications for the strategies the
-        admin has shared with them.
+    def _broadcast(
+        self, text: str, *, strategy: str | None, kind: str = "execute",
+    ) -> bool:
+        """Send to admin always, plus any operators whose picks include
+        this (strategy, kind). Per-trade messages funnel through here
+        so operators only receive notifications for the strategies they
+        personally chose during signup. ``kind`` is 'signal' for alerts/
+        gated-setups (strategy in signal mode) and 'execute' for actual
+        order opens/closes.
         """
         ok = self._send_one(self.chat_id, text)
         cb = self._recipients_for_strategy
         if cb is None:
             return ok
         try:
-            extras = list(cb(strategy))
+            extras = list(cb(strategy, kind))
         except Exception:
             log.exception("recipients_for_strategy callback failed")
             extras = []
@@ -268,7 +276,7 @@ class TelegramNotifier:
             lines.append(" · ".join(meta_bits))
         if reason:
             lines.append(f"<i>{reason}</i>")
-        return self._broadcast("\n".join(lines), strategy=strategy)
+        return self._broadcast("\n".join(lines), strategy=strategy, kind="execute")
 
     def trade_closed(
         self,
@@ -318,7 +326,7 @@ class TelegramNotifier:
                 f"<i>Today: <code>{today_sign}{abs(today_pnl):.2f}</code> "
                 f"on {today_trades} trade(s){wr_text}</i>"
             )
-        return self._broadcast("\n".join(lines), strategy=strategy)
+        return self._broadcast("\n".join(lines), strategy=strategy, kind="execute")
 
     # --------------------------------------------------------------- daily / weekly
     def daily_summary(
@@ -440,7 +448,7 @@ class TelegramNotifier:
             )
             lines.append(f"<i>Saw: {ind_str}</i>")
         lines.append("<i>Manual — bot is not placing this.</i>")
-        return self._broadcast("\n".join(lines), strategy=strategy)
+        return self._broadcast("\n".join(lines), strategy=strategy, kind="signal")
 
     def setup_alert(
         self,
@@ -495,7 +503,7 @@ class TelegramNotifier:
             lines.append(
                 f"<i>+{suppressed_before} similar suppressed in last {window_min}m</i>"
             )
-        return self._broadcast("\n".join(lines), strategy=strategy)
+        return self._broadcast("\n".join(lines), strategy=strategy, kind="signal")
 
     @staticmethod
     def _gate_key(gate: str) -> str:
@@ -528,7 +536,7 @@ def build_notifier(
     bot_token: str | None,
     chat_id: str | None,
     *,
-    recipients_for_strategy: Callable[[str | None], list[int | str]] | None = None,
+    recipients_for_strategy: "Callable[[str | None, str], list[int | str]] | None" = None,
 ) -> Notifier:
     if bot_token and chat_id:
         return TelegramNotifier(

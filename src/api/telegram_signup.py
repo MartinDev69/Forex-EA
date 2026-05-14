@@ -27,9 +27,12 @@ import urllib.request
 from typing import Any
 
 from .subscription_requests import (
+    PICKS_REQUIRED,
     STATE_AWAITING_EMAIL,
     STATE_AWAITING_PHONE,
     STATE_IDLE,
+    STATE_PICKING_EXECUTE,
+    STATE_PICKING_SIGNALS,
     SubscriptionRequestStore,
     VALID_DURATIONS,
 )
@@ -123,6 +126,41 @@ UNKNOWN_COMMAND = (
     "request, or wait for an admin response if you've already submitted one."
 )
 
+# Display labels for the strategy picker keyboards. Keys match the
+# names registered by src.strategies.STRATEGY_REGISTRY.
+STRATEGY_LABELS = {
+    "ma_crossover":        "MA Crossover",
+    "rsi_mean_reversion":  "RSI Mean-Reversion",
+    "donchian_breakout":   "Donchian Breakout",
+    "macd_cross":          "MACD Cross",
+    "bollinger_bounce":    "Bollinger Bounce",
+    "bollinger_squeeze":   "Bollinger Squeeze",
+    "stochastic_reversal": "Stochastic Reversal",
+    "triple_ma_alignment": "Triple MA",
+    "inside_bar_breakout": "Inside-Bar Breakout",
+    "engulfing_pattern":   "Engulfing Pattern",
+    "ema_pullback":        "EMA Pullback",
+    "adx_breakout":        "ADX Breakout",
+}
+
+PICK_INTRO_SIGNAL = (
+    "🎯 <b>Pick 3 strategies for SIGNAL ALERTS</b>\n\n"
+    "These are the strategies you'll get Telegram alerts for. The bot "
+    "won't auto-place them on your account — you decide what to do "
+    "with each signal.\n\n"
+    "Tap to toggle. <i>Selected: {n} / 3</i>"
+)
+PICK_INTRO_EXECUTE = (
+    "⚙️ <b>Pick 2 strategies for AUTO-EXECUTE</b>\n\n"
+    "These are the strategies your copy-trading EA will replicate on "
+    "your MT5 account automatically. Choose the two you trust most.\n\n"
+    "Tap to toggle. <i>Selected: {n} / 2</i>"
+)
+PICK_LOCKED_NOTE = (
+    "<i>Your picks are locked for the subscription term — choose carefully.</i>"
+)
+PICK_COMPLETE_PROMPT = "✅ Tap <b>Continue</b> when you're happy with your selection."
+
 APPROVAL_DM = (
     "🎉 <b>Your AntiGreed access is ready!</b>\n\n"
     "Your AD-ID <code>{ad_id}</code> has been assigned with a "
@@ -196,7 +234,7 @@ def _api_call(token: str, method: str, payload: dict[str, Any] | None = None,
 
 
 def send_message(token: str, chat_id: int, text: str,
-                 reply_markup: dict | None = None) -> bool:
+                 reply_markup: dict | None = None) -> int | None:
     payload: dict[str, Any] = {
         "chat_id": chat_id,
         "text": text,
@@ -205,7 +243,52 @@ def send_message(token: str, chat_id: int, text: str,
     }
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
-    return _api_call(token, "sendMessage", payload, timeout=10) is not None
+    result = _api_call(token, "sendMessage", payload, timeout=10)
+    if result is None:
+        return None
+    return result.get("message_id")
+
+
+def edit_message_text(token: str, chat_id: int, message_id: int,
+                      text: str, reply_markup: dict | None = None) -> bool:
+    """Edit an existing bot message — used to refresh the strategy
+    picker's checkmark grid in place instead of spamming new messages."""
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    return _api_call(token, "editMessageText", payload, timeout=10) is not None
+
+
+def build_picker_keyboard(
+    strategies: list[str],
+    selected: list[str],
+    kind: str,
+    *,
+    show_continue: bool,
+) -> dict:
+    """Two-per-row inline checkbox grid + an optional Continue button.
+    `kind` is 'signal' or 'execute' — routes the callback prefix."""
+    rows: list[list[dict]] = []
+    row: list[dict] = []
+    sel = set(selected)
+    for s in strategies:
+        marker = "☑" if s in sel else "☐"
+        label = STRATEGY_LABELS.get(s, s.replace("_", " ").title())
+        row.append({"text": f"{marker}  {label}", "callback_data": f"pick:{kind}:{s}"})
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    if show_continue:
+        rows.append([{"text": "✅  Continue →", "callback_data": f"pickdone:{kind}"}])
+    return {"inline_keyboard": rows}
 
 
 def send_approval_dm(
@@ -258,7 +341,8 @@ class TelegramSignupBot:
     """
 
     def __init__(self, token: str, store: SubscriptionRequestStore,
-                 admin_chat_id: int | None = None) -> None:
+                 admin_chat_id: int | None = None,
+                 toggle_store=None) -> None:
         self.token = token
         self.store = store
         # admin_chat_id is kept for reference / future use, but no
@@ -268,8 +352,19 @@ class TelegramSignupBot:
         # private-chat IDs are the user's own user_id, so the admin
         # was being silently filtered out when testing /start.
         self.admin_chat_id = admin_chat_id
+        # StrategyToggleStore — used to enumerate user-copyable
+        # strategies for the per-user picker keyboards.
+        self.toggle_store = toggle_store
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        # Phone number captured at the start of the picker stage. Held
+        # in memory rather than the chat_state DB because the picker is
+        # short-lived; a bot restart between the contact share and the
+        # final pick is expected to be rare and the user can /start over.
+        self._phone_cache: dict[int, str] = {}
+        # The message_id of the active picker so we can edit it in
+        # place as the user toggles checkmarks. Keyed by chat_id.
+        self._picker_msg: dict[int, int] = {}
 
     def start(self) -> None:
         if self._task is not None:
@@ -449,6 +544,31 @@ class TelegramSignupBot:
                 PHONE_PROMPT.format(duration_label=DURATION_LABEL.get(code, code)),
                 reply_markup=SHARE_PHONE_KEYBOARD,
             )
+            return
+
+        # Strategy picker — toggle a single checkbox.
+        if data.startswith("pick:"):
+            parts = data.split(":", 2)
+            if len(parts) != 3:
+                return
+            _, kind, strategy = parts
+            if kind not in ("signal", "execute"):
+                return
+            self._handle_pick_toggle(
+                chat_id, kind, strategy,
+                username=username, first_name=first_name,
+            )
+            return
+
+        # Strategy picker — Continue button: advance round or finalise.
+        if data.startswith("pickdone:"):
+            kind = data.split(":", 1)[1]
+            if kind not in ("signal", "execute"):
+                return
+            self._handle_pick_done(
+                chat_id, kind, username=username, first_name=first_name,
+            )
+            return
 
     # -------------------------------------------------- conversation steps
 
@@ -463,8 +583,10 @@ class TelegramSignupBot:
 
     def _handle_phone(self, chat_id: int, phone: str, *,
                       username: str | None, first_name: str | None) -> None:
-        """Captured phone number from the contact-share button. Creates
-        the pending request and confirms — all via Telegram, no email."""
+        """Captured phone number from the contact-share button. Stashes
+        the phone, advances to the strategy-picker stage. The
+        subscription request itself isn't created until both picker
+        rounds are complete."""
         # Telegram contacts often arrive without a leading + on some
         # carriers; normalize so the dashboard always shows it that way.
         clean = phone.strip()
@@ -474,10 +596,163 @@ class TelegramSignupBot:
         if duration is None:
             self._send_welcome(chat_id, username=username, first_name=first_name)
             return
+        # Cache the phone in the user's chat_state duration column —
+        # we already have a free-form text slot there — by stuffing it
+        # into a private state key. Reuse first_name to keep it simple:
+        # leave as-is, store phone separately via the picks_signal slot
+        # repurposed as "phone temp"? Cleaner: keep duration; phone
+        # number lives in the chat_state row via a tiny migration too.
+        # For now we hold the phone in the picker callback chain using
+        # the state row's "duration" tag — but `duration` is needed for
+        # the create_request call later. We need a separate slot.
+        # Cheapest path: dismiss the share-keyboard, stash the phone on
+        # the request-state-pending list directly by reusing first_name.
+        # That breaks display, so instead we add a dedicated cache.
+        # Pragmatic: keep the phone in memory on this instance keyed by
+        # chat_id. Survives the picker round-trip; on bot restart the
+        # user re-/start's anyway.
+        self._phone_cache[chat_id] = clean
+        self.store.upsert_state(
+            chat_id, state=STATE_PICKING_SIGNALS, duration=duration,
+            username=username, first_name=first_name,
+        )
+        self.store.set_state_picks(chat_id, signal=[], execute=[])
+        # Drop the share-phone keyboard before sending the picker so the
+        # user's keyboard doesn't show a stale "Share my phone" button.
+        send_message(self.token, chat_id,
+                     PICK_INTRO_SIGNAL.format(n=0),
+                     reply_markup=REMOVE_KEYBOARD)
+        self._send_picker(chat_id, kind="signal", selected=[])
+        log.info("phone captured for chat=%s, advancing to signal picker", chat_id)
+
+    # ---------- strategy picker ----------
+
+    def _available_strategies(self) -> list[str]:
+        """Strategies the user may pick from. Filtered to those admin
+        has marked user_copyable so the picker doesn't expose
+        admin-only strategies. Order matches STRATEGY_LABELS so the
+        layout is stable across signups.
+        """
+        if self.toggle_store is None:
+            return list(STRATEGY_LABELS.keys())
+        try:
+            available = self.toggle_store.user_copyable_names()
+        except Exception:
+            log.exception("toggle_store.user_copyable_names failed")
+            return list(STRATEGY_LABELS.keys())
+        # Preserve declared display order so users always see the same
+        # grid regardless of how SQLite returned the rows.
+        return [s for s in STRATEGY_LABELS if s in available]
+
+    def _send_picker(self, chat_id: int, *, kind: str, selected: list[str]) -> None:
+        strategies = self._available_strategies()
+        required = PICKS_REQUIRED[kind]
+        intro = (PICK_INTRO_SIGNAL if kind == "signal" else PICK_INTRO_EXECUTE)
+        body = intro.format(n=len(selected))
+        if len(selected) >= required:
+            body += "\n\n" + PICK_COMPLETE_PROMPT
+        body += "\n\n" + PICK_LOCKED_NOTE
+        keyboard = build_picker_keyboard(
+            strategies, selected, kind,
+            show_continue=len(selected) >= required,
+        )
+        msg_id = send_message(self.token, chat_id, body, reply_markup=keyboard)
+        if msg_id is not None:
+            self._picker_msg[chat_id] = msg_id
+
+    def _refresh_picker(self, chat_id: int, *, kind: str, selected: list[str]) -> None:
+        strategies = self._available_strategies()
+        required = PICKS_REQUIRED[kind]
+        intro = (PICK_INTRO_SIGNAL if kind == "signal" else PICK_INTRO_EXECUTE)
+        body = intro.format(n=len(selected))
+        if len(selected) >= required:
+            body += "\n\n" + PICK_COMPLETE_PROMPT
+        body += "\n\n" + PICK_LOCKED_NOTE
+        keyboard = build_picker_keyboard(
+            strategies, selected, kind,
+            show_continue=len(selected) >= required,
+        )
+        msg_id = self._picker_msg.get(chat_id)
+        if msg_id is None:
+            self._send_picker(chat_id, kind=kind, selected=selected)
+            return
+        ok = edit_message_text(
+            self.token, chat_id, msg_id, body, reply_markup=keyboard,
+        )
+        if not ok:
+            # Editing failed (rare — usually because Telegram has already
+            # GC'd the original message). Fall back to a fresh send.
+            self._send_picker(chat_id, kind=kind, selected=selected)
+
+    def _handle_pick_toggle(
+        self, chat_id: int, kind: str, strategy: str,
+        *, username: str | None, first_name: str | None,
+    ) -> None:
+        state = self.store.get_state(chat_id)
+        if state is None:
+            return
+        # Validate that the user is in the right picker round for this
+        # kind. If they're in execute round but tapped a signal button
+        # (shouldn't happen via Telegram but defensive), bounce.
+        expected = (STATE_PICKING_SIGNALS if kind == "signal" else STATE_PICKING_EXECUTE)
+        if state.state != expected:
+            return
+        required = PICKS_REQUIRED[kind]
+        current = list(state.picks_signal if kind == "signal" else state.picks_execute)
+        if strategy in current:
+            current.remove(strategy)
+        elif len(current) < required:
+            current.append(strategy)
+        else:
+            # Already at the limit — ignore the extra tap.
+            return
+        if kind == "signal":
+            self.store.set_state_picks(chat_id, signal=current)
+        else:
+            self.store.set_state_picks(chat_id, execute=current)
+        self._refresh_picker(chat_id, kind=kind, selected=current)
+
+    def _handle_pick_done(
+        self, chat_id: int, kind: str,
+        *, username: str | None, first_name: str | None,
+    ) -> None:
+        state = self.store.get_state(chat_id)
+        if state is None:
+            return
+        if kind == "signal":
+            if len(state.picks_signal) != PICKS_REQUIRED["signal"]:
+                return
+            # Advance to the execute picker.
+            self.store.upsert_state(
+                chat_id, state=STATE_PICKING_EXECUTE, duration=state.duration,
+                username=username, first_name=first_name,
+            )
+            self._picker_msg.pop(chat_id, None)
+            self._send_picker(chat_id, kind="execute", selected=list(state.picks_execute))
+            return
+        # kind == "execute"
+        if len(state.picks_execute) != PICKS_REQUIRED["execute"]:
+            return
+        self._finalize_signup(chat_id, username=username, first_name=first_name)
+
+    def _finalize_signup(
+        self, chat_id: int, *,
+        username: str | None, first_name: str | None,
+    ) -> None:
+        state = self.store.get_state(chat_id)
+        if state is None:
+            return
+        phone = self._phone_cache.pop(chat_id, None)
+        duration = state.duration
+        if duration is None:
+            self._send_welcome(chat_id, username=username, first_name=first_name)
+            return
         try:
             self.store.create_request(
                 chat_id=chat_id, username=username, first_name=first_name,
-                duration=duration, email="", phone_number=clean,
+                duration=duration, email="", phone_number=phone,
+                picks_signal=list(state.picks_signal),
+                picks_execute=list(state.picks_execute),
             )
         except ValueError:
             send_message(self.token, chat_id,
@@ -488,10 +763,15 @@ class TelegramSignupBot:
             chat_id, state=STATE_IDLE, duration=None,
             username=username, first_name=first_name,
         )
+        self.store.set_state_picks(chat_id, signal=[], execute=[])
+        self._picker_msg.pop(chat_id, None)
         send_message(self.token, chat_id, REQUEST_CONFIRMED,
                      reply_markup=REMOVE_KEYBOARD)
-        log.info("subscription request from chat=%s phone=%s duration=%s",
-                 chat_id, clean, duration)
+        log.info(
+            "signup request from chat=%s phone=%s duration=%s signals=%s execute=%s",
+            chat_id, phone, duration,
+            ",".join(state.picks_signal), ",".join(state.picks_execute),
+        )
 
     def _handle_email(self, chat_id: int, text: str, *,
                       username: str | None, first_name: str | None) -> None:

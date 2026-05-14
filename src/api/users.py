@@ -76,6 +76,21 @@ CREATE TABLE IF NOT EXISTS used_setup_tokens (
 )
 """
 
+# Per-operator strategy picks captured during Telegram signup. Each
+# user picks 3 strategies for signal alerts and 2 for auto-execute;
+# these are locked for the subscription term. The bot's per-trade
+# fan-out and the /signals/feed copier consult this table at
+# delivery time to decide who hears about each strategy's activity.
+SCHEMA_USER_PICKS = """
+CREATE TABLE IF NOT EXISTS user_strategy_picks (
+    username      TEXT NOT NULL,
+    strategy      TEXT NOT NULL,
+    kind          TEXT NOT NULL,   -- 'signal' | 'execute'
+    picked_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (username, strategy, kind)
+)
+"""
+
 
 @dataclass(frozen=True)
 class UserRecord:
@@ -112,6 +127,7 @@ class UserStore:
             c.execute(SCHEMA_USERS)
             c.execute(SCHEMA_POOL)
             c.execute(SCHEMA_USED_TOKENS)
+            c.execute(SCHEMA_USER_PICKS)
             self._migrate(c)
         # Keep the pool topped up. Safe to call on every boot — no-op if full.
         self.refill_pool(pool_size)
@@ -468,6 +484,74 @@ class UserStore:
                     pass
             out.append((r["username"], int(r["telegram_chat_id"])))
         return out
+
+    # ---------- per-user strategy picks ----------
+
+    def set_user_picks(
+        self,
+        username: str,
+        *,
+        signal: list[str],
+        execute: list[str],
+    ) -> None:
+        """Replace this user's strategy picks for the subscription term.
+        Caller is responsible for validating counts (3 signal, 2 execute)
+        — the store just persists what's given.
+        """
+        with self._conn() as c:
+            c.execute(
+                "DELETE FROM user_strategy_picks WHERE username = ?", (username,),
+            )
+            for s in signal:
+                c.execute(
+                    "INSERT OR IGNORE INTO user_strategy_picks "
+                    "(username, strategy, kind) VALUES (?, ?, 'signal')",
+                    (username, s),
+                )
+            for s in execute:
+                c.execute(
+                    "INSERT OR IGNORE INTO user_strategy_picks "
+                    "(username, strategy, kind) VALUES (?, ?, 'execute')",
+                    (username, s),
+                )
+
+    def get_user_picks(self, username: str) -> dict[str, set[str]]:
+        """Return {'signal': set[strategy], 'execute': set[strategy]} for
+        this user. Empty sets if none picked.
+        """
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT strategy, kind FROM user_strategy_picks WHERE username = ?",
+                (username,),
+            ).fetchall()
+        out: dict[str, set[str]] = {"signal": set(), "execute": set()}
+        for r in rows:
+            kind = r["kind"]
+            if kind in out:
+                out[kind].add(r["strategy"])
+        return out
+
+    def list_users_who_picked(
+        self, strategy: str, kind: str,
+    ) -> list[tuple[str, int | None]]:
+        """Return (username, telegram_chat_id) for every user who picked
+        this (strategy, kind). Used by the bot's per-user fan-out.
+        Filters out unauthenticated rows (no password set yet) — those
+        are pending signups, not active operators.
+        """
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT p.username AS username, u.telegram_chat_id AS chat "
+                "FROM user_strategy_picks p "
+                "JOIN auth_users u ON u.username = p.username "
+                "WHERE p.strategy = ? AND p.kind = ? "
+                "  AND u.password_hash IS NOT NULL",
+                (strategy, kind),
+            ).fetchall()
+        return [
+            (r["username"], int(r["chat"]) if r["chat"] is not None else None)
+            for r in rows
+        ]
 
     def ensure_ea_api_key(self, username: str) -> str:
         """Return the user's EA API key; generates one on first call.

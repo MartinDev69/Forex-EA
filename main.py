@@ -233,18 +233,30 @@ def main() -> None:
     from src.api.users import UserStore
     user_store_for_notifier = UserStore(Path("data/trades.db"))
 
-    def _telegram_recipients(strategy: str | None) -> list[int | str]:
+    def _telegram_recipients(strategy: str | None, kind: str) -> list[int | str]:
+        """Return the chat IDs of operators who should also receive this
+        per-trade message. Two filters:
+          1. Admin's user_copyable flag — admin-only strategies don't
+             fan out to anyone but admin.
+          2. The operator's own picks for the matching kind — only the
+             3 signal strategies and 2 execute strategies they chose at
+             signup.
+        """
         if strategy is None:
-            return []  # admin-only message — handled by base send
+            return []  # non-trade message — admin-only by design
         try:
             if not toggle_store.is_user_copyable(strategy):
                 return []
-            return [
-                int(cid)
-                for _, cid in user_store_for_notifier.list_active_telegram_chats()
-            ]
+            chats: list[int | str] = []
+            for _, cid in user_store_for_notifier.list_users_who_picked(
+                strategy, kind,
+            ):
+                if cid is not None:
+                    chats.append(int(cid))
+            return chats
         except Exception:
-            log.exception("telegram recipients lookup failed for %s", strategy)
+            log.exception("telegram recipients lookup failed for %s/%s",
+                          strategy, kind)
             return []
 
     notifier = build_notifier(

@@ -12,7 +12,7 @@ and the user keeps the same flow when it comes back.
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,9 +21,24 @@ VALID_DURATIONS = ("5h", "1w", "2w", "1m", "2m", "3m")
 VALID_STATUSES = ("pending", "approved", "rejected")
 
 # Conversation states the signup bot walks each chat through.
-STATE_IDLE             = "idle"
-STATE_AWAITING_EMAIL   = "awaiting_email"
-STATE_AWAITING_PHONE   = "awaiting_phone"
+STATE_IDLE                = "idle"
+STATE_AWAITING_EMAIL      = "awaiting_email"
+STATE_AWAITING_PHONE      = "awaiting_phone"
+STATE_PICKING_SIGNALS     = "picking_signals"
+STATE_PICKING_EXECUTE     = "picking_execute"
+
+# How many strategies each kind requires before the bot accepts the
+# selection and moves on.
+PICKS_REQUIRED = {"signal": 3, "execute": 2}
+
+
+def _split_csv(value: str | None) -> list[str]:
+    """Parse a comma-separated picks string back into a list. Tolerates
+    None, empty, and stray whitespace.
+    """
+    if not value:
+        return []
+    return [p.strip() for p in value.split(",") if p.strip()]
 
 _REQUESTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS subscription_requests (
@@ -39,7 +54,12 @@ CREATE TABLE IF NOT EXISTS subscription_requests (
     decided_at          TEXT,
     decided_by          TEXT,
     assigned_ad_id      TEXT,
-    rejection_reason    TEXT
+    rejection_reason    TEXT,
+    -- Per-user strategy picks captured during signup. Stored as
+    -- comma-separated strategy names (joined here, exploded on read
+    -- via .split). Transferred to user_strategy_picks on approval.
+    picks_signal        TEXT NOT NULL DEFAULT '',
+    picks_execute       TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -50,7 +70,12 @@ CREATE TABLE IF NOT EXISTS telegram_chat_state (
     first_name        TEXT,
     state             TEXT NOT NULL DEFAULT 'idle',
     duration          TEXT,
-    updated_at        TEXT NOT NULL
+    updated_at        TEXT NOT NULL,
+    -- In-progress strategy picks while the user is still tapping the
+    -- inline checkboxes. Comma-separated names. Cleared when the
+    -- signup request is finalised.
+    picks_signal      TEXT NOT NULL DEFAULT '',
+    picks_execute     TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -80,6 +105,8 @@ class SubscriptionRequest:
     decided_by: str | None
     assigned_ad_id: str | None
     rejection_reason: str | None
+    picks_signal: list[str] = field(default_factory=list)
+    picks_execute: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -90,6 +117,8 @@ class ChatState:
     state: str
     duration: str | None
     updated_at: str
+    picks_signal: list[str] = field(default_factory=list)
+    picks_execute: list[str] = field(default_factory=list)
 
 
 class SubscriptionRequestStore:
@@ -103,6 +132,29 @@ class SubscriptionRequestStore:
             cols = {r["name"] for r in c.execute("PRAGMA table_info(subscription_requests)")}
             if "phone_number" not in cols:
                 c.execute("ALTER TABLE subscription_requests ADD COLUMN phone_number TEXT")
+            # Additive: per-user strategy picks captured during signup.
+            if "picks_signal" not in cols:
+                c.execute(
+                    "ALTER TABLE subscription_requests "
+                    "ADD COLUMN picks_signal TEXT NOT NULL DEFAULT ''"
+                )
+            if "picks_execute" not in cols:
+                c.execute(
+                    "ALTER TABLE subscription_requests "
+                    "ADD COLUMN picks_execute TEXT NOT NULL DEFAULT ''"
+                )
+            # Additive: in-progress picks on the chat-state side.
+            state_cols = {r["name"] for r in c.execute("PRAGMA table_info(telegram_chat_state)")}
+            if "picks_signal" not in state_cols:
+                c.execute(
+                    "ALTER TABLE telegram_chat_state "
+                    "ADD COLUMN picks_signal TEXT NOT NULL DEFAULT ''"
+                )
+            if "picks_execute" not in state_cols:
+                c.execute(
+                    "ALTER TABLE telegram_chat_state "
+                    "ADD COLUMN picks_execute TEXT NOT NULL DEFAULT ''"
+                )
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -114,7 +166,8 @@ class SubscriptionRequestStore:
     def get_state(self, chat_id: int) -> ChatState | None:
         with self._conn() as c:
             row = c.execute(
-                "SELECT chat_id, telegram_username, first_name, state, duration, updated_at "
+                "SELECT chat_id, telegram_username, first_name, state, duration, "
+                "       updated_at, picks_signal, picks_execute "
                 "FROM telegram_chat_state WHERE chat_id = ?",
                 (chat_id,),
             ).fetchone()
@@ -127,7 +180,35 @@ class SubscriptionRequestStore:
             state=row["state"],
             duration=row["duration"],
             updated_at=row["updated_at"],
+            picks_signal=_split_csv(row["picks_signal"]),
+            picks_execute=_split_csv(row["picks_execute"]),
         )
+
+    def set_state_picks(
+        self, chat_id: int, *,
+        signal: list[str] | None = None,
+        execute: list[str] | None = None,
+    ) -> None:
+        """Replace the in-progress picks lists on the chat-state row.
+        Either argument None means "leave this kind alone". Counts are
+        not validated here — the caller (the picker UI) enforces them.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._conn() as c:
+            sets = ["updated_at = ?"]
+            args: list[object] = [now]
+            if signal is not None:
+                sets.append("picks_signal = ?")
+                args.append(",".join(signal))
+            if execute is not None:
+                sets.append("picks_execute = ?")
+                args.append(",".join(execute))
+            args.append(chat_id)
+            c.execute(
+                "UPDATE telegram_chat_state SET " + ", ".join(sets) +
+                " WHERE chat_id = ?",
+                args,
+            )
 
     def upsert_state(
         self, chat_id: int, *, state: str,
@@ -157,19 +238,25 @@ class SubscriptionRequestStore:
     def create_request(
         self, *, chat_id: int, username: str | None, first_name: str | None,
         duration: str, email: str = "", phone_number: str | None = None,
+        picks_signal: list[str] | None = None,
+        picks_execute: list[str] | None = None,
     ) -> int:
         if duration not in VALID_DURATIONS:
             raise ValueError(f"invalid duration: {duration}")
         now = datetime.now(timezone.utc).isoformat()
+        sig = ",".join(picks_signal or [])
+        exe = ",".join(picks_execute or [])
         with self._conn() as c:
             cur = c.execute(
                 """
                 INSERT INTO subscription_requests
                   (telegram_chat_id, telegram_username, telegram_first_name,
-                   duration, email, phone_number, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+                   duration, email, phone_number, status, created_at,
+                   picks_signal, picks_execute)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
                 """,
-                (chat_id, username, first_name, duration, email, phone_number, now),
+                (chat_id, username, first_name, duration, email, phone_number,
+                 now, sig, exe),
             )
             return int(cur.lastrowid)
 
@@ -232,6 +319,7 @@ class SubscriptionRequestStore:
 
     @staticmethod
     def _row_to_request(row: sqlite3.Row) -> SubscriptionRequest:
+        keys = row.keys()
         return SubscriptionRequest(
             id=row["id"],
             telegram_chat_id=row["telegram_chat_id"],
@@ -239,13 +327,15 @@ class SubscriptionRequestStore:
             telegram_first_name=row["telegram_first_name"],
             duration=row["duration"],
             email=row["email"] or "",
-            phone_number=(row["phone_number"] if "phone_number" in row.keys() else None),
+            phone_number=(row["phone_number"] if "phone_number" in keys else None),
             status=row["status"],
             created_at=row["created_at"],
             decided_at=row["decided_at"],
             decided_by=row["decided_by"],
             assigned_ad_id=row["assigned_ad_id"],
             rejection_reason=row["rejection_reason"],
+            picks_signal=_split_csv(row["picks_signal"]) if "picks_signal" in keys else [],
+            picks_execute=_split_csv(row["picks_execute"]) if "picks_execute" in keys else [],
         )
 
     # ---------- update offset ----------
