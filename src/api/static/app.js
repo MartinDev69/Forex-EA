@@ -16,16 +16,56 @@ function _decimalsFor(symbol) {
   return 5;
 }
 
-async function api(path, { method = "GET", body, token } = {}) {
+/**
+ * Wrap api() with a TOTP prompt loop when 2FA is enabled on the caller's
+ * account. Mirrors the server's require_2fa() gate: a missing or wrong
+ * X-2FA-Code header returns 401, which we surface as a re-prompt instead
+ * of an unhelpful logout. Returns null if the user cancels the prompt.
+ *
+ * Shared at module scope so the dashboard component and the broker
+ * component both go through the same flow.
+ */
+async function secureFetch(path, { token, twoFaEnabled, ...opts } = {}) {
+  if (!twoFaEnabled) {
+    return api(path, { ...opts, token });
+  }
+  while (true) {
+    const code = window.prompt("Enter your 6-digit 2FA code:", "");
+    if (code === null) return null;
+    const trimmed = code.trim();
+    if (!/^\d{6}$/.test(trimmed)) {
+      window.alert("Code must be 6 digits.");
+      continue;
+    }
+    try {
+      return await api(path, {
+        ...opts,
+        token,
+        keepOn401: true,
+        headers: { ...(opts.headers || {}), "X-2FA-Code": trimmed },
+      });
+    } catch (err) {
+      const msg = (err && err.message) || "";
+      if (/^401\b/.test(msg)) {
+        window.alert("Invalid 2FA code — try again.");
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function api(path, { method = "GET", body, token, headers = {}, keepOn401 = false } = {}) {
   const res = await fetch(path, {
     method,
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (res.status === 401) {
+  if (res.status === 401 && !keepOn401) {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
     localStorage.removeItem(ROLE_KEY);
@@ -98,6 +138,9 @@ document.addEventListener("alpine:init", () => {
     // chosen layout sticks across refreshes. Default open on first run.
     strategiesExpanded: localStorage.getItem("antigreed:strategiesExpanded") !== "0",
     correlationsExpanded: localStorage.getItem("antigreed:correlationsExpanded") !== "0",
+    // Cached from /auth/2fa/status so secureApi() knows whether to prompt
+    // for a TOTP code before each destructive call.
+    twoFaEnabled: false,
     // Active symbol tab for the Strategy-drift card. Null means
     // "first symbol in the response" — initialised on first render so
     // we don't have to wait for /drift to resolve.
@@ -168,8 +211,21 @@ document.addEventListener("alpine:init", () => {
           if (e.key === "r") this.runCmd("refresh");
         }
       });
+      // Fire-and-forget — if it fails we just treat 2FA as disabled
+      // and let the per-call 401 prompt the user.
+      api("/auth/2fa/status", { token: this.token })
+        .then(s => { this.twoFaEnabled = !!s?.enabled; })
+        .catch(() => {});
       await this.tick();
       this.loop();
+    },
+
+    async secureApi(path, opts = {}) {
+      return secureFetch(path, {
+        ...opts,
+        token: this.token,
+        twoFaEnabled: this.twoFaEnabled,
+      });
     },
 
     loop() {
@@ -433,8 +489,11 @@ document.addEventListener("alpine:init", () => {
     async toggleStrategy(name) {
       if (!this.isAdmin) return;
       try {
-        const updated = await api(`/strategies/${encodeURIComponent(name)}/toggle`,
-                                  { method: "POST", token: this.token });
+        const updated = await this.secureApi(
+          `/strategies/${encodeURIComponent(name)}/toggle`,
+          { method: "POST" },
+        );
+        if (updated === null) return;
         const i = this.strategies.findIndex(s => s.name === updated.name);
         if (i >= 0) this.strategies[i] = updated;
       } catch (_) { /* swallow, next tick will reconcile */ }
@@ -443,8 +502,11 @@ document.addEventListener("alpine:init", () => {
     async setStrategyMode(name, mode) {
       if (!this.isAdmin) return;
       try {
-        const updated = await api(`/strategies/${encodeURIComponent(name)}/mode`,
-          { method: "POST", token: this.token, body: { mode } });
+        const updated = await this.secureApi(
+          `/strategies/${encodeURIComponent(name)}/mode`,
+          { method: "POST", body: { mode } },
+        );
+        if (updated === null) return;
         const i = this.strategies.findIndex(s => s.name === updated.name);
         if (i >= 0) this.strategies[i] = updated;
       } catch (_) { /* next tick will reconcile */ }
@@ -453,10 +515,11 @@ document.addEventListener("alpine:init", () => {
     async setStrategyCopyable(name, value) {
       if (!this.isAdmin) return;
       try {
-        const updated = await api(
+        const updated = await this.secureApi(
           `/strategies/${encodeURIComponent(name)}/user-copyable`,
-          { method: "POST", token: this.token, body: { user_copyable: !!value } },
+          { method: "POST", body: { user_copyable: !!value } },
         );
+        if (updated === null) return;
         const i = this.strategies.findIndex(s => s.name === updated.name);
         if (i >= 0) this.strategies[i] = updated;
       } catch (_) { /* next tick will reconcile */ }
@@ -498,11 +561,9 @@ document.addEventListener("alpine:init", () => {
       if (!this.isAdmin) return;
       const path = this.status?.running ? "/bot/stop" : "/bot/start";
       try {
-        await api(path, { method: "POST", token: this.token });
+        const r = await this.secureApi(path, { method: "POST" });
+        if (r === null) return;   // user cancelled the 2FA prompt
       } catch (err) {
-        // api() throws "<status>: <body>" — surface it so the user can see
-        // *why* the click didn't take. Most common cause: 2FA enrolled but
-        // the dashboard didn't prompt for a code.
         const msg = (err && err.message) || "request failed";
         try { window.alert(`Start/Stop failed — ${msg}`); } catch (_) {}
       } finally {
@@ -539,8 +600,8 @@ document.addEventListener("alpine:init", () => {
     async runCmd(cmd) {
       this.paletteOpen = false;
       if ((cmd === "start" || cmd === "stop") && !this.isAdmin) return;
-      if (cmd === "start")   await api("/bot/start", { method: "POST", token: this.token });
-      if (cmd === "stop")    await api("/bot/stop",  { method: "POST", token: this.token });
+      if (cmd === "start")   await this.secureApi("/bot/start", { method: "POST" });
+      if (cmd === "stop")    await this.secureApi("/bot/stop",  { method: "POST" });
       if (cmd === "refresh") await this.tick();
       if (cmd === "start" || cmd === "stop") this.tick();
     },
@@ -846,6 +907,7 @@ document.addEventListener("alpine:init", () => {
     saving: false,
     message: "",
     messageTone: "text-slate-400",
+    twoFaEnabled: false,
     _statusTimer: null,
 
     async load() {
@@ -853,6 +915,11 @@ document.addEventListener("alpine:init", () => {
       // and calls location.reload(), which re-mounts this component and
       // re-fires load() — an infinite reload loop.
       if (!this.token) return;
+      // Find out whether we'll need to prompt for a TOTP code before
+      // Test / Save / Remove — fire-and-forget, false on failure is fine.
+      api("/auth/2fa/status", { token: this.token })
+        .then(s => { this.twoFaEnabled = !!s?.enabled; })
+        .catch(() => {});
       try {
         const [presets, saved, status] = await Promise.all([
           api("/brokers",        { token: this.token }),
@@ -944,9 +1011,11 @@ document.addEventListener("alpine:init", () => {
       if (!this.canSubmit()) return;
       this.testing = true; this.testResult = null; this.message = "";
       try {
-        const r = await api("/broker/test", {
-          method: "POST", token: this.token, body: this._payload(),
+        const r = await secureFetch("/broker/test", {
+          method: "POST", body: this._payload(),
+          token: this.token, twoFaEnabled: this.twoFaEnabled,
         });
+        if (r === null) return;   // user cancelled 2FA prompt
         this.testResult = r;
         this.flash(r.ok ? "Connection OK." : "Connection failed.", r.ok);
       } catch (e) {
@@ -961,9 +1030,11 @@ document.addEventListener("alpine:init", () => {
       if (!this.canSubmit()) return;
       this.saving = true; this.message = "";
       try {
-        const saved = await api("/broker/config", {
-          method: "PUT", token: this.token, body: this._payload(),
+        const saved = await secureFetch("/broker/config", {
+          method: "PUT", body: this._payload(),
+          token: this.token, twoFaEnabled: this.twoFaEnabled,
         });
+        if (saved === null) return;
         this.savedConfig = saved;
         this.form.password = "";
         this.flash("Saved. Restart the bot to pick up new creds.", true);
@@ -977,7 +1048,11 @@ document.addEventListener("alpine:init", () => {
     async clear() {
       if (!confirm("Remove saved broker credentials?")) return;
       try {
-        await api("/broker/config", { method: "DELETE", token: this.token });
+        const r = await secureFetch("/broker/config", {
+          method: "DELETE",
+          token: this.token, twoFaEnabled: this.twoFaEnabled,
+        });
+        if (r === null) return;
         this.savedConfig = null;
         this.form.password = "";
         this.flash("Credentials removed.", true);

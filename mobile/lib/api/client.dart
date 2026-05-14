@@ -132,13 +132,45 @@ class ApiClient {
     return list.map((e) => PendingOrder.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  Future<void> startBot() async {
-    final r = await http.post(_u('/bot/start'), headers: _headers);
+  /// True when the caller has TOTP enrolled and active. Used by the
+  /// dashboard to decide whether to prompt for a 2FA code before
+  /// destructive actions like Start/Stop.
+  Future<bool> twoFaEnabled() async {
+    final r = await http.get(_u('/auth/2fa/status'), headers: _headers);
     _check(r);
+    final body = json.decode(r.body) as Map<String, dynamic>;
+    return body['enabled'] == true;
   }
 
-  Future<void> stopBot() async {
-    final r = await http.post(_u('/bot/stop'), headers: _headers);
+  Future<void> startBot({String? totpCode}) async {
+    await _post2faGated('/bot/start', totpCode: totpCode);
+  }
+
+  Future<void> stopBot({String? totpCode}) async {
+    await _post2faGated('/bot/stop', totpCode: totpCode);
+  }
+
+  /// POST a 2FA-gated endpoint. Adds X-2FA-Code when supplied and
+  /// translates server-side 2FA rejections into TwoFaRequiredException /
+  /// TwoFaInvalidException so the UI can re-prompt instead of bouncing
+  /// the user to the login screen (which is what bare 401 does).
+  Future<void> _post2faGated(String path, {String? totpCode}) async {
+    final headers = {..._headers};
+    if (totpCode != null && totpCode.isNotEmpty) {
+      headers['X-2FA-Code'] = totpCode;
+    }
+    final r = await http.post(_u(path), headers: headers);
+    if (r.statusCode == 401) {
+      final detail = ApiException(401, r.body).detail;
+      if (detail.contains('2FA code required')) {
+        throw TwoFaRequiredException();
+      }
+      if (detail.contains('invalid 2FA code')) {
+        throw TwoFaInvalidException();
+      }
+      // Real authn failure (expired token etc.) — fall through to
+      // _check, which logs out.
+    }
     _check(r);
   }
 
@@ -463,6 +495,20 @@ class ApiException implements Exception {
 
   @override
   String toString() => 'ApiException($statusCode): $detail';
+}
+
+/// Thrown when a 2FA-gated endpoint refused the request because no
+/// X-2FA-Code header was supplied (or it was empty).
+class TwoFaRequiredException implements Exception {
+  @override
+  String toString() => '2FA code required';
+}
+
+/// Thrown when the supplied X-2FA-Code was rejected as wrong — usually
+/// a typo or a slightly out-of-sync authenticator clock.
+class TwoFaInvalidException implements Exception {
+  @override
+  String toString() => 'invalid 2FA code';
 }
 
 class UnauthorizedException implements Exception {
