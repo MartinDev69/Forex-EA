@@ -363,16 +363,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
               _ExecutionQualityCard(data: _fillStats!),
             if (_canSeeDashboard && _allocator != null && _allocator!.allocations.isNotEmpty)
               _AllocatorCard(data: _allocator!),
-            // Build stamp — bump in lib/api/config.dart on every visible
-            // change so you can confirm which APK is installed at a glance.
+            // Version footer — semantic version on the left, internal
+            // build sub-tag on the right so we can still verify which
+            // APK is actually on the phone.
             Padding(
-              padding: const EdgeInsets.fromLTRB(0, 20, 0, 28),
+              padding: const EdgeInsets.fromLTRB(0, 24, 0, 32),
               child: Center(
                 child: Text(
-                  appBuildTag,
+                  'AntiGreed v$appVersion · $appBuildTag',
                   style: TextStyle(
                     color: mutedColor(context),
-                    fontSize: 10, letterSpacing: 2,
+                    fontSize: 10, letterSpacing: 1.4,
                     fontFamily: 'monospace',
                   ),
                 ),

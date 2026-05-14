@@ -121,7 +121,8 @@ document.addEventListener("alpine:init", () => {
       return !!(c && c.login && c.login > 0);
     },
     get canSeeDashboard() { return this.isAdmin || this.hasBroker; },
-    version: "v0.3",
+    version: "1.0.0",
+    buildTag: "b11",
     pollMs: POLL_MS,
     paletteOpen: false,
 

@@ -669,6 +669,15 @@
     /* Confetti */
     .confetti-piece { position: fixed; width: 10px; height: 14px; top: -16px; pointer-events: none; z-index: 200; border-radius: 2px; }
 
+    /* App footer — semantic version + build tag, last thing on the page. */
+    .app-footer {
+      margin-top: 40px; padding: 18px 0 12px;
+      text-align: center; color: var(--muted);
+      font-family: var(--mono); font-size: 10px;
+      letter-spacing: 1.4px; opacity: 0.65;
+    }
+    .app-footer-dot { margin: 0 8px; opacity: 0.6; }
+
     /* ── Mobile hamburger + slide-in drawer (hidden on desktop). ────── */
     .hamburger {
       display: none; flex-direction: column; gap: 4px;
@@ -1806,6 +1815,13 @@
         </div>
       </div>
 
+      <!-- Version footer — semantic version + internal build tag so we
+           can tell at a glance which version of the dashboard is live. -->
+      <div class="app-footer">
+        <span>AntiGreed v<span x-text="version"></span></span>
+        <span class="app-footer-dot">·</span>
+        <span x-text="buildTag"></span>
+      </div>
     </main>
   </div>
 

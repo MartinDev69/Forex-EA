@@ -13,7 +13,11 @@ String get apiBaseUrl {
   return _prodApiBaseUrl;
 }
 
-/// Bumped on each visible behaviour/UI change so we can verify at a
-/// glance which APK is actually installed on a phone. Show this as a
-/// small footer in the dashboard.
-const appBuildTag = 'b1.10';
+/// Semantic version of the app. Keep in sync with `version:` in
+/// pubspec.yaml. Shown in the dashboard footer.
+const appVersion = '1.0.0';
+
+/// Build sub-tag — bumped on every visible UI change so we can verify
+/// at a glance which APK is actually installed on a phone. Shown next
+/// to the version in the dashboard footer.
+const appBuildTag = 'b11';
