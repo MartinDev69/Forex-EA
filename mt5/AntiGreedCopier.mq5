@@ -28,8 +28,13 @@
 //+------------------------------------------------------------------+
 #property copyright "Martin Kristof"
 #property link      "https://github.com/MartinDev69/Forex-EA"
-#property version   "1.00"
+#property version   "1.05"
 #property strict
+
+// Build stamp shown on the panel's header sub-line — bumped on every
+// layout change. If the panel doesn't show this exact string, MT5 is
+// running a stale compiled binary; recompile and re-attach the EA.
+#define EA_BUILD "v1.05"
 
 #include <Trade/Trade.mqh>
 
@@ -801,7 +806,7 @@ void BuildPanel()
    MakeLabel(PNL + "title", x + 66, y + 18,
              "LIVE TRADE COPIER", COL_TXT, 13, "Segoe UI Semibold");
    MakeLabel(PNL + "sub",   x + 66, y + 42,
-             "AntiGreed signal mirror", COL_MUTED, 9, P_FONT_BODY);
+             "AntiGreed signal mirror · " + EA_BUILD, COL_MUTED, 9, P_FONT_BODY);
 
    // Status pill on the right (dynamic colour set in RedrawPanel).
    int pill_w = 120;
@@ -869,9 +874,10 @@ void RedrawPanel()
    ObjectSetInteger(0, PNL + "pill_arrow",OBJPROP_COLOR, st_clr);
    ObjectSetString (0, PNL + "pill_t",    OBJPROP_TEXT, st_text);
    ObjectSetString (0, PNL + "pill_arrow",OBJPROP_TEXT, st_arrow);
-   string sub = "AntiGreed signal mirror · poll " +
+   string sub = "AntiGreed signal mirror · " + EA_BUILD + " · poll " +
                 IntegerToString(MathMax(2, PollSeconds)) + "s";
-   if(g_last_status != "live" && StringLen(g_last_error) > 0) sub = g_last_error;
+   if(g_last_status != "live" && StringLen(g_last_error) > 0)
+      sub = EA_BUILD + " · " + g_last_error;
    ObjectSetString(0, PNL + "sub", OBJPROP_TEXT, sub);
 
    // ── Hero block — big balance number, label, last-sync line. ──────
