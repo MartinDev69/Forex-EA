@@ -110,20 +110,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--risk-per-trade", type=float, default=0.01)
     parser.add_argument("--lookback", type=int, default=100)
     parser.add_argument("--db-path", default=Path("data/trades.db"), type=Path)
-    parser.add_argument(
-        "--out-json", type=Path, default=None,
-        help="If set, write baselines to this JSON file instead of/in addition "
-             "to the SQLite store. Useful for running backtests on a fast "
-             "machine and shipping the result to the slow VPS.",
-    )
-    parser.add_argument(
-        "--no-db", action="store_true",
-        help="Skip writing to the SQLite store. Implies --out-json is set.",
-    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
-    if args.no_db and args.out_json is None:
-        parser.error("--no-db only makes sense with --out-json")
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -142,8 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     strategies = _resolve_strategies([s.strip() for s in args.strategy.split(",")], args.symbol)
-    baseline_store = None if args.no_db else BaselineStore(args.db_path)
-    json_records: list[dict] = []
+    baseline_store = BaselineStore(args.db_path)
 
     rc = 0
     for strat in strategies:
@@ -166,38 +153,12 @@ def main(argv: list[str] | None = None) -> int:
             rc = 1
             continue
 
-        if baseline_store is not None:
-            baseline_store.upsert(baseline)
-        if args.out_json is not None:
-            json_records.append(baseline.to_dict())
+        baseline_store.upsert(baseline)
         log.info(
-            "[%s/%s] baseline computed: %d trades, win=%.1f%%, avg-R=%.2f, %.2f trades/day",
+            "[%s/%s] baseline saved: %d trades, win=%.1f%%, avg-R=%.2f, %.2f trades/day",
             strat.name, args.symbol, baseline.trade_count, baseline.win_rate * 100,
             baseline.avg_r, baseline.avg_trades_per_day,
         )
-
-    # Merge into existing JSON (idempotent — same (strategy, symbol) is
-    # replaced, others left alone). Lets you build the file up across
-    # multiple symbol runs without losing prior baselines.
-    if args.out_json is not None:
-        import json
-        path = args.out_json
-        path.parent.mkdir(parents=True, exist_ok=True)
-        existing: list[dict] = []
-        if path.is_file():
-            try:
-                existing = json.loads(path.read_text())
-                if not isinstance(existing, list):
-                    existing = []
-            except Exception:
-                log.warning("couldn't parse existing %s — overwriting", path)
-                existing = []
-        keyed = {(r["strategy"], r["symbol"]): r for r in existing}
-        for r in json_records:
-            keyed[(r["strategy"], r["symbol"])] = r
-        path.write_text(json.dumps(list(keyed.values()), indent=2))
-        log.info("wrote %d baselines to %s (%d new this run)",
-                 len(keyed), path, len(json_records))
 
     return rc
 
