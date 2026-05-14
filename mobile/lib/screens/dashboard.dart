@@ -11,6 +11,7 @@ import '../models/correlation.dart';
 import '../models/drift.dart';
 import '../models/ea_config.dart';
 import '../models/fill_stats.dart';
+import '../models/propfirm.dart';
 import '../models/regime.dart';
 import '../models/status.dart';
 import '../theme.dart';
@@ -43,6 +44,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   DriftResponse? _drift;
   FillStatsResponse? _fillStats;
   AllocatorResponse? _allocator;
+  PropFirmStatus? _propfirm;
   List<Trade> _trades = const [];
   // Whether the current user has their own broker_config saved. Admins
   // always pass; non-admins see the welcome panel until this is true,
@@ -92,6 +94,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         widget.apiClient.allocator(),
         widget.apiClient.trades(limit: 50),
         widget.apiClient.brokerConfig(),
+        widget.apiClient.propfirm().catchError(
+          (_) => PropFirmStatus(enabled: false, initialized: false),
+        ),
       ]);
       if (!mounted) return;
       final cfg = results[9] as BrokerConfig?;
@@ -106,6 +111,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _allocator = results[7] as AllocatorResponse;
         _trades = results[8] as List<Trade>;
         _hasBroker = cfg != null && cfg.login > 0;
+        _propfirm = results[10] as PropFirmStatus;
         _loading = false;
         _error = null;
       });
@@ -333,6 +339,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             if (!_isAdmin) _EaSetupCard(config: _eaConfig, onRotate: _rotateEaKey),
 
             if (_canSeeDashboard && _account != null) _AccountCard(account: _account!),
+            if (_canSeeDashboard && _propfirm != null && _propfirm!.enabled)
+              _PropFirmCard(data: _propfirm!),
             if (_canSeeDashboard && _account != null && _status != null)
               _KpiGrid(account: _account!, status: _status!, trades: _trades),
             if (_canSeeDashboard && _status != null)
@@ -1426,6 +1434,89 @@ enum _CorrTier { strong, moderate, low }
   );
 }
 
+/// Wraps a long dashboard card in an ExpansionTile and remembers
+/// expanded/collapsed state in SharedPreferences keyed by [storageKey].
+class _Collapsible extends StatefulWidget {
+  const _Collapsible({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.storageKey,
+    required this.child,
+    this.trailing,
+  });
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String storageKey;
+  final Widget? trailing;
+  final Widget child;
+
+  @override
+  State<_Collapsible> createState() => _CollapsibleState();
+}
+
+class _CollapsibleState extends State<_Collapsible> {
+  bool _expanded = true;
+  bool _ready = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _restore();
+  }
+
+  Future<void> _restore() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _expanded = prefs.getBool('antigreed:${widget.storageKey}') ?? true;
+      _ready = true;
+    });
+  }
+
+  Future<void> _save(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('antigreed:${widget.storageKey}', v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final accent = isDark ? kNeonGreen : kLightWin;
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          key: PageStorageKey<String>(widget.storageKey),
+          initiallyExpanded: _ready ? _expanded : true,
+          maintainState: true,
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          iconColor: accent,
+          collapsedIconColor: mutedColor(context),
+          onExpansionChanged: (v) {
+            setState(() => _expanded = v);
+            _save(v);
+          },
+          leading: Icon(widget.icon, color: accent),
+          title: Text(
+            widget.title,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          subtitle: Text(
+            widget.subtitle,
+            style: TextStyle(color: mutedColor(context), fontSize: 11),
+          ),
+          trailing: widget.trailing,
+          children: [widget.child],
+        ),
+      ),
+    );
+  }
+}
+
 class _CorrelationCard extends StatelessWidget {
   const _CorrelationCard({required this.data});
   final CorrelationResponse data;
@@ -1436,7 +1527,6 @@ class _CorrelationCard extends StatelessWidget {
       ..sort((a, b) => b.value.abs().compareTo(a.value.abs()));
     final top = pairs.take(8).toList();
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accentTop = isDark ? kNeonGreen : kLightWin;
 
     int strong = 0, moderate = 0, low = 0;
     for (final p in pairs) {
@@ -1450,58 +1540,42 @@ class _CorrelationCard extends StatelessWidget {
       }
     }
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.hub_outlined, color: accentTop),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Correlations',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
+    return _Collapsible(
+      icon: Icons.hub_outlined,
+      title: 'Correlations',
+      subtitle: 'Pairs that move together — taking both same-side stacks the same bet.',
+      storageKey: 'card.correlations',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _SummaryPill(count: strong,  label: 'strong',
+                  color: isDark ? kNeonRed : kLightLoss),
+              _SummaryPill(count: moderate, label: 'moderate', color: kAmber),
+              _SummaryPill(count: low,     label: 'low',
+                  color: isDark ? kNeonGreen : kLightWin),
+              const SizedBox(width: 4),
+              Text(
+                '⇈ same · ⇅ inverse',
+                style: TextStyle(
+                  fontSize: 10, color: mutedColor(context),
+                  fontFamily: 'monospace',
                 ),
-                Text(
-                  '${data.count} pairs',
-                  style: TextStyle(color: mutedColor(context), fontSize: 11),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Pairs that move together — taking both same-side stacks the same bet.',
-              style: TextStyle(color: mutedColor(context), fontSize: 11),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                _SummaryPill(count: strong,  label: 'strong',
-                    color: isDark ? kNeonRed : kLightLoss),
-                _SummaryPill(count: moderate, label: 'moderate', color: kAmber),
-                _SummaryPill(count: low,     label: 'low',
-                    color: isDark ? kNeonGreen : kLightWin),
-                const SizedBox(width: 4),
-                Text(
-                  '⇈ same · ⇅ inverse',
-                  style: TextStyle(
-                    fontSize: 10, color: mutedColor(context),
-                    fontFamily: 'monospace',
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            ...top.map((p) => _CorrelationRow(pair: p)),
-          ],
-        ),
+              ),
+              const Spacer(),
+              Text(
+                '${data.count} pairs',
+                style: TextStyle(color: mutedColor(context), fontSize: 11),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ...top.map((p) => _CorrelationRow(pair: p)),
+        ],
       ),
     );
   }
@@ -1663,37 +1737,18 @@ class _DriftCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.insights_outlined, color: Colors.cyanAccent),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Strategy drift',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-                Text(
-                  '${data.count} tracked',
-                  style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Live performance vs backtest baseline.',
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
-            ),
-            const SizedBox(height: 8),
-            ...data.reports.map((r) => _DriftRow(report: r)),
-          ],
-        ),
+    return _Collapsible(
+      icon: Icons.insights_outlined,
+      title: 'Strategy drift',
+      subtitle: 'Live performance vs backtest baseline.',
+      storageKey: 'card.drift',
+      trailing: Text(
+        '${data.count} tracked',
+        style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: data.reports.map((r) => _DriftRow(report: r)).toList(),
       ),
     );
   }
@@ -1817,37 +1872,18 @@ class _ExecutionQualityCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.speed_outlined, color: Colors.cyanAccent),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Execution quality',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-                Text(
-                  'last ${data.windowHours}h',
-                  style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Slippage in pips · positive = adverse to you.',
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
-            ),
-            const SizedBox(height: 8),
-            ...data.symbols.map((s) => _ExecutionRow(stats: s)),
-          ],
-        ),
+    return _Collapsible(
+      icon: Icons.speed_outlined,
+      title: 'Execution quality',
+      subtitle: 'Slippage in pips · positive = adverse to you.',
+      storageKey: 'card.fillStats',
+      trailing: Text(
+        'last ${data.windowHours}h',
+        style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: data.symbols.map((s) => _ExecutionRow(stats: s)).toList(),
       ),
     );
   }
@@ -1961,33 +1997,15 @@ class _AllocatorCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.tune, color: Colors.cyanAccent),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Auto-allocator',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Champion → full risk · challenger → half · probe → sliver · cold → paused.',
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
-            ),
-            const SizedBox(height: 8),
-            ...data.allocations.map((a) => _AllocatorRow(alloc: a)),
-          ],
-        ),
+    return _Collapsible(
+      icon: Icons.tune,
+      title: 'Auto-allocator',
+      subtitle:
+          'Champion → full risk · challenger → half · probe → sliver · cold → paused.',
+      storageKey: 'card.allocator',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: data.allocations.map((a) => _AllocatorRow(alloc: a)).toList(),
       ),
     );
   }
@@ -2113,6 +2131,212 @@ class _ErrorCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _PropFirmCard extends StatelessWidget {
+  const _PropFirmCard({required this.data});
+  final PropFirmStatus data;
+
+  @override
+  Widget build(BuildContext context) {
+    final fmt = NumberFormat.currency(symbol: '\$', decimalDigits: 2);
+    final muted = mutedColor(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final accent = isDark ? kNeonGreen : kLightWin;
+
+    final dailyPct = (data.dailyLossPct ?? 0) * 100;
+    final dailyLimitPct = (data.maxDailyLossPct ?? 0) * 100;
+    final ddPct = (data.totalDrawdownPct ?? 0) * 100;
+    final ddLimitPct = (data.maxTotalDrawdownPct ?? 0) * 100;
+    final profitPct = (data.profitTargetPct != null && data.profitAmount != null
+            && data.initialBalance != null && data.initialBalance! > 0)
+        ? (data.profitAmount! / data.initialBalance!) * 100
+        : 0.0;
+    final targetPct = (data.profitTargetPct ?? 0) * 100;
+
+    Color statusColor;
+    String statusLabel;
+    if (data.killedPermanently == true || data.killedToday == true) {
+      statusColor = Colors.redAccent;
+      statusLabel = data.killedPermanently == true ? 'KILLED' : 'KILLED TODAY';
+    } else if (dailyPct >= dailyLimitPct * 0.8 || ddPct >= ddLimitPct * 0.8) {
+      statusColor = Colors.amber;
+      statusLabel = 'AT RISK';
+    } else {
+      statusColor = accent;
+      statusLabel = 'HEALTHY';
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? kSurface : kLightSurface,
+        border: Border.all(color: statusColor.withValues(alpha: 0.35)),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.shield_outlined, color: statusColor, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'PROP FIRM · ${(data.preset ?? "challenge").toUpperCase()}',
+                style: TextStyle(
+                  color: muted, fontSize: 10, letterSpacing: 2.4,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.16),
+                  border: Border.all(color: statusColor.withValues(alpha: 0.5)),
+                  borderRadius: BorderRadius.circular(5),
+                ),
+                child: Text(
+                  statusLabel,
+                  style: TextStyle(
+                    color: statusColor, fontSize: 10,
+                    fontWeight: FontWeight.w800, letterSpacing: 1.4,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (data.killedReason != null) ...[
+            const SizedBox(height: 8),
+            Text(data.killedReason!,
+                style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+          ],
+          const SizedBox(height: 14),
+          _PropfirmRow(
+            label: 'PROFIT',
+            value: '${fmt.format(data.profitAmount ?? 0)} '
+                '/ ${fmt.format(data.profitTargetAmount ?? 0)}',
+            pct: profitPct,
+            limit: targetPct,
+            color: accent,
+            inverted: false,
+          ),
+          const SizedBox(height: 10),
+          _PropfirmRow(
+            label: 'DAILY LOSS',
+            value: '${fmt.format(data.dailyLossAmount ?? 0)} '
+                '/ ${fmt.format(data.dailyLossLimitAmount ?? 0)}',
+            pct: dailyPct,
+            limit: dailyLimitPct,
+            color: Colors.amber,
+            inverted: true,
+          ),
+          const SizedBox(height: 10),
+          _PropfirmRow(
+            label: 'TOTAL DD',
+            value: '${fmt.format(data.totalDrawdownAmount ?? 0)} '
+                '/ ${fmt.format(data.totalDrawdownLimitAmount ?? 0)}',
+            pct: ddPct,
+            limit: ddLimitPct,
+            color: Colors.redAccent,
+            inverted: true,
+          ),
+          if (data.minTradingDays != null) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Text(
+                  'TRADING DAYS',
+                  style: TextStyle(
+                    color: muted, fontSize: 10, letterSpacing: 1.6,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  '${data.tradingDaysCount ?? 0} / ${data.minTradingDays}',
+                  style: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w700,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PropfirmRow extends StatelessWidget {
+  const _PropfirmRow({
+    required this.label,
+    required this.value,
+    required this.pct,
+    required this.limit,
+    required this.color,
+    required this.inverted,
+  });
+  final String label;
+  final String value;
+  final double pct;
+  final double limit;
+  final Color color;
+  final bool inverted; // true: closer to limit = worse (loss/dd); false: profit
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = mutedColor(context);
+    final fill = (limit > 0 ? (pct / limit).clamp(0.0, 1.0) : 0.0);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: muted, fontSize: 10, letterSpacing: 1.6,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              value,
+              style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w700,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Stack(
+          children: [
+            Container(
+              height: 6,
+              decoration: BoxDecoration(
+                color: muted.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+            FractionallySizedBox(
+              widthFactor: fill,
+              child: Container(
+                height: 6,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

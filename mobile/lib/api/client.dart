@@ -3,6 +3,8 @@ import 'package:http/http.dart' as http;
 import '../models/allocator.dart';
 import '../models/broker.dart';
 import '../models/ea_config.dart';
+import '../models/propfirm.dart';
+import '../models/subscription_request.dart';
 import '../models/calendar.dart';
 import '../models/correlation.dart';
 import '../models/drift.dart';
@@ -253,6 +255,12 @@ class ApiClient {
     return DriftResponse.fromJson(json.decode(r.body) as Map<String, dynamic>);
   }
 
+  Future<PropFirmStatus> propfirm() async {
+    final r = await http.get(_u('/propfirm'), headers: _headers);
+    _check(r);
+    return PropFirmStatus.fromJson(json.decode(r.body) as Map<String, dynamic>);
+  }
+
   Future<FillStatsResponse> fillStats({int windowHours = 24}) async {
     final r = await http.get(
       _u('/fills/stats?window_hours=$windowHours'),
@@ -275,6 +283,57 @@ class ApiClient {
     if (r.statusCode == 404) return null;
     _check(r);
     return TradeExplanation.fromJson(json.decode(r.body) as Map<String, dynamic>);
+  }
+
+  // ---------- Subscription requests (admin only) ----------
+
+  Future<List<SubscriptionRequest>> listSubscriptionRequests({
+    String status = 'pending',
+  }) async {
+    final r = await http.get(
+      _u('/subscription-requests?status=$status'),
+      headers: _headers,
+    );
+    _check(r);
+    final list = json.decode(r.body) as List<dynamic>;
+    return list
+        .map((e) => SubscriptionRequest.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<SubscriptionRequest> approveSubscriptionRequest(
+    int requestId, {
+    String? duration,
+    String? adId,
+    String delivery = 'telegram',
+  }) async {
+    final body = <String, dynamic>{'delivery': delivery};
+    if (duration != null) body['duration'] = duration;
+    if (adId != null) body['ad_id'] = adId;
+    final r = await http.post(
+      _u('/subscription-requests/$requestId/approve'),
+      headers: _headers,
+      body: json.encode(body),
+    );
+    _check(r);
+    return SubscriptionRequest.fromJson(
+      json.decode(r.body) as Map<String, dynamic>,
+    );
+  }
+
+  Future<SubscriptionRequest> rejectSubscriptionRequest(
+    int requestId,
+    String reason,
+  ) async {
+    final r = await http.post(
+      _u('/subscription-requests/$requestId/reject'),
+      headers: _headers,
+      body: json.encode({'reason': reason}),
+    );
+    _check(r);
+    return SubscriptionRequest.fromJson(
+      json.decode(r.body) as Map<String, dynamic>,
+    );
   }
 
   // ---------- User management (admin only) ----------

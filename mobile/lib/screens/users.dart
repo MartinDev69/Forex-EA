@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import '../api/client.dart';
+import '../models/subscription_request.dart';
 import '../models/user.dart';
 import '../widgets/logo_spinner.dart';
 
@@ -15,6 +17,7 @@ class UsersScreen extends StatefulWidget {
 class _UsersScreenState extends State<UsersScreen> {
   List<AppUser>? _users;
   AdIdPool? _pool;
+  List<SubscriptionRequest> _requests = const [];
   bool _loading = true;
   String? _error;
 
@@ -29,11 +32,15 @@ class _UsersScreenState extends State<UsersScreen> {
       final results = await Future.wait([
         widget.apiClient.listUsers(),
         widget.apiClient.unclaimedPool(),
+        widget.apiClient.listSubscriptionRequests().catchError(
+          (_) => <SubscriptionRequest>[],
+        ),
       ]);
       if (!mounted) return;
       setState(() {
         _users = results[0] as List<AppUser>;
         _pool = results[1] as AdIdPool;
+        _requests = results[2] as List<SubscriptionRequest>;
         _loading = false;
         _error = null;
       });
@@ -43,6 +50,53 @@ class _UsersScreenState extends State<UsersScreen> {
         _loading = false;
         _error = e is ApiException ? e.detail : e.toString();
       });
+    }
+  }
+
+  Future<void> _approveRequest(SubscriptionRequest req) async {
+    try {
+      await widget.apiClient.approveSubscriptionRequest(req.id);
+      _snack('${req.displayName} approved — setup link sent via Telegram.');
+      await _load();
+    } catch (e) {
+      _snack('Approval failed: ${_humanErr(e)}', ok: false);
+    }
+  }
+
+  Future<void> _rejectRequest(SubscriptionRequest req) async {
+    final controller = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Reject ${req.displayName}?'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 200,
+          decoration: const InputDecoration(
+            hintText: 'Reason (sent to the user)',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            child: const Text('Reject'),
+          ),
+        ],
+      ),
+    );
+    if (reason == null || reason.isEmpty) return;
+    try {
+      await widget.apiClient.rejectSubscriptionRequest(req.id, reason);
+      _snack('Request rejected.');
+      await _load();
+    } catch (e) {
+      _snack('Reject failed: ${_humanErr(e)}', ok: false);
     }
   }
 
@@ -247,6 +301,25 @@ class _UsersScreenState extends State<UsersScreen> {
                             style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
                           ),
                         ),
+                      if (_requests.isNotEmpty) ...[
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(16, 6, 16, 8),
+                          child: Text(
+                            'PENDING SIGNUP REQUESTS',
+                            style: TextStyle(
+                              fontSize: 10, letterSpacing: 2,
+                              color: Colors.amberAccent, fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        for (final r in _requests)
+                          _RequestTile(
+                            request: r,
+                            onApprove: () => _approveRequest(r),
+                            onReject: () => _rejectRequest(r),
+                          ),
+                        const Divider(height: 32),
+                      ],
                       for (final u in _users ?? <AppUser>[])
                         _UserTile(
                           user: u,
@@ -629,6 +702,118 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
               : const Text('Save'),
         ),
       ],
+    );
+  }
+}
+
+class _RequestTile extends StatelessWidget {
+  const _RequestTile({
+    required this.request,
+    required this.onApprove,
+    required this.onReject,
+  });
+  final SubscriptionRequest request;
+  final VoidCallback onApprove;
+  final VoidCallback onReject;
+
+  @override
+  Widget build(BuildContext context) {
+    final created = DateFormat('MMM d · HH:mm').format(request.createdAt.toLocal());
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+      decoration: BoxDecoration(
+        color: Colors.amber.withValues(alpha: 0.08),
+        border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.person_add_alt, size: 18, color: Colors.amber.shade300),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  request.displayName,
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(5),
+                ),
+                child: Text(
+                  request.duration.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 10, fontWeight: FontWeight.w700,
+                    color: Colors.amber.shade300, letterSpacing: 1.2,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (request.phoneNumber != null && request.phoneNumber!.isNotEmpty)
+            _kv('Phone', request.phoneNumber!),
+          if (request.email.isNotEmpty &&
+              !request.email.endsWith('@no-email.local'))
+            _kv('Email', request.email),
+          _kv('Requested', created),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: onApprove,
+                  icon: const Icon(Icons.check, size: 16),
+                  label: const Text('Approve'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.greenAccent.shade700,
+                    foregroundColor: Colors.black,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              OutlinedButton.icon(
+                onPressed: onReject,
+                icon: const Icon(Icons.close, size: 16, color: Colors.redAccent),
+                label: const Text('Reject', style: TextStyle(color: Colors.redAccent)),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: Colors.red.shade400),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _kv(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 72,
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Colors.grey.shade400, fontSize: 11,
+                letterSpacing: 1.2, fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(value, style: const TextStyle(fontSize: 13)),
+          ),
+        ],
+      ),
     );
   }
 }
