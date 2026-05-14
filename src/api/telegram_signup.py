@@ -183,6 +183,19 @@ APPROVAL_DM_WITH_LINK = (
     "<i>The link is valid for {expires_hours} hours.</i>"
 )
 
+# Appended to either approval DM when the notifier bot's @username is
+# configured. The signup bot can't DM the operator with trade alerts
+# directly — that's a separate bot under TELEGRAM_BOT_TOKEN — and that
+# bot can't message the operator until *they* press Start once. We hand
+# them a deep link so it's a single tap.
+NOTIFIER_LINK_LINE = (
+    "\n\n🔔 <b>One more step — enable trade alerts:</b>\n"
+    "Tap <a href=\"https://t.me/{notifier_username}?start={ad_id}\">"
+    "open @{notifier_username}</a> and press <b>Start</b>. "
+    "After that you'll receive a DM for each trade on the strategies "
+    "you picked."
+)
+
 REJECTION_DM = (
     "❌ <b>Your subscription request was declined.</b>\n\n"
     "{reason}\n\n"
@@ -291,20 +304,32 @@ def build_picker_keyboard(
     return {"inline_keyboard": rows}
 
 
+def _notifier_link_suffix(notifier_username: str | None, ad_id: str) -> str:
+    if not notifier_username:
+        return ""
+    return NOTIFIER_LINK_LINE.format(
+        notifier_username=notifier_username.lstrip("@"), ad_id=ad_id,
+    )
+
+
 def send_approval_dm(
     token: str | None, chat_id: int, ad_id: str, duration: str,
+    notifier_username: str | None = None,
 ) -> bool:
     if not token:
         return False
+    body = APPROVAL_DM.format(
+        ad_id=ad_id, duration_label=DURATION_LABEL.get(duration, duration),
+    )
     return send_message(
-        token, chat_id,
-        APPROVAL_DM.format(ad_id=ad_id, duration_label=DURATION_LABEL.get(duration, duration)),
+        token, chat_id, body + _notifier_link_suffix(notifier_username, ad_id),
     )
 
 
 def send_approval_dm_with_link(
     token: str | None, chat_id: int, ad_id: str, duration: str,
     setup_url: str, expires_hours: int,
+    notifier_username: str | None = None,
 ) -> bool:
     """Like send_approval_dm but embeds the setup link directly in the
     Telegram message — used when the admin opts to skip email delivery
@@ -312,14 +337,14 @@ def send_approval_dm_with_link(
     """
     if not token:
         return False
+    body = APPROVAL_DM_WITH_LINK.format(
+        ad_id=ad_id,
+        duration_label=DURATION_LABEL.get(duration, duration),
+        setup_url=setup_url,
+        expires_hours=expires_hours,
+    )
     return send_message(
-        token, chat_id,
-        APPROVAL_DM_WITH_LINK.format(
-            ad_id=ad_id,
-            duration_label=DURATION_LABEL.get(duration, duration),
-            setup_url=setup_url,
-            expires_hours=expires_hours,
-        ),
+        token, chat_id, body + _notifier_link_suffix(notifier_username, ad_id),
     )
 
 

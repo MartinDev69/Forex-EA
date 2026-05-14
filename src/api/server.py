@@ -220,6 +220,12 @@ signal_feed = SignalFeed(_DB)
 ea_account_store = EAAccountReportStore(_DB)
 bot_control_store = BotControlStore(_DB)
 SIGNUP_BOT_TOKEN = os.environ.get("SIGNUP_TELEGRAM_BOT_TOKEN", "").strip() or None
+# Notifier bot's @username (no leading @). When set, approval DMs from
+# the signup bot include a deep link to this bot so the operator can
+# press Start and unlock trade alerts on TELEGRAM_BOT_TOKEN's bot.
+NOTIFIER_BOT_USERNAME = (
+    os.environ.get("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@") or None
+)
 ADMIN_TG_CHAT_ID = (
     int(os.environ["TELEGRAM_CHAT_ID"])
     if os.environ.get("TELEGRAM_CHAT_ID", "").strip().lstrip("-").isdigit()
@@ -1454,6 +1460,7 @@ def approve_subscription_request(
             telegram_ok = send_approval_dm_with_link(
                 SIGNUP_BOT_TOKEN, req.telegram_chat_id, ad_id, duration_code,
                 setup_url=url, expires_hours=hours,
+                notifier_username=NOTIFIER_BOT_USERNAME,
             )
         except Exception:
             log.exception(
