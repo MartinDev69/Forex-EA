@@ -298,6 +298,27 @@ _broker_config_store: BrokerConfigStore | None = None
 _totp_store: TOTPStore | None = None
 
 
+def _active_symbols() -> set[str]:
+    """Symbols the bot is configured to trade, from the SYMBOLS env var.
+
+    Used to filter dashboard endpoints (correlation, drift, regime, calendar)
+    so they don't surface data for tickers the operator removed from the
+    active set. Empty set means "no filter" — back-compat for setups that
+    don't define SYMBOLS.
+    """
+    raw = os.getenv("SYMBOLS", "")
+    return {s.strip().upper() for s in raw.split(",") if s.strip()}
+
+
+def _active_currencies() -> set[str]:
+    """Union of currencies whose events affect any active symbol."""
+    from src.econ_calendar.symbols import currencies_for_symbol
+    ccys: set[str] = set()
+    for sym in _active_symbols():
+        ccys |= set(currencies_for_symbol(sym))
+    return ccys
+
+
 def _broker_store() -> BrokerConfigStore:
     global _broker_config_store
     if _broker_config_store is None:
@@ -1663,8 +1684,15 @@ def calendar_events(
             currencies=ccys, start=now, end=end, impacts=calendar_policy.impacts
         )
     else:
+        # Narrow to currencies that affect the bot's active symbol set so the
+        # dashboard agenda matches what the bot actually reacts to. Fall back
+        # to the full G8 list when SYMBOLS is unset (dev / single-symbol).
+        active_ccys = _active_currencies()
+        currencies = tuple(sorted(active_ccys)) if active_ccys else (
+            "USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD",
+        )
         events = calendar_store.events_in_window(
-            currencies=("USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD"),
+            currencies=currencies,
             start=now, end=end,
             impacts=("high", "medium", "low"),
         )
@@ -1702,9 +1730,15 @@ def regime_for_symbol(
     """Latest regime snapshot for `symbol`.
 
     Written by the bot on every tick. Returns an 'unknown' shell if the bot
-    has never classified this symbol (e.g. the bot isn't running yet).
+    has never classified this symbol (e.g. the bot isn't running yet) or if
+    the symbol is outside the bot's active SYMBOLS set — stale snapshots from
+    previous trading configurations shouldn't leak into the dashboard.
     """
-    data = regime_store.get(symbol) or empty_snapshot_dict(symbol)
+    active = _active_symbols()
+    if active and symbol.upper() not in active:
+        data = empty_snapshot_dict(symbol)
+    else:
+        data = regime_store.get(symbol) or empty_snapshot_dict(symbol)
     data["symbol"] = symbol
     return RegimeResponse(**{k: v for k, v in data.items() if k in RegimeResponse.model_fields})
 
@@ -1730,6 +1764,12 @@ def correlation_pairs(_user: dict = Depends(current_user)) -> CorrelationRespons
     populated the store yet (or is running with a single symbol).
     """
     pairs = correlation_store.all_pairs()
+    active = _active_symbols()
+    if active:
+        pairs = [
+            p for p in pairs
+            if p["symbol_a"].upper() in active and p["symbol_b"].upper() in active
+        ]
     return CorrelationResponse(
         pairs=[CorrelationPair(**p) for p in pairs],
         count=len(pairs),
@@ -1794,6 +1834,9 @@ def drift_reports(_user: dict = Depends(current_user)) -> DriftResponse:
         return _drift_cache["value"]  # type: ignore[return-value]
 
     reports = drift_monitor.report()
+    active = _active_symbols()
+    if active:
+        reports = [r for r in reports if r.symbol.upper() in active]
     payload = DriftResponse(
         reports=[DriftReportModel(**r.to_dict()) for r in reports],
         count=len(reports),
