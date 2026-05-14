@@ -93,6 +93,16 @@ document.addEventListener("alpine:init", () => {
     token: localStorage.getItem(TOKEN_KEY),
     me: localStorage.getItem(USER_KEY) || "",
     role: localStorage.getItem(ROLE_KEY) || "admin",
+    navOpen: false,
+    goToSection(id) {
+      this.navOpen = false;
+      // Defer the scroll a tick so the drawer's close transition has
+      // already started — feels more natural than scrolling mid-slide.
+      requestAnimationFrame(() => {
+        const el = document.getElementById(id);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    },
     get isAdmin() { return this.role === "admin"; },
     // True once the operator has saved their own broker config — used
     // to gate the panels that show global bot data. Admin always sees

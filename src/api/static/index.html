@@ -659,6 +659,84 @@
     /* Confetti */
     .confetti-piece { position: fixed; width: 10px; height: 14px; top: -16px; pointer-events: none; z-index: 200; border-radius: 2px; }
 
+    /* ── Mobile hamburger + slide-in drawer ─────────────────────────── */
+    .hamburger {
+      display: none; flex-direction: column; gap: 4px;
+      background: transparent; border: 1px solid var(--edge2);
+      border-radius: 8px; padding: 9px 8px; cursor: pointer;
+      width: 38px; height: 36px; align-items: center; justify-content: center;
+    }
+    .hamburger span {
+      width: 18px; height: 2px; background: var(--text); border-radius: 1px; display: block;
+    }
+    .hamburger:hover { border-color: var(--gglow); }
+    .hamburger:hover span { background: var(--green); }
+
+    .nav-backdrop {
+      position: fixed; inset: 0; background: rgba(2,3,10,0.65);
+      backdrop-filter: blur(4px); z-index: 999;
+    }
+    .nav-drawer {
+      position: fixed; top: 0; left: 0; bottom: 0; width: 280px;
+      background: var(--surface); border-right: 1px solid var(--edge);
+      z-index: 1000; transform: translateX(-100%);
+      transition: transform 0.22s cubic-bezier(.2,.7,.2,1);
+      display: flex; flex-direction: column;
+      box-shadow: 8px 0 32px rgba(0,0,0,0.5);
+    }
+    .nav-drawer.open { transform: translateX(0); }
+    .nav-head {
+      display: flex; align-items: center; gap: 12px;
+      padding: 18px 18px 14px; border-bottom: 1px solid var(--edge);
+    }
+    .nav-head img { width: 32px; height: 32px; object-fit: contain; }
+    .nav-head-title { font-size: 15px; font-weight: 700; color: var(--text); }
+    .nav-head-sub { font-size: 9px; letter-spacing: 2px; color: var(--green); font-weight: 600; }
+    .nav-close {
+      margin-left: auto; background: transparent; border: 1px solid var(--edge2);
+      border-radius: 8px; width: 32px; height: 32px; color: var(--muted);
+      font-size: 22px; line-height: 0; cursor: pointer; padding: 0;
+    }
+    .nav-close:hover { color: var(--red); border-color: var(--rglow); }
+    .nav-list { flex: 1; padding: 14px 12px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
+    .nav-item {
+      display: flex; align-items: center; gap: 14px;
+      padding: 12px 14px; border-radius: 10px; color: var(--text2);
+      font-size: 14px; font-weight: 500; cursor: pointer;
+      transition: background 0.15s, color 0.15s; text-decoration: none;
+    }
+    .nav-item:hover, .nav-item:active {
+      background: var(--surface2); color: var(--green);
+    }
+    .nav-ico {
+      width: 22px; text-align: center; color: var(--green);
+      font-family: var(--mono); font-size: 14px;
+    }
+    .nav-actions {
+      padding: 14px 14px 22px; border-top: 1px solid var(--edge);
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .nav-action-btn {
+      display: flex; align-items: center; justify-content: center;
+      padding: 10px; border-radius: 9px; cursor: pointer;
+      background: var(--surface2); border: 1px solid var(--edge2);
+      color: var(--text); font-size: 13px; font-weight: 500;
+      font-family: 'Space Grotesk', sans-serif;
+    }
+    .nav-action-btn:hover { border-color: var(--gglow); color: var(--green); }
+    .nav-user {
+      display: flex; align-items: center; gap: 10px;
+      padding-top: 6px; border-top: 1px solid var(--edge);
+    }
+    .nav-user-name { font-size: 12px; color: var(--text); font-weight: 600; }
+    .nav-user-role { font-size: 9px; letter-spacing: 1.6px; color: var(--green); text-transform: uppercase; font-weight: 700; }
+    .nav-signout {
+      margin-left: auto; padding: 6px 12px;
+      background: var(--rdim); border-color: var(--rglow); color: var(--red);
+    }
+    .nav-signout:hover { background: rgba(220,38,38,0.18); color: var(--red); }
+    .topbar-pills { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
     @media (max-width: 1100px) {
       .kpi-grid { grid-template-columns: repeat(2,1fr); }
       .two-col { grid-template-columns: 1fr; }
@@ -680,6 +758,14 @@
       .main { padding: 16px 14px 60px; }
       .topbar { padding: 0 14px; gap: 8px; }
       .topbar-user, .role-badge, .topbar-status-word { display: none; }
+      /* Reveal the hamburger and hide the noisier topbar items —
+         everything important moves into the slide-out drawer. */
+      .hamburger { display: flex; }
+      .topbar-pills,
+      .topbar-kbd,
+      .topbar-theme,
+      .topbar-bot-btn,
+      .topbar-signout { display: none; }
       .acct-grid { grid-template-columns: 1fr 1fr; }
       .field-row { grid-template-columns: 1fr; }
       .hero { margin-bottom: 18px; border-radius: 14px; }
@@ -779,22 +865,25 @@
 
     <!-- Topbar -->
     <header class="topbar">
+      <button class="hamburger" @click="navOpen = true" aria-label="Open navigation">
+        <span></span><span></span><span></span>
+      </button>
       <div class="topbar-brand">
         <img src="/static/antigreed-logo.png" class="topbar-logo" alt="" />
         <div class="live-dot" :class="{ dead: !status?.running }"></div>
         <span class="topbar-name">AntiGreed</span>
         <span class="topbar-status-word" x-text="status?.running ? 'live' : 'idle'"></span>
       </div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <div class="topbar-pills">
         <span class="status-pill" :class="blackoutPill.tone === 'danger' ? 'danger' : (blackoutPill.tone === 'warn' ? 'warn' : (blackoutPill.tone === 'ok' ? 'ok' : ''))" x-text="blackoutPill.text"></span>
         <span class="status-pill" :class="regimePill.tone === 'danger' ? 'danger' : (regimePill.tone === 'warn' ? 'warn' : (regimePill.tone === 'ok' ? 'ok' : ''))" :title="regimePill.title" x-text="regimePill.text"></span>
       </div>
       <div class="topbar-spacer"></div>
-      <kbd style="font-size:10px;padding:3px 7px;border:1px solid var(--edge2);border-radius:5px;color:var(--muted)">⌘K</kbd>
-      <div class="icon-btn" @click="$store.theme.toggle()" title="Toggle theme">
+      <kbd class="topbar-kbd">⌘K</kbd>
+      <div class="icon-btn topbar-theme" @click="$store.theme.toggle()" title="Toggle theme">
         <span x-text="$store.theme.isLight ? '🌙' : '☀️'"></span>
       </div>
-      <button x-show="isAdmin" @click="toggleBot()" :class="status?.running ? 'btn-stop' : 'btn-start'">
+      <button class="topbar-bot-btn" x-show="isAdmin" @click="toggleBot()" :class="status?.running ? 'btn-stop' : 'btn-start'">
         <span x-text="status?.running ? '⬛ Stop bot' : '▶ Start bot'"></span>
       </button>
       <span class="topbar-user" x-text="me"></span>
@@ -802,7 +891,57 @@
       <span class="topbar-signout" @click="logout()">Sign out</span>
     </header>
 
-    <main class="main">
+    <!-- Mobile slide-in drawer (only visible on small screens) -->
+    <div class="nav-backdrop" x-show="navOpen" @click="navOpen = false" x-transition.opacity></div>
+    <aside class="nav-drawer" :class="navOpen ? 'open' : ''">
+      <div class="nav-head">
+        <img src="/static/antigreed-logo.png" alt="" />
+        <div>
+          <div class="nav-head-title">AntiGreed</div>
+          <div class="nav-head-sub" x-text="role.toUpperCase()"></div>
+        </div>
+        <button class="nav-close" @click="navOpen = false" aria-label="Close navigation">×</button>
+      </div>
+      <nav class="nav-list">
+        <a class="nav-item" @click.prevent="goToSection('top')">
+          <span class="nav-ico">▦</span> Dashboard
+        </a>
+        <a x-show="!isAdmin" class="nav-item" @click.prevent="goToSection('ea-setup')">
+          <span class="nav-ico">⚙</span> Your EA setup
+        </a>
+        <a class="nav-item" @click.prevent="goToSection('broker')">
+          <span class="nav-ico">▲</span> Broker
+        </a>
+        <a class="nav-item" @click.prevent="goToSection('strategies')">
+          <span class="nav-ico">◈</span> Strategies
+        </a>
+        <a class="nav-item" @click.prevent="goToSection('trades')">
+          <span class="nav-ico">↗</span> Recent trades
+        </a>
+        <a x-show="isAdmin" class="nav-item" @click.prevent="goToSection('operators')">
+          <span class="nav-ico">●</span> Operators
+        </a>
+      </nav>
+      <div class="nav-actions">
+        <button x-show="isAdmin" @click="toggleBot(); navOpen = false"
+                :class="status?.running ? 'btn-stop' : 'btn-start'"
+                style="width:100%;justify-content:center;display:flex;padding:10px">
+          <span x-text="status?.running ? '⬛ Stop bot' : '▶ Start bot'"></span>
+        </button>
+        <button class="nav-action-btn" @click="$store.theme.toggle()">
+          <span x-text="$store.theme.isLight ? '🌙 Dark mode' : '☀️ Light mode'"></span>
+        </button>
+        <div class="nav-user">
+          <div>
+            <div class="nav-user-name" x-text="me"></div>
+            <div class="nav-user-role" x-text="role"></div>
+          </div>
+          <button class="nav-action-btn nav-signout" @click="logout()">Sign out</button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main" id="top">
 
       <!-- Hero -->
       <div class="hero">
@@ -825,7 +964,7 @@
       <!-- Your EA Setup — only shown to non-admin operators. This is
            the bridge between their AntiGreed access and the MetaTrader
            EA that actually copies the bot's trades onto their account. -->
-      <div x-show="!isAdmin" class="section" x-data="eaSetup">
+      <div id="ea-setup" x-show="!isAdmin" class="section" x-data="eaSetup">
         <div class="sec-hd ea-toggle" @click="toggle()" role="button" tabindex="0"
              @keydown.enter.prevent="toggle()" @keydown.space.prevent="toggle()">
           <span>Your copy-trading EA</span>
@@ -979,7 +1118,7 @@
       </div>
 
       <!-- Equity chart + strategies — appears once broker is configured. -->
-      <div class="two-col section" x-show="canSeeDashboard">
+      <div id="strategies" class="two-col section" x-show="canSeeDashboard">
         <div class="panel">
           <div class="panel-head">
             <div>
@@ -1052,7 +1191,7 @@
       </div>
 
       <!-- Broker -->
-      <div class="section" x-data="broker" x-init="load()">
+      <div id="broker" class="section" x-data="broker" x-init="load()">
         <div class="sec-hd">MT5 Broker</div>
         <div class="panel">
           <div class="panel-body">
@@ -1297,7 +1436,7 @@
       </div>
 
       <!-- Trades — global bot state, visible once broker configured -->
-      <div class="section" x-show="canSeeDashboard">
+      <div id="trades" class="section" x-show="canSeeDashboard">
         <div class="trades-hd">
           <div class="sec-hd trades-hd-title">Recent trades</div>
           <div class="trade-tabs">
@@ -1467,7 +1606,7 @@
       </div>
 
       <!-- Operators (admin only) -->
-      <div class="section" x-show="isAdmin" x-data="users" x-init="load()">
+      <div id="operators" class="section" x-show="isAdmin" x-data="users" x-init="load()">
 
         <!-- Pending signup requests from the Telegram signup bot -->
         <div x-show="requests.length > 0" style="margin-bottom:18px">
