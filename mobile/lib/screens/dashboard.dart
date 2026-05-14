@@ -1480,21 +1480,26 @@ class _CollapsibleState extends State<_Collapsible> {
     await prefs.setBool('antigreed:${widget.storageKey}', v);
   }
 
+  void _toggle() {
+    setState(() => _expanded = !_expanded);
+    _save(_expanded);
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final accent = isDark ? kNeonGreen : kLightWin;
-    // Wait until SharedPreferences resolves so we don't render expanded
-    // then snap closed on the next frame — and so we don't flash a
-    // Material surface-tinted placeholder while the prefs load.
-    if (!_ready) return const SizedBox.shrink();
-    // Hand-rolled card + ExpansionTile so we can pin explicit dark
-    // surface colours and avoid Material 3's default surface tint
-    // (which renders cards as a pale-grey block on dark themes).
-    // Hand-rolled card surface with no Material elevation/tint. The
-    // ExpansionTile inside inherits the app's theme as-is so children
-    // (correlation rows etc.) see the same brightness as everywhere
-    // else on the dashboard.
+    final muted = mutedColor(context);
+    final textColor = isDark ? kText : kLightText;
+
+    // Wait until SharedPreferences resolves so the body doesn't flash
+    // open then snap shut. Until then the header is rendered collapsed.
+    final showBody = _ready && _expanded;
+
+    // Hand-rolled card + collapsible body — no ExpansionTile, no
+    // Material widget magic, no Theme override. Avoids Material 3
+    // surface-tint bleeding through as a pale-grey block, and the
+    // child widgets inherit the parent app theme unchanged.
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
@@ -1503,39 +1508,70 @@ class _CollapsibleState extends State<_Collapsible> {
         borderRadius: BorderRadius.circular(12),
       ),
       clipBehavior: Clip.antiAlias,
-      // Single targeted override: hide ExpansionTile's default divider
-      // (which would draw a stray line across the body when expanded).
-      // Brightness, colour scheme, etc. all inherit unchanged.
-      child: ExpansionTileTheme(
-        data: const ExpansionTileThemeData(),
-        child: Theme(
-          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-          child: ExpansionTile(
-            initiallyExpanded: _expanded,
-            maintainState: true,
-            tilePadding: const EdgeInsets.symmetric(horizontal: 16),
-            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            backgroundColor: isDark ? kSurface : kLightSurface,
-            collapsedBackgroundColor: isDark ? kSurface : kLightSurface,
-            iconColor: accent,
-            collapsedIconColor: mutedColor(context),
-            onExpansionChanged: (v) {
-              setState(() => _expanded = v);
-              _save(v);
-            },
-            leading: Icon(widget.icon, color: accent),
-            title: Text(
-              widget.title,
-              style: Theme.of(context).textTheme.titleMedium,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Clickable header row. InkWell gives a ripple but doesn't
+          // change the surface colour underneath.
+          InkWell(
+            onTap: _toggle,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
+              child: Row(
+                children: [
+                  Icon(widget.icon, color: accent),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.title,
+                          style: TextStyle(
+                            color: textColor, fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          widget.subtitle,
+                          style: TextStyle(color: muted, fontSize: 11, height: 1.4),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (widget.trailing != null) ...[
+                    widget.trailing!,
+                    const SizedBox(width: 10),
+                  ],
+                  // Chevron rotates 90° between collapsed and expanded.
+                  AnimatedRotation(
+                    duration: const Duration(milliseconds: 180),
+                    turns: showBody ? 0.25 : 0,
+                    child: Icon(
+                      Icons.chevron_right,
+                      color: showBody ? accent : muted,
+                      size: 22,
+                    ),
+                  ),
+                ],
+              ),
             ),
-            subtitle: Text(
-              widget.subtitle,
-              style: TextStyle(color: mutedColor(context), fontSize: 11),
-            ),
-            trailing: widget.trailing,
-            children: [widget.child],
           ),
-        ),
+          // Animated body. AnimatedCrossFade renders SizedBox.shrink()
+          // when collapsed, so there's nothing taking vertical space.
+          AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            alignment: Alignment.topCenter,
+            curve: Curves.easeOutCubic,
+            child: showBody
+                ? Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: widget.child,
+                  )
+                : const SizedBox(width: double.infinity, height: 0),
+          ),
+        ],
       ),
     );
   }
