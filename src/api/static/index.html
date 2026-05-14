@@ -597,6 +597,16 @@
       color: var(--muted);
     }
     .ea-chev.open { transform: rotate(90deg); color: var(--green); }
+
+    /* Collapsible panel headers (Strategies, Portfolio correlations, …) */
+    .panel-head-collapsible { cursor: pointer; user-select: none; }
+    .panel-head-collapsible:hover .panel-title { color: var(--green); }
+    .panel-chev {
+      display: inline-block; font-size: 12px; color: var(--muted);
+      transition: transform 0.18s ease, color 0.18s ease;
+      line-height: 1;
+    }
+    .panel-chev.open { transform: rotate(90deg); color: var(--green); }
     .ea-os-tab-row {
       display: flex; gap: 4px; margin-top: 12px;
       background: var(--surface); border: 1px solid var(--edge);
@@ -1132,13 +1142,17 @@
           </div>
         </div>
         <div class="panel">
-          <div class="panel-head">
+          <div class="panel-head panel-head-collapsible" @click="togglePanel('strategies')"
+               role="button" tabindex="0"
+               @keydown.enter.prevent="togglePanel('strategies')"
+               @keydown.space.prevent="togglePanel('strategies')">
             <div>
               <div class="panel-title">Strategies</div>
               <div class="panel-sub" x-text="isAdmin ? 'tap row to swap mode · tap toggle to arm/disarm' : 'view-only'"></div>
             </div>
+            <span class="panel-chev" :class="strategiesExpanded ? 'open' : ''" aria-hidden="true">▸</span>
           </div>
-          <div class="panel-body">
+          <div class="panel-body" x-show="strategiesExpanded" x-transition>
             <template x-if="strategies.length === 0">
               <div class="empty">No strategies loaded.</div>
             </template>
@@ -1282,14 +1296,20 @@
       <!-- Correlations + Drift — global, visible once broker configured -->
       <div class="two-col section" x-show="canSeeDashboard">
         <div class="panel">
-          <div class="panel-head">
+          <div class="panel-head panel-head-collapsible" @click="togglePanel('correlations')"
+               role="button" tabindex="0"
+               @keydown.enter.prevent="togglePanel('correlations')"
+               @keydown.space.prevent="togglePanel('correlations')">
             <div>
               <div class="panel-title">Portfolio correlations</div>
               <div class="panel-sub">Pairs that move together — taking both same-side stacks the same bet</div>
             </div>
-            <span style="font-size:11px;color:var(--muted)" x-text="correlation?.pairs?.[0]?.computed_at ? fmtTime(correlation.pairs[0].computed_at) : ''"></span>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:11px;color:var(--muted)" x-text="correlation?.pairs?.[0]?.computed_at ? fmtTime(correlation.pairs[0].computed_at) : ''"></span>
+              <span class="panel-chev" :class="correlationsExpanded ? 'open' : ''" aria-hidden="true">▸</span>
+            </div>
           </div>
-          <div class="panel-body">
+          <div class="panel-body" x-show="correlationsExpanded" x-transition>
             <template x-if="!correlation?.pairs || correlation.pairs.length === 0">
               <div class="empty">No correlations yet — bot needs more bars.</div>
             </template>

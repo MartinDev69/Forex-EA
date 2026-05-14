@@ -94,6 +94,15 @@ document.addEventListener("alpine:init", () => {
     me: localStorage.getItem(USER_KEY) || "",
     role: localStorage.getItem(ROLE_KEY) || "admin",
     navOpen: false,
+    // Collapsible-panel state persisted in localStorage so a user's
+    // chosen layout sticks across refreshes. Default open on first run.
+    strategiesExpanded: localStorage.getItem("antigreed:strategiesExpanded") !== "0",
+    correlationsExpanded: localStorage.getItem("antigreed:correlationsExpanded") !== "0",
+    togglePanel(name) {
+      const k = name + "Expanded";
+      this[k] = !this[k];
+      try { localStorage.setItem("antigreed:" + k, this[k] ? "1" : "0"); } catch (_) {}
+    },
     goToSection(id) {
       this.navOpen = false;
       // Defer the scroll a tick so the drawer's close transition has
