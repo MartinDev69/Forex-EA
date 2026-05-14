@@ -669,9 +669,9 @@
     /* Confetti */
     .confetti-piece { position: fixed; width: 10px; height: 14px; top: -16px; pointer-events: none; z-index: 200; border-radius: 2px; }
 
-    /* ── Hamburger + slide-in drawer (visible on all viewports). ────── */
+    /* ── Mobile hamburger + slide-in drawer (hidden on desktop). ────── */
     .hamburger {
-      display: flex; flex-direction: column; gap: 4px;
+      display: none; flex-direction: column; gap: 4px;
       background: transparent; border: 1px solid var(--edge2);
       border-radius: 8px; padding: 9px 8px; cursor: pointer;
       width: 38px; height: 36px; align-items: center; justify-content: center;
@@ -745,8 +745,8 @@
       background: var(--rdim); border-color: var(--rglow); color: var(--red);
     }
     .nav-signout:hover { background: rgba(220,38,38,0.18); color: var(--red); }
-    /* Calendar + Regime live in the drawer now, not the topbar. */
-    .topbar-pills { display: none; }
+    /* Calendar + Regime: pills on desktop, drawer-only on mobile. */
+    .topbar-pills { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
     /* Drawer status block — Calendar + Regime live here on mobile. */
     .nav-section-label {
@@ -795,8 +795,10 @@
       .main { padding: 16px 14px 60px; }
       .topbar { padding: 0 14px; gap: 8px; }
       .topbar-user, .role-badge, .topbar-status-word { display: none; }
-      /* Hide the noisier topbar items on phones — the hamburger is
-         already visible everywhere, and these items live in the drawer. */
+      /* Reveal the hamburger and hide noisier topbar items — they all
+         live in the slide-out drawer on phones. */
+      .hamburger { display: flex; }
+      .topbar-pills,
       .topbar-kbd,
       .topbar-theme,
       .topbar-bot-btn,
