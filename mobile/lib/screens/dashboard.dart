@@ -1484,16 +1484,39 @@ class _CollapsibleState extends State<_Collapsible> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final accent = isDark ? kNeonGreen : kLightWin;
-    return Card(
+    // Wait until SharedPreferences resolves so we don't render expanded
+    // then snap closed on the next frame — and so we don't flash a
+    // Material surface-tinted placeholder while the prefs load.
+    if (!_ready) return const SizedBox.shrink();
+    // Hand-rolled card + ExpansionTile so we can pin explicit dark
+    // surface colours and avoid Material 3's default surface tint
+    // (which renders cards as a pale-grey block on dark themes).
+    return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: isDark ? kSurface : kLightSurface,
+        border: Border.all(color: isDark ? kEdge : kLightEdge),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
       child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        data: Theme.of(context).copyWith(
+          dividerColor: Colors.transparent,
+          // Prevent the ExpansionTile from inheriting Material 3 surface
+          // tint when expanded — keeps the body background the same as
+          // the card colour instead of going pale grey.
+          colorScheme: Theme.of(context).colorScheme.copyWith(
+                surface: isDark ? kSurface : kLightSurface,
+                surfaceTint: Colors.transparent,
+              ),
+        ),
         child: ExpansionTile(
-          key: PageStorageKey<String>(widget.storageKey),
-          initiallyExpanded: _ready ? _expanded : true,
+          initiallyExpanded: _expanded,
           maintainState: true,
           tilePadding: const EdgeInsets.symmetric(horizontal: 16),
           childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          backgroundColor: isDark ? kSurface : kLightSurface,
+          collapsedBackgroundColor: isDark ? kSurface : kLightSurface,
           iconColor: accent,
           collapsedIconColor: mutedColor(context),
           onExpansionChanged: (v) {
