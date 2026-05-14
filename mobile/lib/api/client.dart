@@ -79,29 +79,32 @@ class ApiClient {
         .toList();
   }
 
-  Future<Strategy> setStrategyMode(String name, String mode) async {
-    final r = await http.post(
-      _u('/strategies/${Uri.encodeComponent(name)}/mode'),
-      headers: _headers,
-      body: json.encode({'mode': mode}),
+  Future<Strategy> setStrategyMode(String name, String mode, {String? totpCode}) async {
+    final r = await _send2faGated(
+      'POST',
+      '/strategies/${Uri.encodeComponent(name)}/mode',
+      body: {'mode': mode},
+      totpCode: totpCode,
     );
-    _check(r);
     return Strategy.fromJson(json.decode(r.body) as Map<String, dynamic>);
   }
 
-  Future<Strategy> toggleStrategy(String name) async {
-    final r = await http.post(_u('/strategies/$name/toggle'), headers: _headers);
-    _check(r);
+  Future<Strategy> toggleStrategy(String name, {String? totpCode}) async {
+    final r = await _send2faGated(
+      'POST',
+      '/strategies/${Uri.encodeComponent(name)}/toggle',
+      totpCode: totpCode,
+    );
     return Strategy.fromJson(json.decode(r.body) as Map<String, dynamic>);
   }
 
-  Future<Strategy> setStrategyUserCopyable(String name, bool value) async {
-    final r = await http.post(
-      _u('/strategies/${Uri.encodeComponent(name)}/user-copyable'),
-      headers: _headers,
-      body: json.encode({'user_copyable': value}),
+  Future<Strategy> setStrategyUserCopyable(String name, bool value, {String? totpCode}) async {
+    final r = await _send2faGated(
+      'POST',
+      '/strategies/${Uri.encodeComponent(name)}/user-copyable',
+      body: {'user_copyable': value},
+      totpCode: totpCode,
     );
-    _check(r);
     return Strategy.fromJson(json.decode(r.body) as Map<String, dynamic>);
   }
 
@@ -143,23 +146,46 @@ class ApiClient {
   }
 
   Future<void> startBot({String? totpCode}) async {
-    await _post2faGated('/bot/start', totpCode: totpCode);
+    await _send2faGated('POST', '/bot/start', totpCode: totpCode);
   }
 
   Future<void> stopBot({String? totpCode}) async {
-    await _post2faGated('/bot/stop', totpCode: totpCode);
+    await _send2faGated('POST', '/bot/stop', totpCode: totpCode);
   }
 
-  /// POST a 2FA-gated endpoint. Adds X-2FA-Code when supplied and
+  /// Send a 2FA-gated request. Adds X-2FA-Code when supplied and
   /// translates server-side 2FA rejections into TwoFaRequiredException /
   /// TwoFaInvalidException so the UI can re-prompt instead of bouncing
   /// the user to the login screen (which is what bare 401 does).
-  Future<void> _post2faGated(String path, {String? totpCode}) async {
+  ///
+  /// Method is one of 'POST' | 'PUT' | 'DELETE'. Returns the raw
+  /// http.Response so callers can decode their own response shape.
+  Future<http.Response> _send2faGated(
+    String method,
+    String path, {
+    Object? body,
+    String? totpCode,
+  }) async {
     final headers = {..._headers};
     if (totpCode != null && totpCode.isNotEmpty) {
       headers['X-2FA-Code'] = totpCode;
     }
-    final r = await http.post(_u(path), headers: headers);
+    final uri = _u(path);
+    final encoded = body == null ? null : json.encode(body);
+    final http.Response r;
+    switch (method) {
+      case 'POST':
+        r = await http.post(uri, headers: headers, body: encoded);
+        break;
+      case 'PUT':
+        r = await http.put(uri, headers: headers, body: encoded);
+        break;
+      case 'DELETE':
+        r = await http.delete(uri, headers: headers, body: encoded);
+        break;
+      default:
+        throw ArgumentError('unsupported method: $method');
+    }
     if (r.statusCode == 401) {
       final detail = ApiException(401, r.body).detail;
       if (detail.contains('2FA code required')) {
@@ -172,6 +198,7 @@ class ApiClient {
       // _check, which logs out.
     }
     _check(r);
+    return r;
   }
 
   // ---------- Broker management ----------
@@ -200,25 +227,25 @@ class ApiClient {
     required String password,
     required String server,
     required String mt5Path,
+    String? totpCode,
   }) async {
-    final r = await http.put(
-      _u('/broker/config'),
-      headers: _headers,
-      body: json.encode({
+    final r = await _send2faGated(
+      'PUT',
+      '/broker/config',
+      body: {
         'broker': broker,
         'login': login,
         'password': password,
         'server': server,
         'mt5_path': mt5Path,
-      }),
+      },
+      totpCode: totpCode,
     );
-    _check(r);
     return BrokerConfig.fromJson(json.decode(r.body) as Map<String, dynamic>);
   }
 
-  Future<void> clearBrokerConfig() async {
-    final r = await http.delete(_u('/broker/config'), headers: _headers);
-    _check(r);
+  Future<void> clearBrokerConfig({String? totpCode}) async {
+    await _send2faGated('DELETE', '/broker/config', totpCode: totpCode);
   }
 
   Future<EaConfig> eaConfig() async {
@@ -239,19 +266,20 @@ class ApiClient {
     required String password,
     required String server,
     required String mt5Path,
+    String? totpCode,
   }) async {
-    final r = await http.post(
-      _u('/broker/test'),
-      headers: _headers,
-      body: json.encode({
+    final r = await _send2faGated(
+      'POST',
+      '/broker/test',
+      body: {
         'broker': broker,
         'login': login,
         'password': password,
         'server': server,
         'mt5_path': mt5Path,
-      }),
+      },
+      totpCode: totpCode,
     );
-    _check(r);
     return BrokerTestResult.fromJson(json.decode(r.body) as Map<String, dynamic>);
   }
 

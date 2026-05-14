@@ -17,6 +17,7 @@ import '../models/regime.dart';
 import '../models/status.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../utils/twofa.dart';
 import '../widgets/logo_spinner.dart';
 
 const String _kBlackoutSymbolKey = 'antigreed:blackoutSymbol';
@@ -212,17 +213,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _toggleBot() async {
     final stopping = _status?.running ?? false;
-    Future<void> call(String? code) => stopping
-        ? widget.apiClient.stopBot(totpCode: code)
-        : widget.apiClient.startBot(totpCode: code);
     try {
-      // Plain try first — the server is the source of truth on whether
-      // the caller has 2FA enabled, so we let it tell us via 401 rather
-      // than caching a stale "enabled" flag.
-      await call(null);
+      await runWithTwoFa<void>(context, (code) => stopping
+          ? widget.apiClient.stopBot(totpCode: code)
+          : widget.apiClient.startBot(totpCode: code));
       await _refresh();
-    } on TwoFaRequiredException {
-      await _promptTwoFaAndRetry(call);
+    } on TwoFaCancelled {
+      // User backed out of the 2FA dialog — leave state untouched.
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -230,79 +227,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         );
       }
     }
-  }
-
-  /// Show the 6-digit code dialog and retry the call until success,
-  /// cancel, or a non-2FA error. Pulled into its own method so other
-  /// 2FA-gated actions can reuse it once they're added.
-  Future<void> _promptTwoFaAndRetry(
-    Future<void> Function(String code) call, {
-    String? hint,
-  }) async {
-    String? hintText = hint;
-    while (true) {
-      final code = await _ask2faCode(hintText);
-      if (code == null) return; // user cancelled
-      try {
-        await call(code);
-        await _refresh();
-        return;
-      } on TwoFaInvalidException {
-        hintText = 'Code rejected — try again';
-        continue;
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $e')),
-          );
-        }
-        return;
-      }
-    }
-  }
-
-  Future<String?> _ask2faCode(String? hint) async {
-    final controller = TextEditingController();
-    return showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text('2FA code'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Enter the 6-digit code from your authenticator.'),
-            if (hint != null) ...[
-              const SizedBox(height: 8),
-              Text(hint, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
-            ],
-            const SizedBox(height: 12),
-            TextField(
-              controller: controller,
-              autofocus: true,
-              keyboardType: TextInputType.number,
-              maxLength: 6,
-              decoration: const InputDecoration(
-                counterText: '',
-                hintText: '••••••',
-              ),
-              onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(null),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-            child: const Text('Submit'),
-          ),
-        ],
-      ),
-    );
   }
 
   @override

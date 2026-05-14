@@ -47,13 +47,22 @@ class _TradesScreenState extends State<TradesScreen> {
     _load();
   }
 
+  Future<Account?> _loadAccountSafe() async {
+    try {
+      return await widget.apiClient.account();
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _load() async {
     try {
-      final results = await Future.wait([
-        widget.apiClient.trades(limit: 50),
-        widget.apiClient.pendingOrders().catchError((_) => <PendingOrder>[]),
-        widget.apiClient.account().catchError((_) => null),
-      ]);
+      final trades = widget.apiClient.trades(limit: 50);
+      final pending = widget.apiClient
+          .pendingOrders()
+          .catchError((_) => <PendingOrder>[]);
+      final account = _loadAccountSafe();
+      final results = await Future.wait([trades, pending, account]);
       if (!mounted) return;
       setState(() {
         _trades = results[0] as List<Trade>;

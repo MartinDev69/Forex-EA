@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../models/broker.dart';
+import '../utils/twofa.dart';
 import '../widgets/logo_spinner.dart';
 
 class BrokerScreen extends StatefulWidget {
@@ -115,14 +116,20 @@ class _BrokerScreenState extends State<BrokerScreen> {
     setState(() { _testing = true; _testResult = null; });
     try {
       final p = _payload();
-      final r = await widget.apiClient.testBroker(
-        broker: p['broker'] as String,
-        login: p['login'] as int,
-        password: p['password'] as String,
-        server: p['server'] as String,
-        mt5Path: p['mt5Path'] as String,
+      final r = await runWithTwoFa<BrokerTestResult>(
+        context,
+        (code) => widget.apiClient.testBroker(
+          broker: p['broker'] as String,
+          login: p['login'] as int,
+          password: p['password'] as String,
+          server: p['server'] as String,
+          mt5Path: p['mt5Path'] as String,
+          totpCode: code,
+        ),
       );
       if (mounted) setState(() => _testResult = r);
+    } on TwoFaCancelled {
+      // No result — leave the previous testResult (if any) visible.
     } catch (e) {
       if (mounted) {
         setState(() => _testResult = BrokerTestResult(ok: false, error: e.toString()));
@@ -137,12 +144,16 @@ class _BrokerScreenState extends State<BrokerScreen> {
     setState(() => _saving = true);
     try {
       final p = _payload();
-      final saved = await widget.apiClient.saveBrokerConfig(
-        broker: p['broker'] as String,
-        login: p['login'] as int,
-        password: p['password'] as String,
-        server: p['server'] as String,
-        mt5Path: p['mt5Path'] as String,
+      final saved = await runWithTwoFa<BrokerConfig>(
+        context,
+        (code) => widget.apiClient.saveBrokerConfig(
+          broker: p['broker'] as String,
+          login: p['login'] as int,
+          password: p['password'] as String,
+          server: p['server'] as String,
+          mt5Path: p['mt5Path'] as String,
+          totpCode: code,
+        ),
       );
       if (mounted) {
         setState(() { _saved = saved; _password.clear(); });
@@ -150,6 +161,8 @@ class _BrokerScreenState extends State<BrokerScreen> {
           const SnackBar(content: Text('Saved. Restart the bot to pick up new creds.')),
         );
       }
+    } on TwoFaCancelled {
+      // No-op — user backed out of the prompt.
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
@@ -176,11 +189,17 @@ class _BrokerScreenState extends State<BrokerScreen> {
       ),
     );
     if (ok != true) return;
+    if (!mounted) return;
     try {
-      await widget.apiClient.clearBrokerConfig();
+      await runWithTwoFa<void>(
+        context,
+        (code) => widget.apiClient.clearBrokerConfig(totpCode: code),
+      );
       if (mounted) {
         setState(() { _saved = null; _password.clear(); });
       }
+    } on TwoFaCancelled {
+      // No-op — credentials stay put.
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Remove failed: $e')));

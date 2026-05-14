@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../models/status.dart';
 import '../theme.dart';
+import '../utils/twofa.dart';
 import '../widgets/logo_spinner.dart';
 
 class StrategiesScreen extends StatefulWidget {
@@ -53,15 +54,22 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
     }
   }
 
+  void _applyUpdated(Strategy updated) {
+    if (!mounted) return;
+    setState(() {
+      _strategies = _strategies!
+          .map((x) => x.name == updated.name ? updated : x)
+          .toList();
+    });
+  }
+
   Future<void> _toggle(Strategy s) async {
     try {
-      final updated = await widget.apiClient.toggleStrategy(s.name);
-      if (!mounted) return;
-      setState(() {
-        _strategies = _strategies!
-            .map((x) => x.name == updated.name ? updated : x)
-            .toList();
-      });
+      _applyUpdated(await runWithTwoFa<Strategy>(
+        context, (code) => widget.apiClient.toggleStrategy(s.name, totpCode: code),
+      ));
+    } on TwoFaCancelled {
+      // No-op — keep the previous toggle state visible.
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -73,13 +81,11 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
 
   Future<void> _setMode(Strategy s, String mode) async {
     try {
-      final updated = await widget.apiClient.setStrategyMode(s.name, mode);
-      if (!mounted) return;
-      setState(() {
-        _strategies = _strategies!
-            .map((x) => x.name == updated.name ? updated : x)
-            .toList();
-      });
+      _applyUpdated(await runWithTwoFa<Strategy>(
+        context, (code) => widget.apiClient.setStrategyMode(s.name, mode, totpCode: code),
+      ));
+    } on TwoFaCancelled {
+      // No-op — keep the previous mode visible.
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -91,14 +97,13 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
 
   Future<void> _toggleCopyable(Strategy s) async {
     try {
-      final updated = await widget.apiClient
-          .setStrategyUserCopyable(s.name, !s.userCopyable);
-      if (!mounted) return;
-      setState(() {
-        _strategies = _strategies!
-            .map((x) => x.name == updated.name ? updated : x)
-            .toList();
-      });
+      _applyUpdated(await runWithTwoFa<Strategy>(
+        context,
+        (code) => widget.apiClient
+            .setStrategyUserCopyable(s.name, !s.userCopyable, totpCode: code),
+      ));
+    } on TwoFaCancelled {
+      // No-op — keep the previous copyable flag visible.
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
