@@ -28,13 +28,13 @@
 //+------------------------------------------------------------------+
 #property copyright "Martin Kristof"
 #property link      "https://github.com/MartinDev69/Forex-EA"
-#property version   "1.05"
+#property version   "1.06"
 #property strict
 
 // Build stamp shown on the panel's header sub-line — bumped on every
 // layout change. If the panel doesn't show this exact string, MT5 is
 // running a stale compiled binary; recompile and re-attach the EA.
-#define EA_BUILD "v1.05"
+#define EA_BUILD "v1.06"
 
 #include <Trade/Trade.mqh>
 
@@ -717,9 +717,9 @@ void MakeBitmap(const string name, int xoff, int yoff, const string file, int xs
 
 // Sizing ------------------------------------------------------------
 // Layout heights for the Figma-inspired sections.
-#define P_HERO_H       140  // big balance number + label + last-sync line
-#define P_TILE_H       128  // KPI tile (3-up row)
-#define P_BIGTILE_H    144  // larger info tiles (2-up row)
+#define P_HERO_H       190  // big balance number + label + last-sync line
+#define P_TILE_H       160  // KPI tile (3-up row)
+#define P_BIGTILE_H    180  // larger info tiles (2-up row)
 #define P_FOOTER_H     32   // developer attribution line
 #define P_GRAD_H       8    // bottom rainbow gradient strip
 
@@ -892,24 +892,23 @@ void RedrawPanel()
       double pct = (floating / bal) * 100.0;
       equity_pct_text = StringFormat("%s%.2f%%", (pct >= 0 ? "+" : ""), pct);
    }
-   // Vertical layout for the hero block — each element sits at a
-   // known y-offset relative to the block's top so spacing is obvious.
-   int hy = y + 12;
+   // Vertical layout for the hero block — every element advances the
+   // y-cursor by a generous fixed amount so labels/numbers never collide.
+   int hy = y + 18;
    MakeLabel(PNL + "hero_l", x + P_PAD, hy,
-             "BALANCE", COL_MUTED, 10, P_FONT_BODY);
-   hy += 26;  // gap below label
+             "BALANCE", COL_MUTED, 11, P_FONT_BODY);
+   hy += 36;  // gap below label, before the big number
    MakeLabel(PNL + "hero_v", x + P_PAD, hy,
              FmtMoney(bal, cur), COL_HERO, 36, "Segoe UI Semibold");
-   // Lightning bolt accent — sits to the right of the big number,
-   // vertically aligned with its visual centre.
-   MakeLabel(PNL + "hero_bolt", x + g_panel_w - 40, hy + 8,
-             "⚡", COL_HERO, 22, "Segoe UI Semibold");
-   hy += 58;  // big number is ~50px tall, leave 8px below
+   // Lightning bolt accent — sits to the right of the big number.
+   MakeLabel(PNL + "hero_bolt", x + g_panel_w - 44, hy + 10,
+             "⚡", COL_HERO, 24, "Segoe UI Semibold");
+   hy += 76;  // big number is ~50-60px tall depending on font, +16 air
    string sync = (g_last_poll_ok > 0)
       ? "Last sync: " + TimeToString(g_last_poll_ok, TIME_SECONDS)
       : "Last sync: —";
    MakeLabel(PNL + "hero_sub", x + P_PAD, hy,
-             sync, COL_MUTED, 9, P_FONT_BODY);
+             sync, COL_MUTED, 10, P_FONT_BODY);
 
    y += P_HERO_H + P_SECTION_GAP;
 
@@ -980,18 +979,19 @@ void DrawColouredTile(const string id, int xoff, int yoff, int w, int h,
    MakeBox  (PNL + id + "_top",  xoff,      yoff,        w, 4,
              accent, accent);
    // Top row: icon badge on the left, label sitting to its right at
-   // the badge's vertical centre. Plenty of space between them.
-   int badge_y = yoff + 18;
-   MakeBox  (PNL + id + "_icon", xoff + 14, badge_y,     28, 28,
+   // the badge's vertical centre.
+   int badge_y = yoff + 20;
+   MakeBox  (PNL + id + "_icon", xoff + 16, badge_y,     30, 30,
              accent, accent);
-   MakeLabel(PNL + id + "_glyph",xoff + 28, badge_y + 6, icon,
-             C'10,18,24', 12, "Segoe UI Black", ANCHOR_UPPER);
-   MakeLabel(PNL + id + "_l",    xoff + 52, badge_y + 8, label,
-             COL_MUTED, 9, P_FONT_BODY);
-   // Big number anchored to the bottom of the tile so there's always
-   // a visible gap between the label-row and the value-row.
-   MakeLabel(PNL + id + "_v",    xoff + 16, yoff + h - 44, value,
-             accent, 24, "Segoe UI Semibold");
+   MakeLabel(PNL + id + "_glyph",xoff + 31, badge_y + 7, icon,
+             C'10,18,24', 13, "Segoe UI Black", ANCHOR_UPPER);
+   MakeLabel(PNL + id + "_l",    xoff + 56, badge_y + 9, label,
+             COL_MUTED, 10, P_FONT_BODY);
+   // Big number anchored toward the bottom of the tile with a
+   // generous 56px clearance to the bottom edge — leaves plenty of
+   // visual room between the top-row and the value-row.
+   MakeLabel(PNL + id + "_v",    xoff + 18, yoff + h - 56, value,
+             accent, 26, "Segoe UI Semibold");
 }
 
 // The two larger "BUY SIGNAL / SELL SIGNAL" style tiles at the bottom.
@@ -1004,17 +1004,19 @@ void DrawSignalTile(const string id, int xoff, int yoff, int w, int h,
    MakeBox  (PNL + id + "_top", xoff,           yoff,           w, 4,
              accent, accent);
    // Top row: label on the left, status dot on the right.
-   int top_y = yoff + 20;
-   MakeLabel(PNL + id + "_l",   xoff + 18,      top_y,          label,
-             accent, 10, "Segoe UI Semibold");
-   MakeLabel(PNL + id + "_dot", xoff + w - 28,  top_y,          "●",
-             accent, 10, P_FONT_BODY);
-   // Big value vertically centred inside the tile body.
-   MakeLabel(PNL + id + "_v",   xoff + 18,      yoff + h - 64,  value,
-             accent, 28, "Segoe UI Semibold");
-   // Subline pinned to the tile bottom so it never collides with the value.
-   MakeLabel(PNL + id + "_s",   xoff + 18,      yoff + h - 22,  subline,
-             COL_MUTED, 9, P_FONT_BODY);
+   int top_y = yoff + 22;
+   MakeLabel(PNL + id + "_l",   xoff + 20,      top_y,          label,
+             accent, 11, "Segoe UI Semibold");
+   MakeLabel(PNL + id + "_dot", xoff + w - 32,  top_y,          "●",
+             accent, 11, P_FONT_BODY);
+   // Big value lower in the tile — leaves more room above so it
+   // doesn't visually touch the top-row label.
+   MakeLabel(PNL + id + "_v",   xoff + 20,      yoff + h - 80,  value,
+             accent, 30, "Segoe UI Semibold");
+   // Subline pinned to the tile bottom with a generous 28px gap from
+   // the bottom edge — keeps clear of the value text above it.
+   MakeLabel(PNL + id + "_s",   xoff + 20,      yoff + h - 28,  subline,
+             COL_MUTED, 10, P_FONT_BODY);
 }
 
 // Cyan → blue → purple progression along the bottom of the card. Uses
