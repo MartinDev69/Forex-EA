@@ -16,6 +16,7 @@ import '../models/propfirm.dart';
 import '../models/regime.dart';
 import '../models/status.dart';
 import '../theme.dart';
+import '../utils/money.dart';
 import '../widgets/logo_spinner.dart';
 
 const String _kBlackoutSymbolKey = 'antigreed:blackoutSymbol';
@@ -341,7 +342,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
             if (_canSeeDashboard && _account != null) _AccountCard(account: _account!),
             if (_canSeeDashboard && _propfirm != null && _propfirm!.enabled)
-              _PropFirmCard(data: _propfirm!),
+              _PropFirmCard(data: _propfirm!, currency: _account?.currency),
             if (_canSeeDashboard && _account != null && _status != null)
               _KpiGrid(account: _account!, status: _status!, trades: _trades),
             if (_canSeeDashboard && _status != null)
@@ -1105,7 +1106,7 @@ class _AccountCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fmt = NumberFormat.currency(symbol: '\$', decimalDigits: 2);
+    final fmt = moneyFmt(account.currency);
     final pnlPositive = account.dailyPnl >= 0;
     final pnlTone = pnlPositive ? TickerTone.win : TickerTone.loss;
     final muted = mutedColor(context);
@@ -2280,12 +2281,13 @@ class _ErrorCard extends StatelessWidget {
 }
 
 class _PropFirmCard extends StatelessWidget {
-  const _PropFirmCard({required this.data});
+  const _PropFirmCard({required this.data, this.currency});
   final PropFirmStatus data;
+  final String? currency;
 
   @override
   Widget build(BuildContext context) {
-    final fmt = NumberFormat.currency(symbol: '\$', decimalDigits: 2);
+    final fmt = moneyFmt(currency);
     final muted = mutedColor(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final accent = isDark ? kNeonGreen : kLightWin;

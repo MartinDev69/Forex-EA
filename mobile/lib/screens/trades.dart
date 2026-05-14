@@ -4,6 +4,7 @@ import '../api/client.dart';
 import '../models/explanation.dart';
 import '../models/status.dart';
 import '../theme.dart';
+import '../utils/money.dart';
 import '../widgets/logo_spinner.dart';
 import '../widgets/strategy_chart.dart';
 
@@ -34,6 +35,7 @@ enum _TradeTab { open, pending, closed }
 class _TradesScreenState extends State<TradesScreen> {
   List<Trade>? _trades;
   List<PendingOrder> _pending = const [];
+  Account? _account;
   String? _error;
   bool _loading = true;
   _TradeTab _tab = _TradeTab.open;
@@ -50,11 +52,13 @@ class _TradesScreenState extends State<TradesScreen> {
       final results = await Future.wait([
         widget.apiClient.trades(limit: 50),
         widget.apiClient.pendingOrders().catchError((_) => <PendingOrder>[]),
+        widget.apiClient.account().catchError((_) => null),
       ]);
       if (!mounted) return;
       setState(() {
         _trades = results[0] as List<Trade>;
         _pending = results[1] as List<PendingOrder>;
+        _account = results[2] as Account?;
         _loading = false;
         _error = null;
       });
@@ -103,7 +107,7 @@ class _TradesScreenState extends State<TradesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final fmt = NumberFormat.currency(symbol: '\$', decimalDigits: 2);
+    final fmt = moneyFmt(_account?.currency);
     final dateFmt = DateFormat('MM-dd HH:mm');
     final allTrades = _trades ?? const <Trade>[];
     final openTrades = allTrades

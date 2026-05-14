@@ -521,13 +521,21 @@ document.addEventListener("alpine:init", () => {
     },
 
     fmtMoney(n) {
-      return "$" + (n ?? 0).toLocaleString(undefined,
-        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const ccy = this.account?.currency || "USD";
+      try {
+        return new Intl.NumberFormat(undefined, {
+          style: "currency", currency: ccy,
+          minimumFractionDigits: 2, maximumFractionDigits: 2,
+        }).format(n ?? 0);
+      } catch (_) {
+        // Unknown ISO code from broker — fall back to amount + suffix.
+        return (n ?? 0).toLocaleString(undefined,
+          { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " " + ccy;
+      }
     },
     fmtPnl(n) {
       const sign = n > 0 ? "+" : n < 0 ? "−" : "";
-      return sign + "$" + Math.abs(n ?? 0).toLocaleString(undefined,
-        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return sign + this.fmtMoney(Math.abs(n ?? 0));
     },
     fmtTime(iso) {
       if (!iso) return "—";

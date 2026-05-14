@@ -464,6 +464,7 @@ class AccountResponse(BaseModel):
     equity: float
     open_positions: int
     daily_pnl: float = 0.0
+    currency: str | None = None
 
 
 class StrategyResponse(BaseModel):
@@ -639,6 +640,7 @@ def account(user: dict = Depends(current_user)) -> AccountResponse:
                 equity=equity,
                 open_positions=_open_positions(since_iso=since_iso),
                 daily_pnl=floating,
+                currency=report.currency,
             )
         # No EA snapshot yet: return zeros so the user doesn't see
         # admin's account while their EA is still booting.
@@ -668,6 +670,7 @@ def account(user: dict = Depends(current_user)) -> AccountResponse:
         equity=equity,
         open_positions=_open_positions(),
         daily_pnl=realized + floating,
+        currency=(info or {}).get("currency"),
     )
 
 
@@ -739,15 +742,30 @@ def toggle_strategy(name: str, _user: dict = Depends(require_2fa)) -> StrategyRe
 def trades(limit: int = 20, user: dict = Depends(current_user)) -> list[TradeResponse]:
     # Non-admin operators only see trades from the moment their EA first
     # checked in. Before that, the master trades aren't "theirs" — the
-    # EA wasn't online to copy them.
+    # EA wasn't online to copy them. We also filter by the operator's
+    # own strategy picks + the admin's user_copyable flag, mirroring the
+    # /signals/feed filter — otherwise the dashboard shows admin's full
+    # trade history (incl. strategies the operator never picked) even
+    # though their EA never copied those trades. The user's actual MT5
+    # account stays at zero, so the WIN RATE / counts drift from reality.
     since_iso: str | None = None
+    pick_filter: set[str] | None = None
     if user.get("role") != "admin":
         username = user.get("username") or user.get("sub") or ""
         report = ea_account_store.get(username) if username else None
         if report is None or report.first_seen_at is None:
             return []
         since_iso = report.first_seen_at.isoformat()
+        try:
+            copyable = toggle_store.user_copyable_names()
+            picks = user_store.get_user_picks(username)
+            pick_filter = picks.get("execute", set()) & copyable
+        except Exception:
+            log.exception("trades pick-filter failed; serving unfiltered")
+            pick_filter = None
     rows = journal.recent(limit=limit, since_iso=since_iso)
+    if pick_filter is not None:
+        rows = [r for r in rows if (r.get("strategy") or "") in pick_filter]
     out: list[TradeResponse] = []
     for r in rows:
         sl = r.get("stop_loss")
@@ -839,7 +857,45 @@ def test_broker(
 
     Returns ok=False on any failure (MT5 not installed, bad creds, wrong server,
     terminal not running). Never raises — callers expect a structured response.
+
+    Non-admin operators run MT5 on *their* machine, not on this server. There's
+    no MetaTrader 5 installed here, so a server-side MT5 init returns the
+    "-10003 / not found" error verbatim — confusing for the operator since
+    the test result has nothing to do with their actual EA setup. For those
+    users we instead read the snapshot the AntiGreedCopier EA POSTs every
+    60s; "ok" means the EA has checked in recently, which is what the test
+    is actually trying to confirm.
     """
+    if user.get("role") != "admin":
+        username = user.get("username") or user.get("sub") or ""
+        report = ea_account_store.get(username) if username else None
+        if report is None:
+            return BrokerTestResponse(
+                ok=False,
+                error=(
+                    "Your AntiGreedCopier EA hasn't reported in yet. Make sure "
+                    "it's attached to a chart in MT5 with your AD-ID configured."
+                ),
+            )
+        age_s = (datetime.now(report.updated_at.tzinfo) - report.updated_at).total_seconds()
+        if age_s > 300:
+            return BrokerTestResponse(
+                ok=False,
+                error=(
+                    f"Your EA last reported {int(age_s)}s ago — looks offline. "
+                    "Check that MT5 is running and the AntiGreedCopier EA is "
+                    "attached to a chart."
+                ),
+            )
+        return BrokerTestResponse(ok=True, account={
+            "login": report.login,
+            "server": report.server,
+            "balance": report.balance,
+            "equity": report.equity,
+            "currency": report.currency,
+            "leverage": None,
+        })
+
     try:
         from src.connection.mt5_client import MT5Client
     except Exception as e:

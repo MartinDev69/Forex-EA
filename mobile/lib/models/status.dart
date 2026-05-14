@@ -26,12 +26,14 @@ class Account {
   final double equity;
   final int openPositions;
   final double dailyPnl;
+  final String? currency;
 
   Account({
     required this.balance,
     required this.equity,
     required this.openPositions,
     required this.dailyPnl,
+    this.currency,
   });
 
   factory Account.fromJson(Map<String, dynamic> json) => Account(
@@ -39,6 +41,7 @@ class Account {
         equity: (json['equity'] as num).toDouble(),
         openPositions: json['open_positions'] as int,
         dailyPnl: (json['daily_pnl'] as num).toDouble(),
+        currency: json['currency'] as String?,
       );
 }
 
