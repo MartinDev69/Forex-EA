@@ -1619,8 +1619,16 @@ class _CorrelationCard extends StatelessWidget {
     return _Collapsible(
       icon: Icons.hub_outlined,
       title: 'Correlations',
-      subtitle: 'Pairs that move together — taking both same-side stacks the same bet.',
+      subtitle:
+          'Pairs that move together — taking both same-side stacks the same bet.',
       storageKey: 'card.correlations',
+      // Total-pairs count goes in the header's trailing slot so we don't
+      // need a Spacer (Spacer doesn't behave in a Wrap — was rendering
+      // as a giant gray block taking the full available height).
+      trailing: Text(
+        '${data.count} pairs',
+        style: TextStyle(color: mutedColor(context), fontSize: 11),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1629,11 +1637,15 @@ class _CorrelationCard extends StatelessWidget {
             runSpacing: 6,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              _SummaryPill(count: strong,  label: 'strong',
-                  color: isDark ? kNeonRed : kLightLoss),
+              _SummaryPill(
+                count: strong, label: 'strong',
+                color: isDark ? kNeonRed : kLightLoss,
+              ),
               _SummaryPill(count: moderate, label: 'moderate', color: kAmber),
-              _SummaryPill(count: low,     label: 'low',
-                  color: isDark ? kNeonGreen : kLightWin),
+              _SummaryPill(
+                count: low, label: 'low',
+                color: isDark ? kNeonGreen : kLightWin,
+              ),
               const SizedBox(width: 4),
               Text(
                 '⇈ same · ⇅ inverse',
@@ -1641,11 +1653,6 @@ class _CorrelationCard extends StatelessWidget {
                   fontSize: 10, color: mutedColor(context),
                   fontFamily: 'monospace',
                 ),
-              ),
-              const Spacer(),
-              Text(
-                '${data.count} pairs',
-                style: TextStyle(color: mutedColor(context), fontSize: 11),
               ),
             ],
           ),
