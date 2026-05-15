@@ -21,7 +21,10 @@ import '../utils/twofa.dart';
 import '../widgets/logo_spinner.dart';
 
 const String _kBlackoutSymbolKey = 'antigreed:blackoutSymbol';
-const String _kDefaultBlackoutSymbol = 'EURUSD';
+// Empty until /status arrives — then we fall back to the bot's first
+// SYMBOLS entry. Hardcoding "EURUSD" used to leave operators with non-FX
+// portfolios staring at a Calendar card for a symbol they don't trade.
+const String _kDefaultBlackoutSymbol = '';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({
@@ -86,11 +89,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _refresh() async {
     try {
+      // Skip per-symbol endpoints when the picker hasn't been seeded yet
+      // — first /status will fill _blackoutSymbol from status.symbols and
+      // the next refresh will fetch them properly.
+      final blackoutFuture = _blackoutSymbol.isEmpty
+          ? Future<BlackoutStatus>.value(BlackoutStatus.empty(_blackoutSymbol))
+          : widget.apiClient.blackoutStatus(_blackoutSymbol);
+      final regimeFuture = _blackoutSymbol.isEmpty
+          ? Future<Regime>.value(Regime.unknown(_blackoutSymbol))
+          : widget.apiClient.regime(_blackoutSymbol);
       final results = await Future.wait([
         widget.apiClient.status(),
         widget.apiClient.account(),
-        widget.apiClient.blackoutStatus(_blackoutSymbol),
-        widget.apiClient.regime(_blackoutSymbol),
+        blackoutFuture,
+        regimeFuture,
         widget.apiClient.correlations(),
         widget.apiClient.drift(),
         widget.apiClient.fillStats(),
@@ -103,8 +115,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ]);
       if (!mounted) return;
       final cfg = results[9] as BrokerConfig?;
+      final fetchedStatus = results[0] as BotStatus;
+      // Seed the symbol picker from the bot's SYMBOLS list the very
+      // first time /status arrives. Persist so the user's later
+      // change sticks, and trigger an immediate re-refresh so the
+      // per-symbol cards stop showing the empty placeholders.
+      var pickedSymbol = _blackoutSymbol;
+      var shouldRerefresh = false;
+      if (pickedSymbol.isEmpty && fetchedStatus.symbols.isNotEmpty) {
+        pickedSymbol = fetchedStatus.symbols.first;
+        shouldRerefresh = true;
+        _saveSymbol(pickedSymbol);
+      }
       setState(() {
-        _status = results[0] as BotStatus;
+        _status = fetchedStatus;
         _account = results[1] as Account;
         _blackout = results[2] as BlackoutStatus;
         _regime = results[3] as Regime;
@@ -115,9 +139,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _trades = results[8] as List<Trade>;
         _hasBroker = cfg != null && cfg.login > 0;
         _propfirm = results[10] as PropFirmStatus;
+        _blackoutSymbol = pickedSymbol;
         _loading = false;
         _error = null;
       });
+      if (shouldRerefresh) {
+        // Don't await — the periodic timer will catch the next tick
+        // either way, but firing now means the Calendar/Regime cards
+        // populate within a second of first load instead of five.
+        unawaited(_refresh());
+      }
       // Pull EA config out-of-band for non-admins so we can render the
       // copy-trading panel. Done after the main payload so a failure
       // here doesn't blow up the dashboard.

@@ -184,7 +184,12 @@ document.addEventListener("alpine:init", () => {
     tradeDate: '',        // 'YYYY-MM-DD' or '' for any
     heartbeat: "—",
     blackout: null,  // { blackout, current_event, next_event, minutes_until_next, ... }
-    blackoutSymbol: localStorage.getItem("antigreed:blackoutSymbol") || "EURUSD",
+    // Initial value is whatever the operator last picked. If they've
+    // never picked, we leave it empty here and let the first /status
+    // tick fill it in with the bot's first SYMBOL — that way an
+    // XAUUSDm/US30m/USOILm operator doesn't see a Calendar card stuck
+    // on EURUSD (a symbol they don't trade).
+    blackoutSymbol: localStorage.getItem("antigreed:blackoutSymbol") || "",
     regime: null,    // { trend, volatility, label, adx, atr_pct, ... }
     correlation: null, // { pairs: [{ symbol_a, symbol_b, value, computed_at, ... }], count }
     drift: null,       // { reports: [{ strategy, symbol, status, metrics, baseline, note }], count }
@@ -242,10 +247,17 @@ document.addEventListener("alpine:init", () => {
           api("/account",    { token: this.token }),
           api("/strategies", { token: this.token }),
           api("/trades?limit=50", { token: this.token }),
-          api("/calendar/blackout/" + encodeURIComponent(this.blackoutSymbol),
-              { token: this.token }).catch(() => null),
-          api("/regime/" + encodeURIComponent(this.blackoutSymbol),
-              { token: this.token }).catch(() => null),
+          // Skip the per-symbol endpoints until the picker has settled on
+          // a real symbol (avoids 404-spamming /calendar/blackout/ and
+          // /regime/ on first load before /status arrives).
+          this.blackoutSymbol
+            ? api("/calendar/blackout/" + encodeURIComponent(this.blackoutSymbol),
+                  { token: this.token }).catch(() => null)
+            : Promise.resolve(null),
+          this.blackoutSymbol
+            ? api("/regime/" + encodeURIComponent(this.blackoutSymbol),
+                  { token: this.token }).catch(() => null)
+            : Promise.resolve(null),
           api("/correlation", { token: this.token }).catch(() => null),
           api("/drift", { token: this.token }).catch(() => null),
           api("/fills/stats?window_hours=24", { token: this.token }).catch(() => null),
@@ -255,6 +267,13 @@ document.addEventListener("alpine:init", () => {
           api("/me/picks", { token: this.token }).catch(() => ({signal: [], execute: []})),
         ]);
         this.status = status;
+        // First-run default for the symbol picker — the bot tells us
+        // which symbols it actually trades, so we pick its first one.
+        // Persisted to localStorage so the user's later choice sticks.
+        if (!this.blackoutSymbol && status?.symbols?.length) {
+          this.blackoutSymbol = status.symbols[0];
+          try { localStorage.setItem("antigreed:blackoutSymbol", this.blackoutSymbol); } catch (_) {}
+        }
         this.account = account;
         this.strategies = strategies;
         this.myPicks = myPicks;

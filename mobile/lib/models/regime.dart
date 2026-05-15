@@ -46,4 +46,20 @@ class Regime {
       storedAt: parse(json['stored_at']),
     );
   }
+
+  /// Placeholder used by the dashboard while the symbol picker is empty
+  /// (first launch). Renders as the "waiting for classification" state.
+  factory Regime.unknown(String symbol) => Regime(
+        symbol: symbol,
+        trend: 'unknown',
+        volatility: 'unknown',
+        label: 'unknown',
+        adx: null,
+        plusDi: null,
+        minusDi: null,
+        atr: null,
+        atrPct: null,
+        timestamp: null,
+        storedAt: null,
+      );
 }

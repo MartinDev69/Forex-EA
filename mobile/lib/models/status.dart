@@ -3,12 +3,16 @@ class BotStatus {
   final bool mt5Connected;
   final DateTime? lastHeartbeat;
   final int openPositions;
+  // SYMBOLS env from the bot, in declared order. Dashboard uses the
+  // first entry to default the Calendar/Regime symbol picker.
+  final List<String> symbols;
 
   BotStatus({
     required this.running,
     required this.mt5Connected,
     required this.lastHeartbeat,
     required this.openPositions,
+    this.symbols = const [],
   });
 
   factory BotStatus.fromJson(Map<String, dynamic> json) => BotStatus(
@@ -18,6 +22,9 @@ class BotStatus {
             ? null
             : DateTime.parse(json['last_heartbeat'] as String),
         openPositions: json['open_positions'] as int,
+        symbols: ((json['symbols'] as List<dynamic>?) ?? const <dynamic>[])
+            .map((e) => e as String)
+            .toList(),
       );
 }
 

@@ -470,6 +470,11 @@ class StatusResponse(BaseModel):
     mt5_connected: bool
     last_heartbeat: datetime | None
     open_positions: int
+    # The bot's active SYMBOLS list. Exposed so the dashboard can default
+    # Calendar / Regime / blackout pickers to a symbol the bot actually
+    # trades, instead of hardcoding "EURUSD" on operators who only run
+    # XAUUSDm/US30m/USOILm.
+    symbols: list[str] = []
 
 
 class AccountResponse(BaseModel):
@@ -691,6 +696,9 @@ def get_status(user: dict = Depends(current_user)) -> StatusResponse:
         mt5_connected=bool(bs.connected) if bs else False,
         last_heartbeat=bot_last_hb,
         open_positions=open_positions,
+        # Preserve the order operator wrote in SYMBOLS=… so the dashboard
+        # picks the first one as its default symbol picker.
+        symbols=[s.strip() for s in os.getenv("SYMBOLS", "").split(",") if s.strip()],
     )
 
 
@@ -706,6 +714,12 @@ def account(user: dict = Depends(current_user)) -> AccountResponse:
             balance = float(report.balance or 0.0)
             equity = float(report.equity or balance)
             floating = equity - balance
+            # TODAY P&L = realized closes today on the operator's MT5
+            # (from ea_fill_store) + currently-floating on still-open
+            # positions. Used to be just `equity - balance` which only
+            # reflected floating; an operator who closed +R500 earlier
+            # in the day saw R0 once positions went flat.
+            realized_today = ea_fill_store.realized_pnl_today(username)
             since_iso = (
                 report.first_seen_at.isoformat()
                 if report.first_seen_at else None
@@ -718,7 +732,7 @@ def account(user: dict = Depends(current_user)) -> AccountResponse:
                 # estimate so operators on older EA builds still see a
                 # plausible count instead of zero.
                 open_positions=_operator_open_count(username),
-                daily_pnl=floating,
+                daily_pnl=realized_today + floating,
                 currency=report.currency,
             )
         # No EA snapshot yet: return zeros so the user doesn't see
@@ -846,9 +860,16 @@ def trades(limit: int = 20, user: dict = Depends(current_user)) -> list[TradeRes
                 fills_by_master[f.master_trade_id] = f
         out: list[TradeResponse] = []
         for r in rows:
-            sl = r.get("stop_loss")
-            tp = r.get("take_profit")
             fill = fills_by_master.get(int(r["id"]))
+            # SL/TP source matters: admin's bot trails its own SL via
+            # MT5 modify() calls that never propagate to operator EAs, so
+            # the journal's SL drifts away from what's actually on the
+            # operator's broker. Prefer the EA fill's snapshot when it
+            # exists — that's the operator's MT5 truth.
+            sl_raw = (fill.stop_loss if fill and fill.stop_loss is not None
+                      else r.get("stop_loss"))
+            tp_raw = (fill.take_profit if fill and fill.take_profit is not None
+                      else r.get("take_profit"))
             out.append(TradeResponse(
                 id=r["id"],
                 symbol=r["symbol"],
@@ -864,8 +885,8 @@ def trades(limit: int = 20, user: dict = Depends(current_user)) -> list[TradeRes
                 closed_at=(datetime.fromisoformat(r["closed_at"])
                            if r["closed_at"] else None),
                 lot_size=float((fill.lot_size if fill else r.get("lot_size")) or 0.0),
-                stop_loss=(float(sl) if sl else None),
-                take_profit=(float(tp) if tp else None),
+                stop_loss=(float(sl_raw) if sl_raw else None),
+                take_profit=(float(tp_raw) if tp_raw else None),
                 strategy=r.get("strategy"),
                 broker_ticket=(fill.broker_ticket if fill else r.get("broker_ticket")),
                 close_reason=r.get("close_reason"),

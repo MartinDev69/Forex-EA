@@ -70,4 +70,18 @@ class BlackoutStatus {
             ? null
             : (json['minutes_until_next'] as num).toDouble(),
       );
+
+  /// "No symbol selected" placeholder — dashboard renders this while the
+  /// picker is empty (first launch on a fresh install) so we don't fire
+  /// a /calendar/blackout/ call with an empty path segment.
+  factory BlackoutStatus.empty(String symbol) => BlackoutStatus(
+        symbol: symbol,
+        blackout: false,
+        enabled: false,
+        beforeMin: 0,
+        afterMin: 0,
+        currentEvent: null,
+        nextEvent: null,
+        minutesUntilNext: null,
+      );
 }

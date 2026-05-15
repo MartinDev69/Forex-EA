@@ -414,7 +414,11 @@ class MT5Executor:
                 stop_loss=float(p.sl),
                 take_profit=float(p.tp),
                 opened_at=datetime.fromtimestamp(p.time, tz=timezone.utc),
-                strategy=p.comment or "",
+                # Decode the branded comment back to the canonical
+                # strategy name — anything keyed on strategy (drift
+                # baselines, dedup, pick filter) needs "ma_crossover"
+                # not "AG · MAcross · B".
+                strategy=self._strategy_from_comment(p.comment),
                 status=OrderStatus.OPEN,
                 broker_ticket=int(p.ticket),
             ))
@@ -578,6 +582,26 @@ class MT5Executor:
         "ema_pullback":         "EMApb",
         "adx_breakout":         "ADXbrk",
     }
+    # Reverse lookup so open_orders() can rebuild Orders with the canonical
+    # strategy name (drift baselines, dedup, pick filter all match on this).
+    # Computed at class definition time so we don't rebuild it per call.
+    _SHORT_TO_STRAT = {short: full for full, short in _STRAT_SHORT.items()}
+
+    @classmethod
+    def _strategy_from_comment(cls, comment: str | None) -> str:
+        """Extract the canonical strategy name from a branded order comment.
+
+        Comment format is "AG · {short} · {B|S} · {regime}". We split on
+        ' · ' and look up the second segment in the reverse-map. Returns
+        "" when the comment doesn't follow the format — better empty than
+        leaking the formatted string into strategy-keyed code paths.
+        """
+        if not comment:
+            return ""
+        parts = [p.strip() for p in comment.split("·")]
+        if len(parts) < 2 or parts[0] != "AG":
+            return ""
+        return cls._SHORT_TO_STRAT.get(parts[1], "")
 
     @classmethod
     def _build_open_comment(

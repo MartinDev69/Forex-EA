@@ -236,6 +236,25 @@ class EAFillStore:
             ).fetchone()
         return int(row["n"]) if row else 0
 
+    def realized_pnl_today(self, username: str, *, now: datetime | None = None) -> float:
+        """Sum of pnl across this user's fills CLOSED today (UTC).
+
+        "Today" is the UTC calendar day of ``now`` (defaults to wall-clock
+        UTC). Bot daily-summary uses the same day boundary, so the
+        dashboard's TODAY P&L lines up with the Telegram digest.
+        """
+        now = now or datetime.now(timezone.utc)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT COALESCE(SUM(pnl), 0) AS s FROM ea_fills "
+                "WHERE username = ? AND status = 'CLOSED' "
+                "  AND pnl IS NOT NULL "
+                "  AND closed_at >= ?",
+                (username, day_start.isoformat()),
+            ).fetchone()
+        return float(row["s"]) if row else 0.0
+
     def open_master_ids(self, username: str) -> set[int]:
         """Distinct master_trade_id values across this user's OPEN fills.
 
