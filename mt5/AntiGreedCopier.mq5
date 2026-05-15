@@ -34,7 +34,7 @@
 // Build stamp shown on the panel's header sub-line — bumped on every
 // layout change. If the panel doesn't show this exact string, MT5 is
 // running a stale compiled binary; recompile and re-attach the EA.
-#define EA_BUILD "v1.11"
+#define EA_BUILD "v1.12"
 
 #include <Trade/Trade.mqh>
 
@@ -57,7 +57,7 @@ input bool    FillBackfillOnInit = true;                          // POST recent
 input group "═══ On-chart panel ═══"
 input bool                ShowPanel         = true;              // render the status panel
 input bool                PanelCentered     = true;              // auto-center on the chart (overrides offsets)
-input int                 PanelWidth        = 720;               // panel width in px
+input int                 PanelWidth        = 460;               // panel width in px
 input int                 PanelHeight       = 0;                 // 0 = auto-fit; otherwise px height
 input int                 PanelOffsetX      = 0;                 // nudge X (px) — relative to centered position or top-left
 input int                 PanelOffsetY      = 0;                 // nudge Y (px)
@@ -1183,10 +1183,10 @@ bool IsSymbolEnabled(const string &symbol)
 // Layout constants — px from the panel's top-left corner. Generous
 // padding/gaps so labels, numbers and section dividers never run into
 // each other regardless of font size.
-#define P_PAD          22
-#define P_HEADER_H     74
+#define P_PAD          18
+#define P_HEADER_H     58
 #define P_ROW_H        22
-#define P_SECTION_GAP  22
+#define P_SECTION_GAP  16
 #define P_FONT         "Consolas"
 #define P_FONT_BODY    "Segoe UI"
 
@@ -1266,12 +1266,17 @@ void MakeBitmap(const string name, int xoff, int yoff, const string file, int xs
 }
 
 // Sizing ------------------------------------------------------------
-// Layout heights for the Figma-inspired sections.
-#define P_HERO_H       220  // big balance number + label + last-sync line
-#define P_TILE_H       180  // KPI tile (3-up row)
-#define P_BIGTILE_H    220  // larger info tiles (2-up row)
-#define P_FOOTER_H     36   // developer attribution line
-#define P_GRAD_H       12   // bottom rainbow gradient strip
+// Section heights — sized to match the TRADESYNC PRO reference layout
+// so the OFFLINE pill stops overlapping the title, the 3 KPIs stop
+// looking like cramped tiles, and the SMART FEATURES grid has room.
+#define P_HERO_H       148  // ACCOUNT BALANCE label + big number + sparkline + sync line
+#define P_SPARK_H      28   // mini sparkline under the balance number
+#define P_KPI_H        72   // 3-up label/value column row (no individual tiles)
+#define P_BIGTILE_H    96   // SYMBOLS + RISK row (2-up tiles)
+#define P_SF_HEAD_H    28   // "+ SMART FEATURES" section header
+#define P_SF_TILE_H    60   // one cell in the 2x2 smart-features grid
+#define P_FOOTER_H     32   // developer attribution + build tag
+#define P_GRAD_H       8    // bottom cyan-to-purple glow strip
 
 int ComputePanelHeight()
 {
@@ -1279,16 +1284,13 @@ int ComputePanelHeight()
    // default) auto-fits to the section content.
    if(PanelHeight > 0) return PanelHeight;
    return P_HEADER_H
-        + P_SECTION_GAP
         + P_HERO_H
-        + P_SECTION_GAP
-        + P_TILE_H
-        + P_SECTION_GAP
-        + P_BIGTILE_H
-        + P_SECTION_GAP
+        + P_KPI_H + P_SECTION_GAP
+        + P_BIGTILE_H + P_SECTION_GAP
+        + P_SF_HEAD_H
+        + (P_SF_TILE_H * 2 + 8) + P_SECTION_GAP
         + P_FOOTER_H
-        + P_GRAD_H
-        + 4;
+        + P_GRAD_H;
 }
 
 // Recompute where the panel's top-left should sit on the chart, based
@@ -1342,36 +1344,32 @@ void BuildPanel()
    int y = g_panel_y;
 
    // ── Backdrop (chart can't bleed through). ─────────────────────────
-   MakeBox(PNL + "card",       x, y, g_panel_w, h, COL_BG, COL_BG_2);
-   // Vertical neon brand stripe on the very left edge — visible even
-   // at a glance, tells you which panel this is.
-   MakeBox(PNL + "leftbar",    x, y, 5, h, COL_CYAN, COL_CYAN);
+   MakeBox(PNL + "card",      x, y, g_panel_w, h, COL_BG, COL_BG_2);
+   // Vertical cyan brand stripe on the very left edge.
+   MakeBox(PNL + "leftbar",   x, y, 4, h, COL_CYAN, COL_CYAN);
 
    // ── Header band ───────────────────────────────────────────────────
-   MakeBox(PNL + "hdr",        x, y, g_panel_w, P_HEADER_H, COL_BG_2, COL_BG_2);
-   // Soft 1-px divider line between header and body for more polish.
-   MakeBox(PNL + "hdr_div",    x, y + P_HEADER_H, g_panel_w, 1,
+   MakeBox(PNL + "hdr",       x, y, g_panel_w, P_HEADER_H, COL_BG_2, COL_BG_2);
+   MakeBox(PNL + "hdr_div",   x, y + P_HEADER_H, g_panel_w, 1,
            COL_PANEL_EDGE, COL_PANEL_EDGE);
 
-   // Big "AG" badge — bumped 36 -> 44 so the brand reads at a glance.
-   MakeBox(PNL + "badge",      x + 20, y + 14, 44, 44, COL_CYAN, COL_CYAN);
-   MakeLabel(PNL + "badge_t",  x + 42, y + 20, "AG",
-             C'10,18,28', 18, "Segoe UI Black", ANCHOR_UPPER);
+   // Cyan dot + title cluster on the left.
+   MakeLabel(PNL + "dot",     x + P_PAD,        y + 18, "●",
+             COL_CYAN, 9, P_FONT_BODY);
+   MakeLabel(PNL + "title",   x + P_PAD + 14,   y + 14,
+             "LIVE TRADE COPIER", COL_TXT, 12, "Segoe UI Semibold");
+   MakeLabel(PNL + "sub",     x + P_PAD + 14,   y + 34,
+             "AntiGreed copier · " + EA_BUILD, COL_MUTED, 8, P_FONT_BODY);
 
-   // Title + sub-line.
-   MakeLabel(PNL + "title", x + 76, y + 18,
-             "LIVE TRADE COPIER", COL_TXT, 14, "Segoe UI Semibold");
-   MakeLabel(PNL + "sub",   x + 76, y + 44,
-             "AntiGreed signal mirror · " + EA_BUILD, COL_MUTED, 9, P_FONT_BODY);
-
-   // Status pill on the right (dynamic colour set in RedrawPanel).
-   int pill_w = 120;
-   MakeBox(PNL + "pill",         x + g_panel_w - pill_w - 18, y + 22, pill_w, 30,
+   // Status pill on the right — sized tight so it never crowds the title.
+   int pill_w = 92;
+   int pill_x = x + g_panel_w - pill_w - P_PAD;
+   MakeBox(PNL + "pill",         pill_x, y + 14, pill_w, 28,
            C'42,22,32', COL_RED);
-   MakeLabel(PNL + "pill_arrow", x + g_panel_w - pill_w - 4,  y + 28,
-             "↘", COL_RED, 12, "Segoe UI Semibold");
-   MakeLabel(PNL + "pill_t",     x + g_panel_w - pill_w + 24, y + 28,
-             "OFFLINE", COL_RED, 10, "Segoe UI Semibold");
+   MakeLabel(PNL + "pill_arrow", pill_x + 12, y + 21,
+             "●", COL_RED, 10, P_FONT_BODY);
+   MakeLabel(PNL + "pill_t",     pill_x + 28, y + 20,
+             "OFFLINE", COL_RED, 9, "Segoe UI Semibold");
 }
 
 string ShortTime(datetime t)
@@ -1413,174 +1411,196 @@ void RedrawPanel()
    color st_clr = COL_GREEN;
    color st_bg  = C'18,42,32';
    string st_text  = "LIVE";
-   string st_arrow = "↗";
    if(g_last_status == "blocked")
    {
       st_clr = C'255,179,0'; st_bg = C'52,38,8';
-      st_text = "BLOCKED"; st_arrow = "⚠";
+      st_text = "BLOCKED";
    }
    else if(g_last_status == "stopped")
    {
       st_clr = COL_RED; st_bg = C'46,22,30';
-      st_text = "OFFLINE"; st_arrow = "↘";
+      st_text = "OFFLINE";
    }
-   ObjectSetInteger(0, PNL + "pill",      OBJPROP_BGCOLOR, st_bg);
-   ObjectSetInteger(0, PNL + "pill",      OBJPROP_BORDER_COLOR, st_clr);
-   ObjectSetInteger(0, PNL + "pill_t",    OBJPROP_COLOR, st_clr);
-   ObjectSetInteger(0, PNL + "pill_arrow",OBJPROP_COLOR, st_clr);
-   ObjectSetString (0, PNL + "pill_t",    OBJPROP_TEXT, st_text);
-   ObjectSetString (0, PNL + "pill_arrow",OBJPROP_TEXT, st_arrow);
-   string sub = "AntiGreed signal mirror · " + EA_BUILD + " · poll " +
-                IntegerToString(MathMax(2, PollSeconds)) + "s";
+   ObjectSetInteger(0, PNL + "pill",       OBJPROP_BGCOLOR, st_bg);
+   ObjectSetInteger(0, PNL + "pill",       OBJPROP_BORDER_COLOR, st_clr);
+   ObjectSetInteger(0, PNL + "pill_t",     OBJPROP_COLOR, st_clr);
+   ObjectSetInteger(0, PNL + "pill_arrow", OBJPROP_COLOR, st_clr);
+   ObjectSetString (0, PNL + "pill_t",     OBJPROP_TEXT, st_text);
+   string sub = "AntiGreed copier · " + EA_BUILD;
    if(g_last_status != "live" && StringLen(g_last_error) > 0)
       sub = EA_BUILD + " · " + g_last_error;
    ObjectSetString(0, PNL + "sub", OBJPROP_TEXT, sub);
 
-   // ── Hero block — big balance number, label, last-sync line. ──────
-   int y = g_panel_y + P_HEADER_H + P_SECTION_GAP;
+   // ── Hero block: ACCOUNT BALANCE label, big number, sparkline, sync ─
+   int y = g_panel_y + P_HEADER_H;
    string cur = AccountInfoString(ACCOUNT_CURRENCY);
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
    double eq  = AccountInfoDouble(ACCOUNT_EQUITY);
    double floating = eq - bal;
-   string equity_pct_text = "";
-   if(bal > 0.01)
-   {
-      double pct = (floating / bal) * 100.0;
-      equity_pct_text = StringFormat("%s%.2f%%", (pct >= 0 ? "+" : ""), pct);
-   }
-   // Vertical layout for the hero block — every element advances the
-   // y-cursor by a generous fixed amount so labels/numbers never collide.
-   int hy = y + 24;
-   MakeLabel(PNL + "hero_l", x + P_PAD, hy,
-             "BALANCE", COL_MUTED, 10, P_FONT_BODY);
-   hy += 40;  // gap below label, before the big number
-   MakeLabel(PNL + "hero_v", x + P_PAD, hy,
-             FmtMoney(bal, cur), COL_HERO, 32, "Segoe UI Semibold");
-   // Trending-up arrow next to the big number — replaces the lightning
-   // bolt glyph, which renders as a tofu box on Wine MT5's font.
-   MakeLabel(PNL + "hero_bolt", x + g_panel_w - 56, hy + 6,
-             "↗", COL_HERO, 32, "Segoe UI Semibold");
-   hy += 90;  // big enough to keep "Last sync" clear of the number above
-   string sync = (g_last_poll_ok > 0)
-      ? "Last sync: " + TimeToString(g_last_poll_ok, TIME_SECONDS)
-      : "Last sync: —";
-   MakeLabel(PNL + "hero_sub", x + P_PAD, hy,
-             sync, COL_MUTED, 9, P_FONT_BODY);
+   double equity_pct = (bal > 0.01) ? (floating / bal) * 100.0 : 0.0;
 
-   y += P_HERO_H + P_SECTION_GAP;
+   MakeLabel(PNL + "hero_l", x + P_PAD, y + 16,
+             "ACCOUNT BALANCE", COL_MUTED, 9, P_FONT_BODY);
+   MakeLabel(PNL + "hero_v", x + P_PAD, y + 34,
+             FmtMoney(bal, cur), COL_HERO, 24, "Segoe UI Semibold");
 
-   // ── 3 KPI tiles: green / red / blue tinted, with coloured top stripes
-   //    + an "icon" letter badge at the top-left of each tile. ────────
+   // Mini sparkline — 9 cyan bars stepping up to the right. Static
+   // height pattern; the goal is decoration that matches the target
+   // mock, not a real time-series (the EA doesn't keep history).
+   DrawSparkline("spark", x + P_PAD, y + 76, 110, P_SPARK_H);
+
+   string sync_text;
+   long login = AccountInfoInteger(ACCOUNT_LOGIN);
+   if(g_last_poll_ok > 0)
+      sync_text = StringFormat("Last sync: %s · Account #%I64d",
+                               TimeToString(g_last_poll_ok, TIME_SECONDS), login);
+   else
+      sync_text = StringFormat("Last sync: — · Account #%I64d", login);
+   MakeLabel(PNL + "hero_sub", x + P_PAD, y + 116,
+             sync_text, COL_MUTED, 8, P_FONT_BODY);
+
+   y += P_HERO_H;
+
+   // ── 3-up KPI strip: TODAY P&L | OPEN | EQUITY ────────────────────
+   // No background tiles — just label-over-value columns separated by
+   // vertical 1-px dividers. Matches the target's clean horizontal row.
+   int col_w = (g_panel_w - (P_PAD * 2)) / 3;
+   string today_v  = StringFormat("%+d", g_copies_today);
+   string open_v   = IntegerToString(OurOpenPositions());
+   string equity_v = StringFormat("%s%.2f%%", (equity_pct >= 0 ? "+" : ""), equity_pct);
+   color today_c  = (g_copies_today >= 0) ? COL_GREEN : COL_RED;
+   color equity_c = (equity_pct  >= 0)    ? COL_GREEN : COL_RED;
+
+   DrawKpiColumn("k_today",  x + P_PAD,                  y, col_w, P_KPI_H,
+                 "TODAY P&L", today_v, today_c);
+   DrawKpiColumn("k_open",   x + P_PAD + col_w,          y, col_w, P_KPI_H,
+                 "OPEN",      open_v,  COL_TXT);
+   DrawKpiColumn("k_equity", x + P_PAD + col_w * 2,      y, col_w, P_KPI_H,
+                 "EQUITY",    equity_v, equity_c);
+   // Vertical dividers between the three columns.
+   MakeBox(PNL + "k_div1", x + P_PAD + col_w,     y + 12, 1, P_KPI_H - 24, COL_PANEL_EDGE, COL_PANEL_EDGE);
+   MakeBox(PNL + "k_div2", x + P_PAD + col_w * 2, y + 12, 1, P_KPI_H - 24, COL_PANEL_EDGE, COL_PANEL_EDGE);
+
+   y += P_KPI_H + P_SECTION_GAP;
+
+   // ── SYMBOLS + RISK row (2 tiles, equal width) ─────────────────────
    int gap = 10;
-   int tile_w = (g_panel_w - (P_PAD * 2) - (gap * 2)) / 3;
-   string copy_text;
-   if(g_last_copy_text == "—") copy_text = "—";
-   else copy_text = g_last_copy_text;
-
-   DrawColouredTile("t_today", x + P_PAD,                    y, tile_w, P_TILE_H,
-                    "$", COL_GREEN_TILE, COL_GREEN,
-                    "TODAY", IntegerToString(g_copies_today));
-   DrawColouredTile("t_open",  x + P_PAD + tile_w + gap,     y, tile_w, P_TILE_H,
-                    "$", COL_RED_TILE,   COL_RED,
-                    "OPEN", IntegerToString(OurOpenPositions()));
-   DrawColouredTile("t_equity",x + P_PAD + (tile_w + gap)*2, y, tile_w, P_TILE_H,
-                    "≡", COL_BLUE_TILE,  COL_BLUE,
-                    "EQUITY", (equity_pct_text == "" ? FmtMoney(eq, cur) : equity_pct_text));
-
-   y += P_TILE_H + P_SECTION_GAP;
-
-   // ── 2 big tiles below: SYMBOLS + RISK summary. ───────────────────
    int big_w = (g_panel_w - (P_PAD * 2) - gap) / 2;
-   // Left — symbols summary, coloured like a BUY signal tile (green).
-   string sym_value = g_filter_active
-      ? IntegerToString(g_enabled_count)
-      : "ALL";
-   string sym_sub = g_filter_active
-      ? "Filtered whitelist"
-      : "Mirror every admin trade";
-   DrawSignalTile("s_buy",  x + P_PAD,                  y, big_w, P_BIGTILE_H,
-                  COL_GREEN_TILE, COL_GREEN, "SYMBOLS",
-                  sym_value, sym_sub);
-   // Right — risk summary, coloured like a SELL signal tile (red).
+   string sym_value = g_filter_active ? IntegerToString(g_enabled_count) : "ALL";
+   string sym_sub   = g_filter_active ? "Filtered whitelist" : "Mirror every admin trade";
+   DrawInfoTile("s_sym",  x + P_PAD,             y, big_w, P_BIGTILE_H,
+                COL_GREEN, "SYMBOLS", sym_value, sym_sub);
    string risk_value = StringFormat("x%.2f", RiskMultiplier);
    string risk_sub   = StringFormat("max %.2f lot per trade", MaxLotPerTrade);
-   DrawSignalTile("s_sell", x + P_PAD + big_w + gap,    y, big_w, P_BIGTILE_H,
-                  COL_RED_TILE, COL_RED, "RISK",
-                  risk_value, risk_sub);
+   DrawInfoTile("s_risk", x + P_PAD + big_w + gap, y, big_w, P_BIGTILE_H,
+                C'255,179,0', "RISK", risk_value, risk_sub);
 
    y += P_BIGTILE_H + P_SECTION_GAP;
 
-   // Developer attribution — centered above the gradient strip.
-   MakeLabel(PNL + "footer", x + g_panel_w / 2, y + 4,
-             "Developed by Martin Kristof", COL_MUTED, 8, P_FONT_BODY,
-             ANCHOR_UPPER);
+   // ── SMART FEATURES section ────────────────────────────────────────
+   MakeLabel(PNL + "sf_head_l", x + P_PAD,                   y + 8,
+             "+", COL_CYAN, 11, "Segoe UI Semibold");
+   MakeLabel(PNL + "sf_head",   x + P_PAD + 14,              y + 8,
+             "SMART FEATURES", COL_TXT, 10, "Segoe UI Semibold");
+   y += P_SF_HEAD_H;
 
+   // 2x2 grid of tiny feature tiles. Values are static where we don't
+   // have live data — the EA doesn't track historical drawdown or
+   // win-rate of its own copies, so those read "—".
+   int sf_w = (g_panel_w - (P_PAD * 2) - gap) / 2;
+   DrawSmartTile("sf_dd",    x + P_PAD,                y,
+                 sf_w, P_SF_TILE_H, COL_RED,
+                 "🛡", "Max Drawdown", "—");
+   DrawSmartTile("sf_hours", x + P_PAD + sf_w + gap,   y,
+                 sf_w, P_SF_TILE_H, COL_CYAN,
+                 "⏱", "Trading Hours", "24/5");
+   y += P_SF_TILE_H + 8;
+   string poll_v = StringFormat("%ds", MathMax(2, PollSeconds));
+   DrawSmartTile("sf_wr",    x + P_PAD,                y,
+                 sf_w, P_SF_TILE_H, COL_GREEN,
+                 "✓", "Win Rate", "—");
+   DrawSmartTile("sf_alert", x + P_PAD + sf_w + gap,   y,
+                 sf_w, P_SF_TILE_H, C'255,179,0',
+                 "♪", "Alerts", (Verbose ? "ON" : "OFF"));
+   y += P_SF_TILE_H + P_SECTION_GAP;
+
+   // ── Footer: dev attribution left, build tag right ────────────────
+   MakeLabel(PNL + "footer_l", x + P_PAD, y + 6,
+             "DEVELOPED BY MARTIN KRISTOF", COL_MUTED, 8, P_FONT_BODY);
+   MakeLabel(PNL + "footer_r", x + g_panel_w - P_PAD, y + 6,
+             "BUILD " + EA_BUILD, COL_MUTED, 8, P_FONT_BODY, ANCHOR_RIGHT_UPPER);
    y += P_FOOTER_H;
 
-   // ── Bottom rainbow strip — cyan → indigo → purple, faked with
-   //    stacked narrow rectangles. The Figma "glow" along the bottom. ─
+   // Bottom cyan→indigo→purple glow strip.
    DrawGradientStrip(x, y, g_panel_w, P_GRAD_H);
 
    ChartRedraw();
 }
 
-// One of the three coloured KPI tiles. Top stripe in the accent color,
-// dollar/icon glyph in the top-left, label below it, big number at bottom.
-void DrawColouredTile(const string id, int xoff, int yoff, int w, int h,
-                      const string icon, color bg, color accent,
-                      const string label, const string value)
+// Mini bar sparkline — n_bars short rectangles in cyan, stepping up
+// in height across the width. Decorative only; the EA doesn't store
+// a per-tick equity history.
+void DrawSparkline(const string id, int xoff, int yoff, int w, int h)
 {
-   // Backdrop + top accent stripe.
-   MakeBox  (PNL + id + "_bg",   xoff,      yoff,        w, h,
-             bg, accent);
-   MakeBox  (PNL + id + "_top",  xoff,      yoff,        w, 4,
-             accent, accent);
-   // Bottom-right corner accent — small bright square, gives each tile
-   // a "live indicator" feel like the Figma's glow corners.
-   MakeBox  (PNL + id + "_corn", xoff + w - 12, yoff + h - 12, 6, 6,
-             accent, accent);
-   // Top row: icon badge on the left, label sitting to its right at
-   // the badge's vertical centre. Smaller icon + shorter labels so
-   // the label can't overflow the tile width even on small tiles.
-   int badge_y = yoff + 22;
-   MakeBox  (PNL + id + "_icon", xoff + 16, badge_y,     26, 26,
-             accent, accent);
-   MakeLabel(PNL + id + "_glyph",xoff + 29, badge_y + 6, icon,
-             C'10,18,24', 12, "Segoe UI Black", ANCHOR_UPPER);
-   MakeLabel(PNL + id + "_l",    xoff + 50, badge_y + 7, label,
-             COL_MUTED, 10, P_FONT_BODY);
-   // Big number sits well below the top-row, with comfortable air
-   // both above (separation from label-row) and below (edge clearance).
-   MakeLabel(PNL + id + "_v",    xoff + 18, yoff + h - 60, value,
-             accent, 22, "Segoe UI Semibold");
+   int n_bars = 12;
+   int bar_gap = 2;
+   int bar_w = (w - (n_bars - 1) * bar_gap) / n_bars;
+   if(bar_w < 2) bar_w = 2;
+   // Heights cycle through a fixed pattern — "rising" feel.
+   int pattern[] = {30, 45, 38, 60, 55, 70, 65, 80, 75, 90, 82, 95};
+   for(int i = 0; i < n_bars; i++)
+   {
+      int bh = (int)((double)h * (pattern[i] / 100.0));
+      if(bh < 2) bh = 2;
+      MakeBox(PNL + id + "_" + IntegerToString(i),
+              xoff + i * (bar_w + bar_gap),
+              yoff + (h - bh),
+              bar_w, bh,
+              COL_CYAN, COL_CYAN);
+   }
 }
 
-// The two larger "BUY SIGNAL / SELL SIGNAL" style tiles at the bottom.
-void DrawSignalTile(const string id, int xoff, int yoff, int w, int h,
-                    color bg, color accent, const string label,
-                    const string value, const string subline)
+// One KPI column (label on top, value below) inside the 3-up strip.
+// No background — caller draws vertical dividers between adjacent
+// columns so the row reads as a single horizontal strip.
+void DrawKpiColumn(const string id, int xoff, int yoff, int w, int h,
+                   const string label, const string value, color value_clr)
 {
-   MakeBox  (PNL + id + "_bg",  xoff,           yoff,           w, h,
-             bg, accent);
-   MakeBox  (PNL + id + "_top", xoff,           yoff,           w, 4,
-             accent, accent);
-   // Bottom-right corner accent matching the KPI tiles.
-   MakeBox  (PNL + id + "_corn", xoff + w - 14, yoff + h - 14, 8, 8,
-             accent, accent);
-   // Top row: label on the left, status dot on the right.
-   int top_y = yoff + 26;
-   MakeLabel(PNL + id + "_l",   xoff + 22,      top_y,          label,
-             accent, 11, "Segoe UI Semibold");
-   MakeLabel(PNL + id + "_dot", xoff + w - 36, top_y,           "●",
-             accent, 12, P_FONT_BODY);
-   // Big value vertically centred — h-120 leaves room above and
-   // ~80px clearance for the subline below.
-   MakeLabel(PNL + id + "_v",   xoff + 22,      yoff + h - 120, value,
-             accent, 28, "Segoe UI Semibold");
-   // Subline pinned 36px from the tile bottom so there's a clear gap
-   // between the value-row (which is ~36px tall) and the subline.
-   MakeLabel(PNL + id + "_s",   xoff + 22,      yoff + h - 36,  subline,
-             COL_MUTED, 10, P_FONT_BODY);
+   MakeLabel(PNL + id + "_l", xoff + 12, yoff + 14,
+             label, COL_MUTED, 9, P_FONT_BODY);
+   MakeLabel(PNL + id + "_v", xoff + 12, yoff + 36,
+             value, value_clr, 18, "Segoe UI Semibold");
+}
+
+// Larger tile used for SYMBOLS / RISK — label + coloured status dot
+// in the header, big value, subline.
+void DrawInfoTile(const string id, int xoff, int yoff, int w, int h,
+                  color accent, const string label,
+                  const string value, const string subline)
+{
+   MakeBox(PNL + id + "_bg", xoff, yoff, w, h, COL_BG_TILE, COL_PANEL_EDGE);
+   MakeLabel(PNL + id + "_l",   xoff + 14, yoff + 12,
+             label, COL_MUTED, 9, P_FONT_BODY);
+   MakeLabel(PNL + id + "_dot", xoff + w - 22, yoff + 12,
+             "●", accent, 9, P_FONT_BODY);
+   MakeLabel(PNL + id + "_v",   xoff + 14, yoff + 30,
+             value, accent, 18, "Segoe UI Semibold");
+   MakeLabel(PNL + id + "_s",   xoff + 14, yoff + h - 22,
+             subline, COL_MUTED, 8, P_FONT_BODY);
+}
+
+// One cell in the SMART FEATURES 2x2 grid. Icon glyph + label / value.
+void DrawSmartTile(const string id, int xoff, int yoff, int w, int h,
+                   color icon_clr, const string icon,
+                   const string label, const string value)
+{
+   MakeBox(PNL + id + "_bg", xoff, yoff, w, h, COL_BG_TILE, COL_PANEL_EDGE);
+   MakeLabel(PNL + id + "_i", xoff + 12, yoff + 8,
+             icon, icon_clr, 14, P_FONT_BODY);
+   MakeLabel(PNL + id + "_l", xoff + 36, yoff + 10,
+             label, COL_TXT, 9, "Segoe UI Semibold");
+   MakeLabel(PNL + id + "_v", xoff + 36, yoff + 30,
+             value, icon_clr, 11, "Segoe UI Semibold");
 }
 
 // Cyan → blue → purple progression along the bottom of the card. Uses
