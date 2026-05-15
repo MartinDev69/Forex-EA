@@ -1090,19 +1090,50 @@
               </div>
               <div class="ea-cfg-field" style="grid-column:1/-1">
                 <label>API key <span style="color:var(--muted);text-transform:none;letter-spacing:0;font-size:9px">(treat like a password)</span></label>
-                <div style="display:flex;gap:6px;align-items:center">
-                  <input :type="show_key ? 'text' : 'password'" readonly x-model="cfg.api_key"
-                         style="flex:1;background:var(--surface2);border:1px solid var(--edge2);border-radius:8px;padding:9px 12px;color:var(--text);font-family:var(--mono);font-size:12px"/>
-                  <button class="btn-ol-g" style="padding:8px 10px;font-size:11px"
-                          @click="show_key = !show_key" x-text="show_key ? 'Hide' : 'Show'"></button>
-                  <button class="btn-ol-g" style="padding:8px 10px;font-size:11px"
-                          @click="copy(cfg.api_key, 'API key')">Copy</button>
-                  <button class="btn-ol-r" style="padding:8px 10px;font-size:11px"
-                          @click="rotate()" :disabled="busy">Rotate</button>
-                </div>
-                <div style="font-size:10px;color:var(--muted);margin-top:4px">
-                  Rotating the key invalidates the one in your installed EA — paste the new value into the EA after rotating.
-                </div>
+                <!-- Three states:
+                     - api_key has a value → user just issued or rotated, show + Copy + Rotate.
+                     - api_key null but api_key_set true → key is set on the server but hashed; we can't display it.
+                     - api_key null and api_key_set false → no key yet; clicking Rotate issues one. -->
+                <template x-if="cfg.api_key">
+                  <div>
+                    <div style="display:flex;gap:6px;align-items:center">
+                      <input :type="show_key ? 'text' : 'password'" readonly x-model="cfg.api_key"
+                             style="flex:1;background:var(--surface2);border:1px solid var(--edge2);border-radius:8px;padding:9px 12px;color:var(--text);font-family:var(--mono);font-size:12px"/>
+                      <button class="btn-ol-g" style="padding:8px 10px;font-size:11px"
+                              @click="show_key = !show_key" x-text="show_key ? 'Hide' : 'Show'"></button>
+                      <button class="btn-ol-g" style="padding:8px 10px;font-size:11px"
+                              @click="copy(cfg.api_key, 'API key')">Copy</button>
+                      <button class="btn-ol-r" style="padding:8px 10px;font-size:11px"
+                              @click="rotate()" :disabled="busy">Rotate</button>
+                    </div>
+                    <div style="font-size:10px;color:var(--muted);margin-top:4px">
+                      Copy this into your EA now — we don't keep the plaintext on the server. Rotating invalidates the one in your installed EA.
+                    </div>
+                  </div>
+                </template>
+                <template x-if="!cfg.api_key && cfg.api_key_set">
+                  <div>
+                    <div style="display:flex;gap:6px;align-items:center">
+                      <input type="password" readonly value="ea_••••••••••••••••••••"
+                             style="flex:1;background:var(--surface2);border:1px solid var(--edge2);border-radius:8px;padding:9px 12px;color:var(--muted);font-family:var(--mono);font-size:12px"/>
+                      <button class="btn-ol-r" style="padding:8px 10px;font-size:11px"
+                              @click="rotate()" :disabled="busy">Rotate</button>
+                    </div>
+                    <div style="font-size:10px;color:var(--muted);margin-top:4px">
+                      Key is set but hidden — the plaintext is only stored on your EA. Rotate if you've lost it.
+                    </div>
+                  </div>
+                </template>
+                <template x-if="!cfg.api_key && !cfg.api_key_set">
+                  <div>
+                    <div style="display:flex;gap:6px;align-items:center">
+                      <input type="text" readonly value="(no key issued yet)"
+                             style="flex:1;background:var(--surface2);border:1px solid var(--edge2);border-radius:8px;padding:9px 12px;color:var(--muted);font-family:var(--mono);font-size:12px"/>
+                      <button class="btn-ol-g" style="padding:8px 10px;font-size:11px"
+                              @click="rotate()" :disabled="busy">Generate</button>
+                    </div>
+                  </div>
+                </template>
               </div>
             </div>
 

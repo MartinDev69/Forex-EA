@@ -1091,7 +1091,10 @@ document.addEventListener("alpine:init", () => {
   // ---------- COPY-TRADER EA SETUP ----------
   Alpine.data("eaSetup", () => ({
     token: localStorage.getItem(TOKEN_KEY),
-    cfg: { api_base_url: "", api_key: "", ad_id: "" },
+    // api_key is null when the key exists server-side but only as a
+    // hash — we can't reconstruct the plaintext for display. The
+    // template branches on api_key_set to render a masked view.
+    cfg: { api_base_url: "", api_key: null, api_key_set: false, ad_id: "" },
     show_key: false,
     busy: false,
     msg: "",

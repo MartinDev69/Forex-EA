@@ -1108,9 +1108,17 @@ def list_pending_orders(user: dict = Depends(current_user)) -> list[dict]:
 # ---------- EA copy-trader endpoints ----------
 
 class EAConfigResponse(BaseModel):
-    """Config the user pastes into the AntiGreedCopier EA."""
+    """Config the user pastes into the AntiGreedCopier EA.
+
+    ``api_key`` is null when the key has already been issued and stored
+    as a hash — we don't keep the plaintext, so the only way to see
+    it again is to rotate. ``api_key_set`` flags whether *some* key
+    exists; the dashboard uses it to render "set but hidden" instead
+    of a "no key" prompt.
+    """
     api_base_url: str
-    api_key: str
+    api_key: str | None = None
+    api_key_set: bool = False
     ad_id: str
     instructions_url: str | None = None
 
@@ -1154,9 +1162,11 @@ def my_picks(user: dict = Depends(current_user)) -> MyPicksResponse:
 @app.get("/me/ea-config", response_model=EAConfigResponse)
 def my_ea_config(user: dict = Depends(current_user)) -> EAConfigResponse:
     """Return the current user's copy-trading EA config — base URL,
-    API key, AD-ID. Generates the key on first call if missing.
-    Admin doesn't need this (they're the source, not the copier),
-    but the endpoint is open to all users for symmetry.
+    API key, AD-ID. Generates the key on first call; returns null for
+    api_key (with api_key_set=true) when a hashed key already exists
+    and the plaintext is no longer recoverable. Admin doesn't need
+    this (they're the source, not the copier), but the endpoint is
+    open to all users for symmetry.
     """
     username = user.get("username") or user.get("sub") or ""
     if not username:
@@ -1169,6 +1179,7 @@ def my_ea_config(user: dict = Depends(current_user)) -> EAConfigResponse:
     return EAConfigResponse(
         api_base_url=base.rstrip("/"),
         api_key=key,
+        api_key_set=user_store.has_ea_api_key(username),
         ad_id=username,
     )
 
@@ -1188,7 +1199,10 @@ def rotate_my_ea_config(user: dict = Depends(current_user)) -> EAConfigResponse:
         raise HTTPException(404, "user not found") from None
     base = os.environ.get("PUBLIC_BASE_URL") or "http://163.5.178.251:8000"
     return EAConfigResponse(
-        api_base_url=base.rstrip("/"), api_key=key, ad_id=username,
+        api_base_url=base.rstrip("/"),
+        api_key=key,
+        api_key_set=True,
+        ad_id=username,
     )
 
 

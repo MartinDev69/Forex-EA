@@ -517,9 +517,21 @@ class _EaSetupCardState extends State<_EaSetupCard> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final accent = isDark ? kNeonGreen : kLightWin;
     final cfg = widget.config;
-    final keyDisplay = cfg == null
-        ? '—'
-        : (_showKey ? cfg.apiKey : _mask(cfg.apiKey));
+    // Three states for the API-key field:
+    //   - cfg.apiKey populated → just issued / rotated; show with mask toggle.
+    //   - apiKey empty but apiKeySet → key is hashed server-side; display
+    //     a non-revealable placeholder so the user knows it exists.
+    //   - apiKey empty and !apiKeySet → no key yet; prompt rotation.
+    String keyDisplay;
+    if (cfg == null) {
+      keyDisplay = '—';
+    } else if (cfg.apiKey.isNotEmpty) {
+      keyDisplay = _showKey ? cfg.apiKey : _mask(cfg.apiKey);
+    } else if (cfg.apiKeySet) {
+      keyDisplay = 'ea_•••••••••••••• (hidden — rotate to view)';
+    } else {
+      keyDisplay = '(no key issued yet — tap Rotate to generate)';
+    }
 
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 6, 12, 12),

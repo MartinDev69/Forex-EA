@@ -595,16 +595,22 @@ class UserStore:
             (self._hash_ea_key(plaintext), username),
         )
 
-    def ensure_ea_api_key(self, username: str) -> str:
-        """Return the user's EA API key; generates one on first call.
+    def ensure_ea_api_key(self, username: str) -> str | None:
+        """Issue or fetch the user's EA API key.
 
-        Note that we can only *return* the plaintext at issuance time
-        (or right after legacy migration). Subsequent lookups can't
-        reconstruct the plaintext — only the hash is stored — so the EA
-        must hold onto whatever this returns. Re-issuing without an EA
-        update path would brick the user's installed copy, so we
-        idempotently return the same plaintext during the legacy
-        window (before migration).
+        Returns:
+            - the plaintext key on first issuance,
+            - the plaintext on the lazy-migration pass for legacy
+              rows that still have plaintext in ea_api_key, OR
+            - None when a hashed key already exists but the plaintext
+              is no longer recoverable. Callers (the /me/ea-config
+              endpoint) surface the None as "key is set but hidden —
+              rotate to issue a new one".
+
+        Issuing always returns plaintext exactly once — after that the
+        server only knows the hash. has_ea_api_key() reports whether
+        any key exists, so the dashboard can distinguish "no key yet"
+        from "key set but masked".
         """
         import secrets
         with self._conn() as c:
@@ -623,14 +629,11 @@ class UserStore:
                 self._migrate_one_ea_key(c, username, legacy_plain)
                 return legacy_plain
             if row["ea_api_key_hash"]:
-                # Already hashed and we have no plaintext to return;
-                # caller must rotate to get a usable key. This path
-                # shouldn't fire in practice — ensure_ea_api_key() is
-                # the bootstrap helper, and the bootstrap-then-rotate
-                # flow already passed through the legacy branch above.
-                raise RuntimeError(
-                    f"ea key for {username} is hashed; call rotate_ea_api_key to issue a new one"
-                )
+                # Already hashed: the plaintext is gone. Don't auto-
+                # rotate — that would silently invalidate the operator's
+                # installed EA. Let the caller decide between showing a
+                # masked placeholder and prompting for rotation.
+                return None
             new_key = "ea_" + secrets.token_urlsafe(32)
             c.execute(
                 "UPDATE auth_users SET ea_api_key_hash = ?, ea_api_key = NULL "
@@ -638,6 +641,21 @@ class UserStore:
                 (self._hash_ea_key(new_key), username),
             )
             return new_key
+
+    def has_ea_api_key(self, username: str) -> bool:
+        """True iff the user has *some* EA key on file (plaintext during
+        the legacy window, hashed otherwise). Used by /me/ea-config to
+        render a masked-but-set state instead of a "no key" prompt.
+        """
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT ea_api_key, ea_api_key_hash FROM auth_users "
+                "WHERE username = ?",
+                (username,),
+            ).fetchone()
+        if row is None:
+            return False
+        return bool(row["ea_api_key"] or row["ea_api_key_hash"])
 
     def rotate_ea_api_key(self, username: str) -> str:
         """Force-issue a new EA key, invalidating any existing one.
