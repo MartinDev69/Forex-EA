@@ -67,7 +67,7 @@ from src.api.totp import generate_secret, provisioning_uri, verify_code
 from src.api.totp_store import TOTPStore
 from src.api.ea_signals import SignalFeed
 from src.api.ea_account_reports import EAAccountReportStore
-from src.api.ea_fills import EAFillStore
+from src.api.ea_fills import EAFill, EAFillStore
 from src.api.bot_control import BotControlStore
 from src.api.subscription_requests import (
     SubscriptionRequest,
@@ -541,7 +541,13 @@ class TradeResponse(BaseModel):
     side: Literal["BUY", "SELL"]
     entry_price: float
     exit_price: float | None
-    pnl: float
+    # Null when the operator's EA hasn't reported a fill for this
+    # broker_ticket yet — happens for trades placed before the EA was
+    # upgraded with /me/ea-fill support, and briefly between an OPEN
+    # event firing and the operator's broker confirming the fill. The
+    # dashboard renders null as "—" so we never surface admin's pnl
+    # (wrong currency, wrong lot size) under an operator's row.
+    pnl: float | None = None
     opened_at: datetime
     closed_at: datetime | None
     lot_size: float = 0.0
@@ -576,6 +582,28 @@ def _operator_pick_filter(username: str) -> set[str] | None:
     except Exception:
         log.exception("pick filter resolve failed for %s", username)
         return None
+
+
+def _operator_open_count(username: str) -> int:
+    """Count the operator's open positions, preferring the EA fill
+    store when it has any data for this user. Falls back to the
+    journal-based estimate (master trades since first_seen_at,
+    filtered to execute_picks) so dashboards still show *something*
+    for users whose EA hasn't yet been upgraded to POST /me/ea-fill.
+    """
+    if not username:
+        return 0
+    fills = ea_fill_store.recent(username, limit=1)
+    if fills:
+        return ea_fill_store.count_open(username)
+    # No EA fills recorded yet — rely on the journal-with-filter
+    # estimate so the dashboard isn't stuck at zero.
+    report = ea_account_store.get(username)
+    since_iso = report.first_seen_at.isoformat() if (
+        report and report.first_seen_at) else None
+    return _open_positions(
+        since_iso=since_iso, pick_filter=_operator_pick_filter(username),
+    )
 
 
 def _resolve_password(body: BrokerConfigRequest, username: str) -> str:
@@ -645,7 +673,7 @@ def get_status(user: dict = Depends(current_user)) -> StatusResponse:
     open_positions: int
     if user.get("role") != "admin":
         username = user.get("username") or user.get("sub") or ""
-        open_positions = ea_fill_store.count_open(username) if username else 0
+        open_positions = _operator_open_count(username)
     else:
         open_positions = _open_positions()
     return StatusResponse(
@@ -675,10 +703,11 @@ def account(user: dict = Depends(current_user)) -> AccountResponse:
             return AccountResponse(
                 balance=balance,
                 equity=equity,
-                # Operator's own MT5 open count via the EA fill store —
-                # admin's journal would over- or under-count depending
-                # on whether the EA actually copied each master trade.
-                open_positions=ea_fill_store.count_open(username),
+                # Operator's own MT5 open count when the EA has reported
+                # fills; falls back to the journal-with-pick-filter
+                # estimate so operators on older EA builds still see a
+                # plausible count instead of zero.
+                open_positions=_operator_open_count(username),
                 daily_pnl=floating,
                 currency=report.currency,
             )
@@ -780,36 +809,58 @@ def toggle_strategy(name: str, _user: dict = Depends(require_2fa)) -> StrategyRe
 
 @app.get("/trades", response_model=list[TradeResponse])
 def trades(limit: int = 20, user: dict = Depends(current_user)) -> list[TradeResponse]:
-    # Non-admin operators read from their own EA-reported fills, not the
-    # master journal — admin's lot sizing, currency, and broker fees
-    # don't apply to them, and reading admin's pnl gave them numbers
-    # that didn't match their own MT5 statement. The EA writes to
-    # /me/ea-fill on every PositionOpen/Close, so this is the operator's
-    # actual broker reality.
+    # Non-admin operators read from admin's journal for trade metadata
+    # (symbol, side, entry/exit price, time) but overlay the operator's
+    # *own* pnl from ea_fill_store when the EA has reported it. Trades
+    # without an EA fill (old trades placed before the EA was upgraded;
+    # trades briefly in flight) get pnl=null so the dashboard renders
+    # "—" instead of admin's USD value on a ZAR account.
     if user.get("role") != "admin":
         username = user.get("username") or user.get("sub") or ""
         if not username:
             return []
-        fills = ea_fill_store.recent(username, limit=limit)
-        return [
-            TradeResponse(
-                id=f.id,
-                symbol=f.symbol,
-                side=f.side,
-                entry_price=f.entry_price,
-                exit_price=f.exit_price,
-                pnl=f.pnl or 0.0,
-                opened_at=f.opened_at,
-                closed_at=f.closed_at,
-                lot_size=f.lot_size,
-                stop_loss=f.stop_loss,
-                take_profit=f.take_profit,
-                strategy=f.strategy,
-                broker_ticket=f.broker_ticket,
-                close_reason=f.close_reason,
-            )
-            for f in fills
-        ]
+        report = ea_account_store.get(username)
+        if report is None or report.first_seen_at is None:
+            return []
+        since_iso = report.first_seen_at.isoformat()
+        pick_filter = _operator_pick_filter(username)
+        rows = journal.recent(limit=limit, since_iso=since_iso)
+        if pick_filter is not None:
+            rows = [r for r in rows if (r.get("strategy") or "") in pick_filter]
+        # Map master_trade_id → EA fill so we can overlay operator pnl.
+        # A short cap protects against pathological cases — recent()
+        # already limits to `limit` rows so this set is small.
+        fills_by_master: dict[int, EAFill] = {}
+        for f in ea_fill_store.recent(username, limit=max(limit * 2, 100)):
+            if f.master_trade_id is not None:
+                fills_by_master[f.master_trade_id] = f
+        out: list[TradeResponse] = []
+        for r in rows:
+            sl = r.get("stop_loss")
+            tp = r.get("take_profit")
+            fill = fills_by_master.get(int(r["id"]))
+            out.append(TradeResponse(
+                id=r["id"],
+                symbol=r["symbol"],
+                side=r["side"],
+                entry_price=fill.entry_price if fill else r["entry_price"],
+                exit_price=(fill.exit_price if fill and fill.exit_price is not None
+                            else r["exit_price"]),
+                # The whole point of this rewrite: prefer the operator's
+                # broker pnl when we have it. None means "EA hasn't
+                # reported a fill yet" — the UI shows "—".
+                pnl=fill.pnl if fill else None,
+                opened_at=datetime.fromisoformat(r["opened_at"]),
+                closed_at=(datetime.fromisoformat(r["closed_at"])
+                           if r["closed_at"] else None),
+                lot_size=float((fill.lot_size if fill else r.get("lot_size")) or 0.0),
+                stop_loss=(float(sl) if sl else None),
+                take_profit=(float(tp) if tp else None),
+                strategy=r.get("strategy"),
+                broker_ticket=(fill.broker_ticket if fill else r.get("broker_ticket")),
+                close_reason=r.get("close_reason"),
+            ))
+        return out
     rows = journal.recent(limit=limit, since_iso=None)
     out: list[TradeResponse] = []
     for r in rows:

@@ -77,7 +77,11 @@ class Trade {
   final String side;
   final double entryPrice;
   final double? exitPrice;
-  final double pnl;
+  // Nullable on non-admin operators when the EA hasn't reported a fill
+  // for this broker_ticket yet — the API returns null and the UI shows
+  // "—". This keeps admin's USD pnl from leaking into a ZAR operator's
+  // view while still surfacing the trade metadata.
+  final double? pnl;
   final DateTime openedAt;
   final DateTime? closedAt;
 
@@ -100,7 +104,7 @@ class Trade {
         exitPrice: json['exit_price'] == null
             ? null
             : (json['exit_price'] as num).toDouble(),
-        pnl: (json['pnl'] as num).toDouble(),
+        pnl: json['pnl'] == null ? null : (json['pnl'] as num).toDouble(),
         openedAt: DateTime.parse(json['opened_at'] as String),
         closedAt: json['closed_at'] == null
             ? null

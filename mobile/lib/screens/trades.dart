@@ -461,11 +461,15 @@ class _TradeTile extends StatelessWidget {
         ? (isDark ? kNeonGreen : kLightWin)
         : (isDark ? kNeonRed : kLightLoss);
     final muted = mutedColor(context);
-    final pnlPositive = trade.pnl >= 0;
-    final pnlColor = pnlPositive
-        ? (isDark ? kNeonGreen : kLightWin)
-        : (isDark ? kNeonRed : kLightLoss);
-    final pnlShadow = isDark
+    // pnl is null while we're waiting on the operator's EA to report a
+    // fill. Render "—" with a neutral tone in that case.
+    final pnlPositive = (trade.pnl ?? 0) >= 0;
+    final pnlColor = trade.pnl == null
+        ? muted
+        : pnlPositive
+            ? (isDark ? kNeonGreen : kLightWin)
+            : (isDark ? kNeonRed : kLightLoss);
+    final pnlShadow = (isDark && trade.pnl != null)
         ? <Shadow>[Shadow(color: pnlColor.withValues(alpha: 0.5), blurRadius: 8)]
         : const <Shadow>[];
 
@@ -547,12 +551,15 @@ class _TradeTile extends StatelessWidget {
                 else ...[
                   // NumberFormat already prefixes '-' for negatives, so
                   // we only need to add '+' explicitly for non-negative
-                  // pnl — otherwise positive amounts would render as the
-                  // raw number with no sign.
+                  // pnl. trade.pnl is null when the operator's EA
+                  // hasn't reported a fill yet — show "—" instead of
+                  // leaking admin's USD value.
                   Text(
-                    pnlPositive
-                        ? '+${fmt.format(trade.pnl)}'
-                        : fmt.format(trade.pnl),
+                    trade.pnl == null
+                        ? '—'
+                        : pnlPositive
+                            ? '+${fmt.format(trade.pnl)}'
+                            : fmt.format(trade.pnl),
                     style: TextStyle(
                       color: pnlColor,
                       fontWeight: FontWeight.w700,

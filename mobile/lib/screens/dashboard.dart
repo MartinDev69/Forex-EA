@@ -900,9 +900,12 @@ class _KpiGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final closed = trades.where((t) => t.closedAt != null).toList();
-    final wins = closed.where((t) => t.pnl > 0).length;
+    // Wins/sessionPnl only count trades whose pnl the operator's EA
+    // has reported — admin's pnl was the wrong currency and the wrong
+    // size, so we skip it rather than fold it in.
+    final wins = closed.where((t) => (t.pnl ?? 0) > 0).length;
     final wr = closed.isEmpty ? 0 : ((wins / closed.length) * 100).round();
-    final sessionPnl = trades.fold<double>(0, (s, t) => s + t.pnl);
+    final sessionPnl = trades.fold<double>(0, (s, t) => s + (t.pnl ?? 0));
     final fmt = moneyFmt(account.currency);
     // NumberFormat handles the minus sign itself for negatives, so only
     // prefix '+' on non-negative values.
