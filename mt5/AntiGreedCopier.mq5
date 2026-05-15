@@ -34,7 +34,7 @@
 // Build stamp shown on the panel's header sub-line — bumped on every
 // layout change. If the panel doesn't show this exact string, MT5 is
 // running a stale compiled binary; recompile and re-attach the EA.
-#define EA_BUILD "v1.08"
+#define EA_BUILD "v1.09"
 
 #include <Trade/Trade.mqh>
 
@@ -51,6 +51,8 @@ input bool    PlaceStopLoss     = true;                          // mirror admin
 input long    Magic             = 271828;                        // ours-vs-theirs filter
 input bool    Verbose           = true;                          // chatty journal logging
 input int     AccountReportSeconds = 60;                         // how often to push account snapshot
+input int     FillBackfillDays   = 30;                            // scan history this far back on EA start
+input bool    FillBackfillOnInit = true;                          // POST recent fills on EA load
 
 input group "═══ On-chart panel ═══"
 input bool                ShowPanel         = true;              // render the status panel
@@ -126,6 +128,11 @@ int OnInit()
    EventSetTimer(MathMax(2, PollSeconds));
    Poll();
    ReportAccount();  // first snapshot immediately so the dashboard lights up
+   // Catch up any fills that happened before this EA build was
+   // installed (the previous build didn't POST /me/ea-fill) so the
+   // operator's Trades view backfills with real broker pnl instead
+   // of staying stuck on "—" for historical rows.
+   BackfillRecentFills();
    if(ShowPanel) RedrawPanel();
    return INIT_SUCCEEDED;
 }
@@ -717,6 +724,125 @@ string IsoTimestamp(datetime t)
    return StringFormat("%04d-%02d-%02dT%02d:%02d:%02dZ",
                        mdt.year, mdt.mon, mdt.day,
                        mdt.hour, mdt.min, mdt.sec);
+}
+
+//+------------------------------------------------------------------+
+//| Backfill recent fills on EA load. Walks MT5 deal history for the |
+//| last FillBackfillDays days, finds positions opened by this EA    |
+//| (Magic match + "AGcopy #<trade_id>" comment), and POSTs each as  |
+//| an OPEN or CLOSED fill. Server-side upsert is idempotent on      |
+//| (username, broker_ticket) so re-running this is safe.            |
+//|                                                                  |
+//| Why: the previous EA build (≤ v1.08) didn't POST fills, so when  |
+//| an operator upgrades they'd see "—" for every trade closed       |
+//| before the upgrade. This sweeps those up in one pass.            |
+//+------------------------------------------------------------------+
+void BackfillRecentFills()
+{
+   if(!FillBackfillOnInit) return;
+   datetime from_t = TimeCurrent() - (datetime)(FillBackfillDays * 86400);
+   if(!HistorySelect(from_t, TimeCurrent()))
+   {
+      if(Verbose) Print("AntiGreedCopier: backfill HistorySelect failed.");
+      return;
+   }
+   // Collect unique position tickets that originated from this EA.
+   // HistoryDealGet only exposes per-deal data; group by POSITION_ID
+   // so a position's IN + OUT legs roll up into one fill report.
+   long positions[];
+   ArrayResize(positions, 0);
+   int total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong deal = HistoryDealGetTicket(i);
+      if(deal == 0) continue;
+      long magic = HistoryDealGetInteger(deal, DEAL_MAGIC);
+      if(magic != Magic) continue;
+      long pos_id = HistoryDealGetInteger(deal, DEAL_POSITION_ID);
+      if(pos_id == 0) continue;
+      // dedup
+      bool seen = false;
+      for(int k = 0; k < ArraySize(positions); k++)
+      {
+         if(positions[k] == pos_id) { seen = true; break; }
+      }
+      if(seen) continue;
+      int n = ArraySize(positions);
+      ArrayResize(positions, n + 1);
+      positions[n] = pos_id;
+   }
+   if(Verbose)
+      Print("AntiGreedCopier: backfill scanning ", ArraySize(positions),
+            " position(s) from the last ", FillBackfillDays, " day(s).");
+   // For each tracked position: figure out the master trade_id from the
+   // "AGcopy #N" comment on the IN leg, decide OPEN vs CLOSED based on
+   // whether the position is still live, POST the corresponding report.
+   //
+   // ReportFillClosed → ReadCloseFromHistory calls HistorySelectByPosition
+   // which narrows the global history selection, so we restore the broad
+   // selection at the top of each iteration — otherwise the next pass'
+   // ExtractMasterTradeId / BackfillOpenFromHistory would see only the
+   // previous position's deals.
+   for(int j = 0; j < ArraySize(positions); j++)
+   {
+      HistorySelect(from_t, TimeCurrent());
+      long pos_id = positions[j];
+      long master_trade_id = ExtractMasterTradeId(pos_id);
+      if(PositionSelectByTicket(pos_id))
+         BackfillOpenFromHistory(pos_id, master_trade_id);
+      else
+         ReportFillClosed(pos_id, master_trade_id, "backfill");
+   }
+}
+
+// Pull the IN-leg of this position out of history and POST it as an
+// OPEN fill. Used by BackfillRecentFills() for positions that are
+// still live — ReportFillClosed handles the closed branch.
+void BackfillOpenFromHistory(long position_id, long master_trade_id)
+{
+   int total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong deal = HistoryDealGetTicket(i);
+      if(deal == 0) continue;
+      if(HistoryDealGetInteger(deal, DEAL_POSITION_ID) != position_id) continue;
+      if(HistoryDealGetInteger(deal, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+      string  sym   = HistoryDealGetString(deal, DEAL_SYMBOL);
+      long    dtype = HistoryDealGetInteger(deal, DEAL_TYPE);
+      string  side  = (dtype == DEAL_TYPE_BUY) ? "BUY" : "SELL";
+      double  lot   = HistoryDealGetDouble(deal, DEAL_VOLUME);
+      double  price = HistoryDealGetDouble(deal, DEAL_PRICE);
+      datetime t    = (datetime)HistoryDealGetInteger(deal, DEAL_TIME);
+      double sl = 0.0, tp = 0.0;
+      if(PositionSelectByTicket(position_id))
+      {
+         sl = PositionGetDouble(POSITION_SL);
+         tp = PositionGetDouble(POSITION_TP);
+      }
+      ReportFillOpen(position_id, master_trade_id, sym, side, lot, price, sl, tp, t);
+      return;
+   }
+}
+
+// Parse the master trade_id out of the EA's "AGcopy #<id>" comment on
+// the IN-leg deal. Returns 0 if the position wasn't tagged that way
+// (e.g. opened manually with the EA's magic).
+long ExtractMasterTradeId(long position_id)
+{
+   int total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong deal = HistoryDealGetTicket(i);
+      if(deal == 0) continue;
+      if(HistoryDealGetInteger(deal, DEAL_POSITION_ID) != position_id) continue;
+      if(HistoryDealGetInteger(deal, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+      string comment = HistoryDealGetString(deal, DEAL_COMMENT);
+      int hash = StringFind(comment, "#");
+      if(hash < 0) return 0;
+      string tail = StringSubstr(comment, hash + 1);
+      return StringToInteger(tail);
+   }
+   return 0;
 }
 
 //+------------------------------------------------------------------+
