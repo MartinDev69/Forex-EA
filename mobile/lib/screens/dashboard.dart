@@ -903,7 +903,12 @@ class _KpiGrid extends StatelessWidget {
     final wins = closed.where((t) => t.pnl > 0).length;
     final wr = closed.isEmpty ? 0 : ((wins / closed.length) * 100).round();
     final sessionPnl = trades.fold<double>(0, (s, t) => s + t.pnl);
-    final sessionPnlSign = sessionPnl >= 0 ? '+' : '';
+    final fmt = moneyFmt(account.currency);
+    // NumberFormat handles the minus sign itself for negatives, so only
+    // prefix '+' on non-negative values.
+    final sessionPnlStr = sessionPnl >= 0
+        ? '+${fmt.format(sessionPnl)}'
+        : fmt.format(sessionPnl);
     final pnlTone = sessionPnl >= 0 ? TickerTone.win : TickerTone.loss;
     final hb = status.lastHeartbeat == null
         ? '—'
@@ -927,7 +932,7 @@ class _KpiGrid extends StatelessWidget {
           ),
           _KpiTile(
             label: 'SESSION P&L',
-            value: '$sessionPnlSign\$${sessionPnl.abs().toStringAsFixed(0)}',
+            value: sessionPnlStr,
             sub: '${trades.length} trades',
             tone: pnlTone,
           ),

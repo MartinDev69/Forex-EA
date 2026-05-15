@@ -1574,7 +1574,7 @@
               <div class="tick-item">
                 <span class="tick-sym" x-text="t.symbol"></span>
                 <span class="tick-price" x-text="(t.exit_price ?? t.entry_price)?.toFixed?.(t.symbol?.includes('XAU') ? 2 : 5) ?? '—'"></span>
-                <span :class="t.pnl >= 0 ? 'tick-chg pos' : 'tick-chg neg'" x-text="(t.pnl >= 0 ? '+' : '') + (t.pnl ?? 0).toFixed(0)"></span>
+                <span :class="t.pnl >= 0 ? 'tick-chg pos' : 'tick-chg neg'" x-text="fmtPnl(t.pnl ?? 0)"></span>
               </div>
             </template>
           </div>
@@ -1603,7 +1603,7 @@
           </div>
           <span class="trades-hd-pnl">
             Session PnL&nbsp;
-            <span style="font-family:var(--mono);font-weight:700" :style="sessionPnl >= 0 ? 'color:var(--green)' : 'color:var(--red)'" x-text="(sessionPnl >= 0 ? '+' : '') + sessionPnl.toFixed(2)"></span>
+            <span style="font-family:var(--mono);font-weight:700" :style="sessionPnl >= 0 ? 'color:var(--green)' : 'color:var(--red)'" x-text="fmtPnl(sessionPnl)"></span>
           </span>
         </div>
         <div class="panel">
@@ -1709,7 +1709,7 @@
                   <td><span class="side-chip" :class="t.side === 'BUY' ? 'side-buy' : 'side-sell'" x-text="t.side"></span></td>
                   <td style="text-align:right;font-family:var(--mono)" x-text="(t.entry_price ?? 0).toFixed(t.symbol?.includes('XAU') ? 2 : 5)"></td>
                   <td style="text-align:right;font-family:var(--mono);color:var(--muted)" x-text="t.exit_price == null ? '—' : t.exit_price.toFixed(t.symbol?.includes('XAU') ? 2 : 5)"></td>
-                  <td style="text-align:right"><span :class="(t.pnl ?? 0) >= 0 ? 'pnl-pos' : 'pnl-neg'" x-text="((t.pnl ?? 0) >= 0 ? '+' : '') + (t.pnl ?? 0).toFixed(2)"></span></td>
+                  <td style="text-align:right"><span :class="(t.pnl ?? 0) >= 0 ? 'pnl-pos' : 'pnl-neg'" x-text="fmtPnl(t.pnl ?? 0)"></span></td>
                   <td style="text-align:right;font-family:var(--mono);color:var(--muted);font-size:12px" x-text="fmtTime(t.opened_at)"></td>
                   <td><span class="status-chip" :class="t.closed_at ? 'closed-chip' : 'open-chip'" x-text="t.closed_at ? 'closed' : 'open'"></span></td>
                 </tr>

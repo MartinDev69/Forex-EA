@@ -545,8 +545,14 @@ class _TradeTile extends StatelessWidget {
                     ),
                   )
                 else ...[
+                  // NumberFormat already prefixes '-' for negatives, so
+                  // we only need to add '+' explicitly for non-negative
+                  // pnl — otherwise positive amounts would render as the
+                  // raw number with no sign.
                   Text(
-                    '${pnlPositive ? '+' : ''}${trade.pnl.toStringAsFixed(2)}',
+                    pnlPositive
+                        ? '+${fmt.format(trade.pnl)}'
+                        : fmt.format(trade.pnl),
                     style: TextStyle(
                       color: pnlColor,
                       fontWeight: FontWeight.w700,
