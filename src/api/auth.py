@@ -167,9 +167,25 @@ def require_admin(user: dict[str, str] = Depends(current_user)) -> dict[str, str
     return user
 
 
+def _trusted_proxies() -> frozenset[str]:
+    raw = os.environ.get("TRUSTED_PROXIES", "")
+    return frozenset(p.strip() for p in raw.split(",") if p.strip())
+
+
 def client_ip(request: Request) -> str:
-    # X-Forwarded-For wins if a reverse proxy sets it; otherwise peer IP.
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """Return the originating client IP for rate-limit bucketing.
+
+    Only honors X-Forwarded-For when the immediate peer is listed in
+    TRUSTED_PROXIES — otherwise an attacker could spoof the header to
+    rotate buckets and bypass the per-IP login-attempt cap. Empty
+    TRUSTED_PROXIES means "no proxy in front", so we use the peer IP.
+    """
+    peer = request.client.host if request.client else "unknown"
+    trusted = _trusted_proxies()
+    if peer in trusted:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            # First entry is the original client; subsequent entries are
+            # intermediate proxies (RFC 7239 left-to-right).
+            return xff.split(",")[0].strip()
+    return peer

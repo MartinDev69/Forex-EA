@@ -152,6 +152,16 @@ class UserStore:
         # passes it as Authorization: Bearer <key>.
         if "ea_api_key" not in cols:
             c.execute("ALTER TABLE auth_users ADD COLUMN ea_api_key TEXT")
+        # Hash of the EA key, derived via HMAC-SHA256 with AUTH_SECRET.
+        # We compare hashes server-side so a DB dump doesn't hand the
+        # attacker working tokens. ea_api_key (plaintext) is migrated to
+        # this column once and then NULLed out — see _migrate_ea_keys().
+        if "ea_api_key_hash" not in cols:
+            c.execute("ALTER TABLE auth_users ADD COLUMN ea_api_key_hash TEXT")
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS ix_auth_users_ea_key_hash "
+                "ON auth_users(ea_api_key_hash)"
+            )
         # Telegram chat ID, captured when their signup request was
         # approved. Bot uses this to fan out signal/execution alerts
         # to each operator (filtered by user-copyable strategies).
@@ -553,28 +563,79 @@ class UserStore:
             for r in rows
         ]
 
+    @staticmethod
+    def _hash_ea_key(key: str) -> str:
+        """HMAC-SHA256 of the EA key, signed with AUTH_SECRET.
+
+        Plaintext keys are never stored — the row holds this hash and
+        the EA passes the plaintext on every request. HMAC (not bare
+        SHA-256) so a DB leak by itself doesn't let the attacker
+        precompute candidate-key tables without also stealing
+        AUTH_SECRET. Hex output, fixed 64 chars — fits SQLite cleanly.
+        """
+        import hmac
+        import hashlib
+        # _secret() raises if AUTH_SECRET is unset; that's correct —
+        # we refuse to hash with an empty key.
+        from .auth import _secret
+        return hmac.new(
+            _secret().encode("utf-8"), key.encode("utf-8"), hashlib.sha256,
+        ).hexdigest()
+
+    def _migrate_one_ea_key(self, c: sqlite3.Connection, username: str, plaintext: str) -> None:
+        """Convert a legacy plaintext ea_api_key row to a hashed one.
+
+        Called lazily on first lookup so the migration spreads across
+        normal API traffic rather than blocking startup. Idempotent —
+        re-running it just overwrites the same hash.
+        """
+        c.execute(
+            "UPDATE auth_users SET ea_api_key_hash = ?, ea_api_key = NULL "
+            "WHERE username = ?",
+            (self._hash_ea_key(plaintext), username),
+        )
+
     def ensure_ea_api_key(self, username: str) -> str:
         """Return the user's EA API key; generates one on first call.
 
-        Idempotent — once a key is issued, subsequent calls return the
-        same key (don't regenerate, since the user's installed EA
-        already has the old one configured).
+        Note that we can only *return* the plaintext at issuance time
+        (or right after legacy migration). Subsequent lookups can't
+        reconstruct the plaintext — only the hash is stored — so the EA
+        must hold onto whatever this returns. Re-issuing without an EA
+        update path would brick the user's installed copy, so we
+        idempotently return the same plaintext during the legacy
+        window (before migration).
         """
         import secrets
         with self._conn() as c:
             row = c.execute(
-                "SELECT ea_api_key FROM auth_users WHERE username = ?",
+                "SELECT ea_api_key, ea_api_key_hash FROM auth_users "
+                "WHERE username = ?",
                 (username,),
             ).fetchone()
             if row is None:
                 raise KeyError(username)
-            existing = row["ea_api_key"]
-            if existing:
-                return existing
+            legacy_plain = row["ea_api_key"]
+            if legacy_plain:
+                # First call after the schema migration — migrate now
+                # and return the same key so the operator's EA stays
+                # working. After this, the plaintext is gone from disk.
+                self._migrate_one_ea_key(c, username, legacy_plain)
+                return legacy_plain
+            if row["ea_api_key_hash"]:
+                # Already hashed and we have no plaintext to return;
+                # caller must rotate to get a usable key. This path
+                # shouldn't fire in practice — ensure_ea_api_key() is
+                # the bootstrap helper, and the bootstrap-then-rotate
+                # flow already passed through the legacy branch above.
+                raise RuntimeError(
+                    f"ea key for {username} is hashed; call rotate_ea_api_key to issue a new one"
+                )
             new_key = "ea_" + secrets.token_urlsafe(32)
             c.execute(
-                "UPDATE auth_users SET ea_api_key = ? WHERE username = ?",
-                (new_key, username),
+                "UPDATE auth_users SET ea_api_key_hash = ?, ea_api_key = NULL "
+                "WHERE username = ?",
+                (self._hash_ea_key(new_key), username),
             )
             return new_key
 
@@ -587,8 +648,9 @@ class UserStore:
         new_key = "ea_" + secrets.token_urlsafe(32)
         with self._conn() as c:
             cur = c.execute(
-                "UPDATE auth_users SET ea_api_key = ? WHERE username = ?",
-                (new_key, username),
+                "UPDATE auth_users SET ea_api_key_hash = ?, ea_api_key = NULL "
+                "WHERE username = ?",
+                (self._hash_ea_key(new_key), username),
             )
             if cur.rowcount == 0:
                 raise KeyError(username)
@@ -596,15 +658,30 @@ class UserStore:
 
     def get_username_by_ea_key(self, key: str) -> str | None:
         """Reverse lookup for the EA's bearer token. Returns None if
-        the key isn't recognised.
+        the key isn't recognised. Compares against the stored HMAC of
+        the key, so a DB dump alone doesn't yield working tokens.
         """
         if not key or not key.startswith("ea_"):
             return None
+        hashed = self._hash_ea_key(key)
         with self._conn() as c:
+            row = c.execute(
+                "SELECT username FROM auth_users WHERE ea_api_key_hash = ?",
+                (hashed,),
+            ).fetchone()
+            if row is not None:
+                return row["username"]
+            # Legacy fallback during rollout: if we still have rows
+            # with the plaintext key in ea_api_key (e.g. operators
+            # whose EA hasn't checked in yet to trigger the lazy
+            # migration), match on that and migrate on the way out.
             row = c.execute(
                 "SELECT username FROM auth_users WHERE ea_api_key = ?", (key,),
             ).fetchone()
-        return row["username"] if row else None
+            if row is None:
+                return None
+            self._migrate_one_ea_key(c, row["username"], key)
+            return row["username"]
 
     def get_hash(self, username: str) -> str | None:
         with self._conn() as c:

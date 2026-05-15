@@ -1122,9 +1122,12 @@ class EAAccountReportRequest(BaseModel):
     margin: float | None = None
     free_margin: float | None = None
     login: int | None = None
-    server: str | None = None
-    broker: str | None = None
-    currency: str | None = None
+    server: str | None = Field(default=None, max_length=128)
+    broker: str | None = Field(default=None, max_length=128)
+    # Constrain to ISO-4217 shape so a buggy EA can't write a 1KB string
+    # into the dashboard's currency field. Stored upper-case so
+    # NumberFormat(currency=...) works reliably client-side.
+    currency: str | None = Field(default=None, max_length=4, pattern=r"^[A-Za-z]{2,4}$")
 
 
 class MyPicksResponse(BaseModel):
@@ -1291,7 +1294,7 @@ def report_ea_account(
         login=body.login,
         server=body.server,
         broker=body.broker,
-        currency=body.currency,
+        currency=body.currency.upper() if body.currency else None,
     )
     return {"ok": True}
 
