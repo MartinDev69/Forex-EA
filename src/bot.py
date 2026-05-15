@@ -92,9 +92,20 @@ class BotState:
     # actual position list. Cheap query, runs every N ticks so phantom
     # opens (rows kept OPEN after a broker-side stop hit) self-heal.
     last_journal_reconcile_tick: int = -1
+    # Broker ticket -> monotonic time after which we'll attempt to close
+    # it again. Set when a close request gets rejected (insufficient
+    # margin, market closed, etc.) so we don't spin trying to close the
+    # same position every tick while the underlying cause persists.
+    close_retry_after: dict[int, float] = field(default_factory=dict)
 
 
 class Bot:
+    # Seconds to wait after a rejected close before re-attempting on the
+    # same ticket. Long enough to let market-closed or insufficient-margin
+    # situations clear, short enough that a genuine target/stop hit gets
+    # closed within the next minute.
+    _CLOSE_RETRY_COOLDOWN_S: float = 30.0
+
     def __init__(
         self,
         config: BotConfig,
@@ -222,6 +233,13 @@ class Bot:
             if self.stop_manager is not None:
                 self._apply_trailing(order)
             if self._should_close_order(order):
+                # Skip if we recently failed to close this ticket — the
+                # broker-side cause (no margin, market closed, retcode
+                # 10018) usually takes seconds to clear and re-firing
+                # every tick floods the journal/log with noise.
+                retry_after = self.state.close_retry_after.get(order.broker_ticket or order.id)
+                if retry_after and time.monotonic() < retry_after:
+                    continue
                 self._close_order(order, "stop/target")
 
         # Propfirm bookkeeping — must happen before signal evaluation so a
@@ -1108,7 +1126,30 @@ class Bot:
         send_started = time.perf_counter()
         closed = self.executor.close(order, reason)
         latency_ms = (time.perf_counter() - send_started) * 1000.0
+        # Always record the fill — even a rejection is useful for the
+        # latency/slippage stats and for forensics on why we couldn't close.
         self._record_fill(closed, "CLOSE", requested_close, latency_ms)
+
+        # Broker refused the close (no margin, market closed, off-quotes …).
+        # Don't touch the journal or credit risk back — the position is still
+        # OPEN at the broker. Stamp a short cooldown so the next tick doesn't
+        # immediately re-fire while the underlying condition is still there.
+        if closed.status != OrderStatus.CLOSED:
+            ticket = closed.broker_ticket or closed.id
+            if ticket is not None:
+                self.state.close_retry_after[int(ticket)] = (
+                    time.monotonic() + self._CLOSE_RETRY_COOLDOWN_S
+                )
+            log.warning(
+                "close rejected for #%s (%s) — journal stays OPEN, will retry",
+                closed.id, closed.close_reason,
+            )
+            return
+
+        # Clear any earlier cooldown — we won't be closing this ticket again.
+        ticket = closed.broker_ticket or closed.id
+        if ticket is not None:
+            self.state.close_retry_after.pop(int(ticket), None)
         self.journal.record_close(closed)
         if self.path_recorder is not None and closed.closed_at is not None:
             try:

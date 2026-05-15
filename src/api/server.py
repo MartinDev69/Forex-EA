@@ -203,8 +203,13 @@ app.add_middleware(
 
 
 class _BotState:
+    # In-process scratch fields. ``running`` is legacy — bot_control_store
+    # is the cross-process flag everything actually reads now. ``balance``
+    # is a placeholder used by the admin /account fallback when MT5 isn't
+    # connected; it's overwritten as soon as the bot reports broker state.
+    # ``last_heartbeat`` used to live here but was removed: it leaked into
+    # /status as a stale fallback that the dashboard treated as fresh.
     running: bool = False
-    last_heartbeat: datetime | None = None
     balance: float = 10_000.0
 
 
@@ -662,7 +667,12 @@ def get_status(user: dict = Depends(current_user)) -> StatusResponse:
     # problem rather than a false-positive green dot).
     bot_hb = heartbeat_store.read("bot")
     should_run = bot_control_store.should_run()
-    bot_last_hb = state.last_heartbeat
+    # heartbeat_store is the only source of truth. We used to fall back to
+    # an in-process ``state.last_heartbeat`` that /bot/start would stamp on
+    # every click — so the dashboard showed a fresh heartbeat even when
+    # the bot was dead. Drop that path entirely: if there's no real
+    # heartbeat, return None and let the UI render "no heartbeat".
+    bot_last_hb: datetime | None = None
     hb_fresh = False
     if bot_hb is not None:
         bot_last_hb = bot_hb.last_tick_at
@@ -890,15 +900,17 @@ def trades(limit: int = 20, user: dict = Depends(current_user)) -> list[TradeRes
 
 @app.post("/bot/start")
 def start_bot(user: dict = Depends(require_2fa)) -> dict[str, str]:
-    state.running = True
-    state.last_heartbeat = datetime.utcnow()
+    # bot_control_store is the cross-process flag the bot polls each tick;
+    # the in-process ``state`` namespace used to be mutated here too, but
+    # that was misleading — /status would read state.last_heartbeat as a
+    # fallback and show a fresh heartbeat after a Start click even when
+    # the bot was dead. Heartbeat freshness lives in heartbeat_store only.
     bot_control_store.set(True, by=user.get("username"))
     return {"status": "started"}
 
 
 @app.post("/bot/stop")
 def stop_bot(user: dict = Depends(require_2fa)) -> dict[str, str]:
-    state.running = False
     bot_control_store.set(False, by=user.get("username"))
     return {"status": "stopped"}
 
@@ -1186,10 +1198,15 @@ def signal_feed_endpoint(
         copyable = toggle_store.user_copyable_names()
         user_picks = user_store.get_user_picks(username)
         execute_picks = user_picks.get("execute", set())
+        # Bug #6: also let CLOSE events through for any trade the operator
+        # has already opened — even if admin/operator have since changed
+        # picks. Without this, a pick edit mid-trade leaves the operator's
+        # MT5 holding a position the EA can no longer close.
+        open_masters = ea_fill_store.open_master_ids(username)
         events = [
             e for e in events
-            if e.strategy is None
-            or (e.strategy in copyable and e.strategy in execute_picks)
+            if (e.strategy in copyable and e.strategy in execute_picks)
+            or (e.event_type == "CLOSE" and e.trade_id in open_masters)
         ]
     except Exception:
         log.exception("signal feed filter failed; serving unfiltered")

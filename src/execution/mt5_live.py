@@ -346,14 +346,21 @@ class MT5Executor:
             "type_filling": self._resolve_filling_mode(order.symbol),
         }
         result = self._mt5.order_send(request)
-        order.closed_at = datetime.now(timezone.utc)
         if result is None or result.retcode != self._mt5.TRADE_RETCODE_DONE:
+            # Critical: don't stamp closed_at on a rejection. The journal
+            # row's status stays OPEN so list_open() can re-scan for it on
+            # the next tick and the reconciler can match against MT5's
+            # actual close deal once one lands. Stamping closed_at here
+            # used to mark the position "closed in our DB but still open
+            # at the broker" — an invisible drift that broke win-rate
+            # counts and the reconciler's filter.
             order.status = OrderStatus.REJECTED
             retcode = getattr(result, "retcode", None)
             order.close_reason = f"close rejected retcode={retcode}"
             log.warning("MT5 rejected close for %s: %s", order.symbol, order.close_reason)
             return order
 
+        order.closed_at = datetime.now(timezone.utc)
         order.status = OrderStatus.CLOSED
         order.exit_price = float(getattr(result, "price", price))
         order.close_reason = reason

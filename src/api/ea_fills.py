@@ -235,3 +235,21 @@ class EAFillStore:
                 tuple(params),
             ).fetchone()
         return int(row["n"]) if row else 0
+
+    def open_master_ids(self, username: str) -> set[int]:
+        """Distinct master_trade_id values across this user's OPEN fills.
+
+        Used by the signal feed filter so a CLOSE event reaches the
+        operator's EA even if admin/operator changed picks after the
+        OPEN was already copied. Without this, a pick edit mid-trade
+        leaves the operator holding a position the EA can no longer
+        close.
+        """
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT DISTINCT master_trade_id FROM ea_fills "
+                "WHERE username = ? AND status = 'OPEN' "
+                "  AND master_trade_id IS NOT NULL",
+                (username,),
+            ).fetchall()
+        return {int(r["master_trade_id"]) for r in rows}
