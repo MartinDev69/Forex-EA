@@ -231,7 +231,12 @@ def test_place_sends_market_buy_with_ask_price(fake_mt5, executor):
     assert req["price"] == 1.1002
     assert req["symbol"] == "EURUSD"
     assert req["magic"] == DEFAULT_MAGIC
-    assert req["comment"] == "ma_crossover"
+    # MT5 caps comments at 31 chars, so we ship a branded short form
+    # ("AG · MAcross · B") instead of the bare strategy name. The
+    # reverse-map in MT5Executor decodes it back to "ma_crossover" on
+    # open_orders().
+    assert req["comment"].startswith("AG · ")
+    assert "MAcross" in req["comment"]
 
 
 def test_place_sell_uses_bid(fake_mt5, executor):

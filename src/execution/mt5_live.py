@@ -207,12 +207,18 @@ class MT5Executor:
     orders from different bots won't collide in open_orders() listings.
     """
 
+    # Same backoff as MT5DataFeed — don't hammer mt5.initialize() when a
+    # burst of failed account_info() / positions_get() calls suggests the
+    # broker dropped us.
+    _RECONNECT_BACKOFF_S = 5.0
+
     def __init__(
         self,
         mt5_module: Any | None = None,
         magic: int = DEFAULT_MAGIC,
         deviation_points: int = DEFAULT_DEVIATION_POINTS,
         symbols_filter: list[str] | None = None,
+        reconnect: Callable[[], bool] | None = None,
     ) -> None:
         self._mt5 = mt5_module if mt5_module is not None else _load_mt5()
         _require_mt5(self._mt5)
@@ -220,11 +226,35 @@ class MT5Executor:
         self.deviation = deviation_points
         # If set, open_orders() only returns positions for these symbols.
         self.symbols_filter = symbols_filter
+        # Shared with MT5DataFeed via main.py — re-runs mt5.initialize()
+        # with the stored creds so a stale account_info / positions_get
+        # call can recover instead of returning None forever.
+        self._reconnect = reconnect
+        self._last_reconnect_at: float = 0.0
+
+    def _maybe_reconnect(self) -> bool:
+        if self._reconnect is None:
+            return False
+        now = time.monotonic()
+        if now - self._last_reconnect_at < self._RECONNECT_BACKOFF_S:
+            return False
+        self._last_reconnect_at = now
+        log.warning("MT5 executor call returned None — attempting reconnect")
+        try:
+            ok = bool(self._reconnect())
+        except Exception:
+            log.exception("MT5 reconnect callback raised in executor")
+            return False
+        if ok:
+            log.info("MT5 executor reconnected")
+        return ok
 
     # -------------------------------------------------------------- account
 
     def account_balance(self) -> float:
         info = self._mt5.account_info()
+        if info is None and self._maybe_reconnect():
+            info = self._mt5.account_info()
         if info is None:
             raise RuntimeError(f"account_info failed: {self._mt5.last_error()}")
         return float(info.balance)
@@ -236,6 +266,8 @@ class MT5Executor:
         broker_status_store fresh so the API doesn't need its own MT5
         connection."""
         info = self._mt5.account_info()
+        if info is None and self._maybe_reconnect():
+            info = self._mt5.account_info()
         if info is None:
             raise RuntimeError(f"account_info failed: {self._mt5.last_error()}")
         balance = float(info.balance)
@@ -396,6 +428,8 @@ class MT5Executor:
 
     def open_orders(self) -> list[Order]:
         positions = self._mt5.positions_get()
+        if positions is None and self._maybe_reconnect():
+            positions = self._mt5.positions_get()
         if positions is None:
             return []
         out: list[Order] = []

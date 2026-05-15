@@ -84,10 +84,22 @@ class SignalFeed:
                        strategy, broker_ticket
                 FROM trades
                 WHERE closed_at IS NOT NULL AND closed_at > ?
+                UNION ALL
+                -- Trailing-stop / TP adjustment on a still-open position.
+                -- Operator EAs use this to mirror admin's stop changes so
+                -- their positions track the same risk profile instead of
+                -- drifting away from admin's MT5.
+                SELECT 'MODIFY' AS event_type, m.trade_id AS trade_id,
+                       m.ts AS ts, t.symbol, t.side, t.lot_size,
+                       NULL AS price, m.stop_loss, m.take_profit,
+                       t.strategy, t.broker_ticket
+                FROM trade_modifications m
+                JOIN trades t ON m.trade_id = t.id
+                WHERE m.ts > ?
                 ORDER BY ts ASC
                 LIMIT ?
                 """,
-                (since_iso, since_iso, limit),
+                (since_iso, since_iso, since_iso, limit),
             ).fetchall()
         out: list[SignalEvent] = []
         for r in rows:

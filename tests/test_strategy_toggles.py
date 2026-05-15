@@ -71,7 +71,12 @@ def test_api_toggle_persists_to_store(tmp_path: Path, monkeypatch):
 
         r = client.post("/strategies/ma_crossover/toggle")
         assert r.status_code == 200
-        assert r.json() == {"name": "ma_crossover", "enabled": False}
+        # Response shape gained `mode` and `user_copyable` since this
+        # test was first written. Pin the fields we actually care about
+        # rather than the full body so future additions don't re-break.
+        body = r.json()
+        assert body["name"] == "ma_crossover"
+        assert body["enabled"] is False
 
         # The SQLite file should reflect the new value, independent of the API instance.
         assert StrategyToggleStore(db).is_enabled("ma_crossover") is False

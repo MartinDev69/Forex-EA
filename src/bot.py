@@ -217,7 +217,6 @@ class Bot:
         self.state.last_heartbeat = datetime.now(timezone.utc)
         self.state.tick_count += 1
         acted = 0
-        tick_error: str | None = None
 
         # Voice kill check first — if tripped, halt the loop before doing
         # anything else this tick. We don't auto-flatten open positions:
@@ -318,7 +317,7 @@ class Bot:
                 if self._handle_signal(signal, strategy, regime, bars=bars):
                     acted += 1
 
-        self._write_heartbeat(tick_error)
+        self._write_heartbeat(None)
         return acted
 
     def run_forever(self) -> None:
@@ -1105,6 +1104,20 @@ class Bot:
             return
         prev = order.stop_loss
         self.executor.modify(order, stop_loss=new_sl)
+        # modify() updates order.stop_loss in-place on success and leaves
+        # it alone on rejection. Only record the journal MODIFY when MT5
+        # actually accepted it — otherwise operator EAs would chase a
+        # stop admin's broker refused.
+        if order.stop_loss == prev:
+            return
+        try:
+            self.journal.record_modify(
+                order.id,
+                stop_loss=order.stop_loss,
+                take_profit=order.take_profit,
+            )
+        except Exception:
+            log.exception("journal.record_modify failed for #%s", order.id)
         log.info("TRAIL %s %s SL %.5f → %.5f",
                  order.side.value, order.symbol, prev, new_sl)
 

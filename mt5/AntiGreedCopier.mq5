@@ -34,7 +34,7 @@
 // Build stamp shown on the panel's header sub-line — bumped on every
 // layout change. If the panel doesn't show this exact string, MT5 is
 // running a stale compiled binary; recompile and re-attach the EA.
-#define EA_BUILD "v1.10"
+#define EA_BUILD "v1.11"
 
 #include <Trade/Trade.mqh>
 
@@ -304,6 +304,58 @@ void DispatchEvent(const string &obj)
       HandleOpen(trade_id, symbol, side, lot_in, sl, tp);
    else if(type == "CLOSE")
       HandleClose(trade_id, symbol);
+   else if(type == "MODIFY")
+      HandleModify(trade_id, sl, tp);
+}
+
+//+------------------------------------------------------------------+
+//| Mirror admin's trailing-stop / TP adjustment onto the operator's |
+//| copied position. Looks up our local ticket via the trade_id →    |
+//| ticket map; silently skips if we don't have a record of this     |
+//| trade (operator picks must have changed mid-trade, or the EA     |
+//| started after the OPEN landed).                                  |
+//+------------------------------------------------------------------+
+void HandleModify(long trade_id, double sl, double tp)
+{
+   string key = GV_PREFIX + (string)trade_id;
+   if(!GlobalVariableCheck(key))
+   {
+      if(Verbose) Print("AntiGreedCopier: MODIFY for unknown trade_id=", trade_id);
+      return;
+   }
+   ulong ticket = (ulong)GlobalVariableGet(key);
+   if(!PositionSelectByTicket(ticket))
+   {
+      // Position already gone — likely closed broker-side.
+      // ReconcileClosedPositions / ScanRecentClosures will report
+      // the close on the next timer tick.
+      return;
+   }
+   // Use the operator's current SL/TP for whichever fields the master
+   // didn't change — record_modify on the server side may send only
+   // stop_loss or only take_profit per call.
+   double cur_sl = PositionGetDouble(POSITION_SL);
+   double cur_tp = PositionGetDouble(POSITION_TP);
+   double use_sl = (PlaceStopLoss && sl > 0) ? sl : cur_sl;
+   double use_tp = (PlaceTakeProfit && tp > 0) ? tp : cur_tp;
+   if(MathAbs(use_sl - cur_sl) < _Point && MathAbs(use_tp - cur_tp) < _Point)
+   {
+      if(Verbose) Print("AntiGreedCopier: MODIFY no-op for ticket=", ticket);
+      return;
+   }
+   if(!trade.PositionModify(ticket, use_sl, use_tp))
+   {
+      Print("AntiGreedCopier: MODIFY failed ticket=", ticket,
+            " retcode=", trade.ResultRetcode(),
+            " (", trade.ResultRetcodeDescription(), ")");
+      return;
+   }
+   if(Verbose)
+      Print("AntiGreedCopier: MODIFY ticket=", ticket,
+            " SL ", DoubleToString(cur_sl, _Digits),
+            " → ", DoubleToString(use_sl, _Digits),
+            " TP ", DoubleToString(cur_tp, _Digits),
+            " → ", DoubleToString(use_tp, _Digits));
 }
 
 void HandleOpen(long trade_id, const string &symbol, const string &side,
@@ -789,6 +841,25 @@ void MarkClosureReported(long pos_id)
 {
    if(IsClosureReported(pos_id)) return;
    int n = ArraySize(g_reported_closures);
+   // Keep the dedup window bounded so a long-running EA doesn't spend
+   // increasing time on linear-scan lookups every OnTimer tick. Once
+   // we cross the cap, drop the oldest half — anything that old has
+   // already been reported and is unlikely to come back through the
+   // 1-hour scan window. Server-side upsert is idempotent so a
+   // late-arriving duplicate is harmless either way.
+   const int CAP = 500;
+   if(n >= CAP)
+   {
+      int keep = CAP / 2;
+      long trimmed[];
+      ArrayResize(trimmed, keep);
+      for(int k = 0; k < keep; k++)
+         trimmed[k] = g_reported_closures[n - keep + k];
+      ArrayResize(g_reported_closures, keep);
+      for(int k = 0; k < keep; k++)
+         g_reported_closures[k] = trimmed[k];
+      n = keep;
+   }
    ArrayResize(g_reported_closures, n + 1);
    g_reported_closures[n] = pos_id;
 }
@@ -803,7 +874,12 @@ void MarkClosureReported(long pos_id)
 //+------------------------------------------------------------------+
 void ScanRecentClosures()
 {
-   datetime from_t = TimeCurrent() - 3600;  // last hour is plenty
+   // 1h is enough on the steady-state path because BackfillRecentFills
+   // already swept the last FillBackfillDays days on EA load. Anything
+   // older than this window was either reported then or is already in
+   // server's ea_fills with status=CLOSED — the idempotent upsert means
+   // a late re-report is harmless either way.
+   datetime from_t = TimeCurrent() - 3600;
    if(!HistorySelect(from_t, TimeCurrent())) return;
    int total = HistoryDealsTotal();
    long pending[];

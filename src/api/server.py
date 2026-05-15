@@ -1222,15 +1222,16 @@ def signal_feed_endpoint(
         copyable = toggle_store.user_copyable_names()
         user_picks = user_store.get_user_picks(username)
         execute_picks = user_picks.get("execute", set())
-        # Bug #6: also let CLOSE events through for any trade the operator
-        # has already opened — even if admin/operator have since changed
-        # picks. Without this, a pick edit mid-trade leaves the operator's
-        # MT5 holding a position the EA can no longer close.
+        # Bug #6: also let CLOSE / MODIFY events through for any trade the
+        # operator has already opened — even if admin/operator have since
+        # changed picks. Without this, a pick edit mid-trade leaves the
+        # operator's MT5 holding a position the EA can no longer close,
+        # and trailing-stop updates would silently stop propagating.
         open_masters = ea_fill_store.open_master_ids(username)
         events = [
             e for e in events
             if (e.strategy in copyable and e.strategy in execute_picks)
-            or (e.event_type == "CLOSE" and e.trade_id in open_masters)
+            or (e.event_type in ("CLOSE", "MODIFY") and e.trade_id in open_masters)
         ]
     except Exception:
         log.exception("signal feed filter failed; serving unfiltered")

@@ -31,6 +31,20 @@ CREATE TABLE IF NOT EXISTS trades (
     close_reason    TEXT,
     broker_ticket   INTEGER
 );
+
+-- One row per SL/TP modification on an existing position. The signal
+-- feed unions these into the event stream so operator EAs can mirror
+-- admin's trailing-stop adjustments — without this, operator positions
+-- keep the original stop and slowly diverge from admin's risk profile.
+CREATE TABLE IF NOT EXISTS trade_modifications (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id        INTEGER NOT NULL,
+    ts              TEXT NOT NULL,
+    stop_loss       REAL,
+    take_profit     REAL
+);
+CREATE INDEX IF NOT EXISTS ix_trade_modifications_ts
+    ON trade_modifications(ts);
 """
 
 
@@ -68,6 +82,26 @@ class TradeJournal:
                     order.opened_at.isoformat(),
                     order.broker_ticket,
                 ),
+            )
+
+    def record_modify(
+        self,
+        trade_id: int,
+        *,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        """Log a SL/TP modification so the signal feed can emit a MODIFY
+        event to operator EAs. Both fields may be present or only one —
+        the EA applies whichever non-null values it receives.
+        """
+        now = now or datetime.now(timezone.utc)
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO trade_modifications "
+                "(trade_id, ts, stop_loss, take_profit) VALUES (?,?,?,?)",
+                (trade_id, now.isoformat(), stop_loss, take_profit),
             )
 
     def record_close(self, order: Order) -> None:

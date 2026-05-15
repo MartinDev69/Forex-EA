@@ -186,7 +186,12 @@ def main() -> None:
                 return False
 
         data_feed = MT5DataFeed(reconnect=_reconnect_mt5)
-        executor = MT5Executor(symbols_filter=settings.symbols)
+        # Same reconnect handler for the executor — positions_get,
+        # account_info and the rest of the order-router calls go silent
+        # during a broker drop, and without the shared callback the
+        # tick keeps reading empty until the feed happens to reconnect
+        # first.
+        executor = MT5Executor(symbols_filter=settings.symbols, reconnect=_reconnect_mt5)
     else:
         data_feed = MockDataFeed()
         executor = MockExecutor(starting_balance=10_000.0)
