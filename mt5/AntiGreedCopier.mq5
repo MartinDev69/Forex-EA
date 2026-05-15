@@ -34,7 +34,7 @@
 // Build stamp shown on the panel's header sub-line — bumped on every
 // layout change. If the panel doesn't show this exact string, MT5 is
 // running a stale compiled binary; recompile and re-attach the EA.
-#define EA_BUILD "v1.09"
+#define EA_BUILD "v1.10"
 
 #include <Trade/Trade.mqh>
 
@@ -76,6 +76,13 @@ string g_bookmark = "";
 
 // Wall clock of the last successful account snapshot POST.
 datetime g_last_account_report = 0;
+
+// Position-IDs we've already POSTed CLOSED for in this EA session. Used
+// to suppress duplicate scans + transactions firing within the same
+// /me/ea-fill window. Server upsert is idempotent on broker_ticket so
+// a cross-session retry on EA reload is harmless — the dedup here is
+// just to avoid pointless POSTs.
+long     g_reported_closures[];
 
 // Filter state — parsed once from EnabledSymbols input on init.
 string   g_enabled_symbols[];
@@ -149,10 +156,52 @@ void OnTimer()
    Poll();
    MaybeReportAccount();
    // Catch broker-side closures (SL/TP hits, manual MT5 close) that
-   // didn't go through HandleClose — without this they'd stay marked
-   // OPEN on the dashboard forever.
+   // didn't go through HandleClose. ReconcileClosedPositions handles
+   // tickets the EA opened during this session via GV_PREFIX; the
+   // history scan covers everything else (backfilled trades, manual
+   // closes after EA restart, etc).
    ReconcileClosedPositions();
+   ScanRecentClosures();
    if(ShowPanel) RedrawPanel();
+}
+
+//+------------------------------------------------------------------+
+//| Real-time hook for trade events. Fires the moment MT5 records a   |
+//| new deal — so a manual close on the operator's terminal flips     |
+//| the dashboard row from OPEN to CLOSED inside one HTTP round-trip  |
+//| instead of waiting up to PollSeconds for ScanRecentClosures.      |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest      &request,
+                        const MqlTradeResult       &result)
+{
+   if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
+   if(trans.deal == 0) return;
+   long pos_id = (long)trans.position;
+   if(pos_id == 0) return;
+   if(IsClosureReported(pos_id)) return;
+   // Pull deal details out of history. Selecting by position covers
+   // closes that may have generated multiple deals (partial fills).
+   if(!HistorySelectByPosition(pos_id)) return;
+   int total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong deal = HistoryDealGetTicket(i);
+      if(deal != trans.deal) continue;
+      long magic = HistoryDealGetInteger(deal, DEAL_MAGIC);
+      if(magic != Magic) return;
+      long entry = HistoryDealGetInteger(deal, DEAL_ENTRY);
+      if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_INOUT) return;
+      long master_id = ExtractMasterTradeId(pos_id);
+      ReportFillClosed(pos_id, master_id, "transaction");
+      MarkClosureReported(pos_id);
+      if(master_id > 0)
+      {
+         string key = GV_PREFIX + (string)master_id;
+         if(GlobalVariableCheck(key)) GlobalVariableDel(key);
+      }
+      return;
+   }
 }
 
 void OnTick()
@@ -349,7 +398,10 @@ void HandleClose(long trade_id, const string &symbol)
    if(Verbose) Print("AntiGreedCopier: CLOSED ticket=", ticket, " for trade_id=", trade_id);
    // Report the CLOSED fill with the operator's actual broker pnl. We
    // read it from MT5 deal history so it matches the broker statement
-   // exactly (includes swap + commission).
+   // exactly (includes swap + commission). Mark the position closed
+   // before ReportFillClosed so the imminent OnTradeTransaction event
+   // doesn't double-POST the same close.
+   MarkClosureReported((long)ticket);
    ReportFillClosed((long)ticket, trade_id, "master_close");
 }
 
@@ -726,6 +778,76 @@ string IsoTimestamp(datetime t)
                        mdt.hour, mdt.min, mdt.sec);
 }
 
+bool IsClosureReported(long pos_id)
+{
+   for(int i = 0; i < ArraySize(g_reported_closures); i++)
+      if(g_reported_closures[i] == pos_id) return true;
+   return false;
+}
+
+void MarkClosureReported(long pos_id)
+{
+   if(IsClosureReported(pos_id)) return;
+   int n = ArraySize(g_reported_closures);
+   ArrayResize(g_reported_closures, n + 1);
+   g_reported_closures[n] = pos_id;
+}
+
+//+------------------------------------------------------------------+
+//| Scan recent MT5 history for closes we haven't reported yet. Runs |
+//| every OnTimer tick so a trade closed manually on MT5 (or hit by  |
+//| broker-side SL/TP) gets POSTed to /me/ea-fill within seconds —   |
+//| without this the dashboard would keep showing the row as OPEN    |
+//| because backfilled trades have no GV_PREFIX mapping for          |
+//| ReconcileClosedPositions to walk.                                |
+//+------------------------------------------------------------------+
+void ScanRecentClosures()
+{
+   datetime from_t = TimeCurrent() - 3600;  // last hour is plenty
+   if(!HistorySelect(from_t, TimeCurrent())) return;
+   int total = HistoryDealsTotal();
+   long pending[];
+   ArrayResize(pending, 0);
+   for(int i = 0; i < total; i++)
+   {
+      ulong deal = HistoryDealGetTicket(i);
+      if(deal == 0) continue;
+      long magic = HistoryDealGetInteger(deal, DEAL_MAGIC);
+      if(magic != Magic) continue;
+      long entry = HistoryDealGetInteger(deal, DEAL_ENTRY);
+      if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_INOUT) continue;
+      long pos_id = HistoryDealGetInteger(deal, DEAL_POSITION_ID);
+      if(pos_id == 0) continue;
+      if(IsClosureReported(pos_id)) continue;
+      // Dedup within this scan as well (multiple OUT legs on the same position).
+      bool seen = false;
+      for(int k = 0; k < ArraySize(pending); k++)
+         if(pending[k] == pos_id) { seen = true; break; }
+      if(seen) continue;
+      int n = ArraySize(pending);
+      ArrayResize(pending, n + 1);
+      pending[n] = pos_id;
+   }
+   for(int j = 0; j < ArraySize(pending); j++)
+   {
+      // ReportFillClosed → ReadCloseFromHistory narrows the global
+      // history selection. Re-broaden it before each iteration so
+      // ExtractMasterTradeId still sees the full window.
+      HistorySelect(from_t, TimeCurrent());
+      long pos_id = pending[j];
+      long master_id = ExtractMasterTradeId(pos_id);
+      ReportFillClosed(pos_id, master_id, "scan");
+      MarkClosureReported(pos_id);
+      // Drop any leftover GV mapping so ReconcileClosedPositions
+      // doesn't re-fire on the same position next tick.
+      if(master_id > 0)
+      {
+         string key = GV_PREFIX + (string)master_id;
+         if(GlobalVariableCheck(key)) GlobalVariableDel(key);
+      }
+   }
+}
+
 //+------------------------------------------------------------------+
 //| Backfill recent fills on EA load. Walks MT5 deal history for the |
 //| last FillBackfillDays days, finds positions opened by this EA    |
@@ -789,9 +911,20 @@ void BackfillRecentFills()
       long pos_id = positions[j];
       long master_trade_id = ExtractMasterTradeId(pos_id);
       if(PositionSelectByTicket(pos_id))
+      {
          BackfillOpenFromHistory(pos_id, master_trade_id);
+         // Still-live positions need a GV mapping so the existing
+         // reconcile pass can flip them to CLOSED later — without it
+         // ReconcileClosedPositions would skip the ticket and only
+         // ScanRecentClosures would catch the close.
+         if(master_trade_id > 0)
+            GlobalVariableSet(GV_PREFIX + (string)master_trade_id, (double)pos_id);
+      }
       else
+      {
          ReportFillClosed(pos_id, master_trade_id, "backfill");
+         MarkClosureReported(pos_id);
+      }
    }
 }
 
@@ -879,6 +1012,7 @@ void ReconcileClosedPositions()
    for(int j = 0; j < ArraySize(tickets_to_close); j++)
    {
       ReportFillClosed(tickets_to_close[j], trade_ids[j], "broker_close");
+      MarkClosureReported(tickets_to_close[j]);
       GlobalVariableDel(GV_PREFIX + (string)trade_ids[j]);
       if(Verbose)
          Print("AntiGreedCopier: reconciled close for ticket=",
