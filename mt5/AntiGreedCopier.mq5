@@ -141,6 +141,10 @@ void OnTimer()
 {
    Poll();
    MaybeReportAccount();
+   // Catch broker-side closures (SL/TP hits, manual MT5 close) that
+   // didn't go through HandleClose — without this they'd stay marked
+   // OPEN on the dashboard forever.
+   ReconcileClosedPositions();
    if(ShowPanel) RedrawPanel();
 }
 
@@ -295,6 +299,14 @@ void HandleOpen(long trade_id, const string &symbol, const string &side,
    GlobalVariableSet(GV_PREFIX + (string)trade_id, (double)ticket);
    if(Verbose)
       Print("AntiGreedCopier: OPEN ", side, " ", symbol, " ", lot, " lot ticket=", ticket);
+   // Report the OPEN fill to the dashboard so the operator's Trades
+   // view reflects their own MT5 reality (lot/price/currency) instead
+   // of admin's bot journal. Best-effort — a failed POST here doesn't
+   // affect the trade itself.
+   double fill_price = trade.ResultPrice();
+   if(fill_price <= 0) fill_price = SymbolInfoDouble(symbol, side == "BUY" ? SYMBOL_ASK : SYMBOL_BID);
+   ReportFillOpen((long)ticket, trade_id, symbol, side, lot,
+                  fill_price, use_sl, use_tp, TimeCurrent());
    // Panel counters
    MaybeResetDailyCounter();
    g_copies_today++;
@@ -328,6 +340,10 @@ void HandleClose(long trade_id, const string &symbol)
    }
    GlobalVariableDel(key);
    if(Verbose) Print("AntiGreedCopier: CLOSED ticket=", ticket, " for trade_id=", trade_id);
+   // Report the CLOSED fill with the operator's actual broker pnl. We
+   // read it from MT5 deal history so it matches the broker statement
+   // exactly (includes swap + commission).
+   ReportFillClosed((long)ticket, trade_id, "master_close");
 }
 
 //+------------------------------------------------------------------+
@@ -543,6 +559,204 @@ void ReportAccount()
    else if(Verbose)
    {
       Print("AntiGreedCopier: account report HTTP ", code);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Fill reporting — POST each open/close to /me/ea-fill so the       |
+//| dashboard's Trades view shows the operator's own MT5 reality      |
+//| (lot, fill price, broker pnl in account currency) instead of      |
+//| admin's bot journal.                                              |
+//+------------------------------------------------------------------+
+void ReportFillOpen(long ticket, long trade_id, const string &symbol,
+                    const string &side, double lot, double entry_price,
+                    double sl, double tp, datetime opened_at)
+{
+   string body = StringFormat(
+      "{\"broker_ticket\":%I64d,\"master_trade_id\":%I64d,"
+      "\"symbol\":\"%s\",\"side\":\"%s\",\"lot_size\":%.4f,"
+      "\"entry_price\":%.8f,\"stop_loss\":%.8f,\"take_profit\":%.8f,"
+      "\"status\":\"OPEN\",\"opened_at\":\"%s\"}",
+      ticket, trade_id, JsonEscape(symbol), side, lot, entry_price,
+      sl, tp, IsoTimestamp(opened_at));
+   PostFill(body);
+}
+
+void ReportFillClosed(long ticket, long trade_id, const string &close_reason)
+{
+   // Pull the actual broker-computed pnl + exit price from MT5 history.
+   // History only becomes visible after the broker confirms the close,
+   // so we may need a quick retry — keep it short to avoid blocking
+   // the timer.
+   double   exit_price = 0.0;
+   double   pnl_total  = 0.0;
+   datetime closed_at  = TimeCurrent();
+   datetime opened_at  = closed_at;
+   string   sym        = "";
+   string   side       = "BUY";
+   double   lot        = 0.0;
+   double   entry_price = 0.0;
+   bool found = ReadCloseFromHistory(ticket, sym, side, lot, entry_price,
+                                     opened_at, exit_price, pnl_total, closed_at);
+   if(!found)
+   {
+      // History not visible yet — try again next OnTimer via reconcile.
+      // Don't POST a half-filled row that would clobber the OPEN we
+      // already reported.
+      if(Verbose) Print("AntiGreedCopier: history not ready for ticket=",
+                       ticket, " — will retry on next reconcile.");
+      // Re-stash the ticket so reconcile picks it back up.
+      GlobalVariableSet(GV_PREFIX + (string)trade_id, (double)ticket);
+      return;
+   }
+   string body = StringFormat(
+      "{\"broker_ticket\":%I64d,\"master_trade_id\":%I64d,"
+      "\"symbol\":\"%s\",\"side\":\"%s\",\"lot_size\":%.4f,"
+      "\"entry_price\":%.8f,\"exit_price\":%.8f,\"pnl\":%.2f,"
+      "\"status\":\"CLOSED\",\"close_reason\":\"%s\","
+      "\"opened_at\":\"%s\",\"closed_at\":\"%s\"}",
+      ticket, trade_id,
+      JsonEscape(sym), side, lot,
+      entry_price, exit_price, pnl_total,
+      JsonEscape(close_reason),
+      IsoTimestamp(opened_at), IsoTimestamp(closed_at));
+   PostFill(body);
+}
+
+void PostFill(const string &body)
+{
+   string url = ApiBaseUrl + "/me/ea-fill";
+   string headers = "Authorization: Bearer " + ApiToken + "\r\n" +
+                    "Content-Type: application/json\r\n";
+   char post[];
+   StringToCharArray(body, post, 0, StringLen(body), CP_UTF8);
+   char result[];
+   string result_headers;
+   ResetLastError();
+   int code = WebRequest("POST", url, headers, 8000, post, result, result_headers);
+   if(code == 200)
+   {
+      if(Verbose) Print("AntiGreedCopier: fill reported ok.");
+   }
+   else if(code == -1)
+   {
+      int err = GetLastError();
+      if(err == 4014 && Verbose)
+         Print("AntiGreedCopier: fill report blocked — WebRequest needs ", ApiBaseUrl, " whitelisted.");
+   }
+   else if(Verbose)
+   {
+      Print("AntiGreedCopier: fill report HTTP ", code, " body=", CharArrayToString(result));
+   }
+}
+
+// Read the operator-side close result from MT5 deal history. Pulls
+// every deal tagged to this position, captures the IN leg's symbol /
+// side / volume / entry price, and sums the OUT legs' profit + swap +
+// commission for total pnl. Returns false when the broker hasn't yet
+// committed the close deals — the reconcile pass will retry on the
+// next OnTimer tick.
+bool ReadCloseFromHistory(long ticket,
+                          string &sym, string &side, double &lot,
+                          double &entry_price, datetime &opened_at,
+                          double &exit_price, double &pnl_total,
+                          datetime &closed_at)
+{
+   if(!HistorySelectByPosition(ticket)) return false;
+   int total = HistoryDealsTotal();
+   double sum_profit = 0.0;
+   double sum_swap   = 0.0;
+   double sum_comm   = 0.0;
+   datetime last_time = 0;
+   double last_price  = 0.0;
+   bool any_in  = false;
+   bool any_out = false;
+   for(int i = 0; i < total; i++)
+   {
+      ulong deal = HistoryDealGetTicket(i);
+      if(deal == 0) continue;
+      long entry_type = HistoryDealGetInteger(deal, DEAL_ENTRY);
+      sum_profit += HistoryDealGetDouble(deal, DEAL_PROFIT);
+      sum_swap   += HistoryDealGetDouble(deal, DEAL_SWAP);
+      sum_comm   += HistoryDealGetDouble(deal, DEAL_COMMISSION);
+      if(entry_type == DEAL_ENTRY_IN && !any_in)
+      {
+         any_in      = true;
+         sym         = HistoryDealGetString(deal, DEAL_SYMBOL);
+         long dtype  = HistoryDealGetInteger(deal, DEAL_TYPE);
+         // DEAL_TYPE_BUY/SELL: side of the *entry* deal.
+         side        = (dtype == DEAL_TYPE_BUY) ? "BUY" : "SELL";
+         lot         = HistoryDealGetDouble(deal, DEAL_VOLUME);
+         entry_price = HistoryDealGetDouble(deal, DEAL_PRICE);
+         opened_at   = (datetime)HistoryDealGetInteger(deal, DEAL_TIME);
+      }
+      if(entry_type == DEAL_ENTRY_OUT || entry_type == DEAL_ENTRY_INOUT)
+      {
+         any_out = true;
+         datetime t = (datetime)HistoryDealGetInteger(deal, DEAL_TIME);
+         if(t >= last_time)
+         {
+            last_time = t;
+            last_price = HistoryDealGetDouble(deal, DEAL_PRICE);
+         }
+      }
+   }
+   if(!any_out || !any_in) return false;
+   exit_price = last_price;
+   pnl_total  = sum_profit + sum_swap + sum_comm;
+   closed_at  = last_time;
+   return true;
+}
+
+// ISO-8601 UTC timestamp matching what the server expects in
+// EAFillReportRequest.opened_at / closed_at.
+string IsoTimestamp(datetime t)
+{
+   MqlDateTime mdt;
+   TimeToStruct(t, mdt);
+   return StringFormat("%04d-%02d-%02dT%02d:%02d:%02dZ",
+                       mdt.year, mdt.mon, mdt.day,
+                       mdt.hour, mdt.min, mdt.sec);
+}
+
+//+------------------------------------------------------------------+
+//| Reconcile positions that closed without our HandleClose firing    |
+//| — typically because MT5 hit the broker-side SL/TP. Walks every    |
+//| tracked trade_id → ticket mapping; if the position is gone, we    |
+//| send a CLOSED report and delete the global so we don't keep       |
+//| reporting it.                                                     |
+//+------------------------------------------------------------------+
+void ReconcileClosedPositions()
+{
+   int total = GlobalVariablesTotal();
+   // Collect into a list first — GlobalVariableDel inside the loop
+   // would shift indices and skip entries.
+   long   tickets_to_close[];
+   long   trade_ids[];
+   ArrayResize(tickets_to_close, 0);
+   ArrayResize(trade_ids, 0);
+   int prefix_len = StringLen(GV_PREFIX);
+   for(int i = 0; i < total; i++)
+   {
+      string name = GlobalVariableName(i);
+      if(StringSubstr(name, 0, prefix_len) != GV_PREFIX) continue;
+      long trade_id = StringToInteger(StringSubstr(name, prefix_len));
+      ulong ticket = (ulong)GlobalVariableGet(name);
+      if(ticket == 0) continue;
+      if(PositionSelectByTicket(ticket)) continue;  // still open
+      int n = ArraySize(tickets_to_close);
+      ArrayResize(tickets_to_close, n + 1);
+      ArrayResize(trade_ids, n + 1);
+      tickets_to_close[n] = (long)ticket;
+      trade_ids[n]        = trade_id;
+   }
+   for(int j = 0; j < ArraySize(tickets_to_close); j++)
+   {
+      ReportFillClosed(tickets_to_close[j], trade_ids[j], "broker_close");
+      GlobalVariableDel(GV_PREFIX + (string)trade_ids[j]);
+      if(Verbose)
+         Print("AntiGreedCopier: reconciled close for ticket=",
+               tickets_to_close[j], " trade_id=", trade_ids[j]);
    }
 }
 

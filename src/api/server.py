@@ -67,6 +67,7 @@ from src.api.totp import generate_secret, provisioning_uri, verify_code
 from src.api.totp_store import TOTPStore
 from src.api.ea_signals import SignalFeed
 from src.api.ea_account_reports import EAAccountReportStore
+from src.api.ea_fills import EAFillStore
 from src.api.bot_control import BotControlStore
 from src.api.subscription_requests import (
     SubscriptionRequest,
@@ -218,6 +219,7 @@ user_store = UserStore(_DB)
 subscription_request_store = SubscriptionRequestStore(_DB)
 signal_feed = SignalFeed(_DB)
 ea_account_store = EAAccountReportStore(_DB)
+ea_fill_store = EAFillStore(_DB)
 bot_control_store = BotControlStore(_DB)
 SIGNUP_BOT_TOKEN = os.environ.get("SIGNUP_TELEGRAM_BOT_TOKEN", "").strip() or None
 # Notifier bot's @username (no leading @). When set, approval DMs from
@@ -638,20 +640,19 @@ def get_status(user: dict = Depends(current_user)) -> StatusResponse:
         bot_last_hb = bot_hb.last_tick_at
         hb_fresh = (datetime.now(timezone.utc) - bot_hb.last_tick_at).total_seconds() < 180
     bot_running = should_run and hb_fresh
-    # Operators see only the positions their EA would have copied; admin
-    # sees the master journal's open count.
-    since_iso: str | None = None
-    pick_filter: set[str] | None = None
+    # Operators get their open-position count from the EA-reported fill
+    # store — that's *their* MT5's truth, independent of admin's journal.
+    open_positions: int
     if user.get("role") != "admin":
         username = user.get("username") or user.get("sub") or ""
-        report = ea_account_store.get(username) if username else None
-        since_iso = report.first_seen_at.isoformat() if (report and report.first_seen_at) else None
-        pick_filter = _operator_pick_filter(username)
+        open_positions = ea_fill_store.count_open(username) if username else 0
+    else:
+        open_positions = _open_positions()
     return StatusResponse(
         running=bot_running,
         mt5_connected=bool(bs.connected) if bs else False,
         last_heartbeat=bot_last_hb,
-        open_positions=_open_positions(since_iso=since_iso, pick_filter=pick_filter),
+        open_positions=open_positions,
     )
 
 
@@ -671,13 +672,13 @@ def account(user: dict = Depends(current_user)) -> AccountResponse:
                 report.first_seen_at.isoformat()
                 if report.first_seen_at else None
             )
-            pick_filter = _operator_pick_filter(username)
             return AccountResponse(
                 balance=balance,
                 equity=equity,
-                open_positions=_open_positions(
-                    since_iso=since_iso, pick_filter=pick_filter,
-                ),
+                # Operator's own MT5 open count via the EA fill store —
+                # admin's journal would over- or under-count depending
+                # on whether the EA actually copied each master trade.
+                open_positions=ea_fill_store.count_open(username),
                 daily_pnl=floating,
                 currency=report.currency,
             )
@@ -779,26 +780,37 @@ def toggle_strategy(name: str, _user: dict = Depends(require_2fa)) -> StrategyRe
 
 @app.get("/trades", response_model=list[TradeResponse])
 def trades(limit: int = 20, user: dict = Depends(current_user)) -> list[TradeResponse]:
-    # Non-admin operators only see trades from the moment their EA first
-    # checked in. Before that, the master trades aren't "theirs" — the
-    # EA wasn't online to copy them. We also filter by the operator's
-    # own strategy picks + the admin's user_copyable flag, mirroring the
-    # /signals/feed filter — otherwise the dashboard shows admin's full
-    # trade history (incl. strategies the operator never picked) even
-    # though their EA never copied those trades. The user's actual MT5
-    # account stays at zero, so the WIN RATE / counts drift from reality.
-    since_iso: str | None = None
-    pick_filter: set[str] | None = None
+    # Non-admin operators read from their own EA-reported fills, not the
+    # master journal — admin's lot sizing, currency, and broker fees
+    # don't apply to them, and reading admin's pnl gave them numbers
+    # that didn't match their own MT5 statement. The EA writes to
+    # /me/ea-fill on every PositionOpen/Close, so this is the operator's
+    # actual broker reality.
     if user.get("role") != "admin":
         username = user.get("username") or user.get("sub") or ""
-        report = ea_account_store.get(username) if username else None
-        if report is None or report.first_seen_at is None:
+        if not username:
             return []
-        since_iso = report.first_seen_at.isoformat()
-        pick_filter = _operator_pick_filter(username)
-    rows = journal.recent(limit=limit, since_iso=since_iso)
-    if pick_filter is not None:
-        rows = [r for r in rows if (r.get("strategy") or "") in pick_filter]
+        fills = ea_fill_store.recent(username, limit=limit)
+        return [
+            TradeResponse(
+                id=f.id,
+                symbol=f.symbol,
+                side=f.side,
+                entry_price=f.entry_price,
+                exit_price=f.exit_price,
+                pnl=f.pnl or 0.0,
+                opened_at=f.opened_at,
+                closed_at=f.closed_at,
+                lot_size=f.lot_size,
+                stop_loss=f.stop_loss,
+                take_profit=f.take_profit,
+                strategy=f.strategy,
+                broker_ticket=f.broker_ticket,
+                close_reason=f.close_reason,
+            )
+            for f in fills
+        ]
+    rows = journal.recent(limit=limit, since_iso=None)
     out: list[TradeResponse] = []
     for r in rows:
         sl = r.get("stop_loss")
@@ -1191,6 +1203,77 @@ def report_ea_account(
         server=body.server,
         broker=body.broker,
         currency=body.currency,
+    )
+    return {"ok": True}
+
+
+class EAFillReportRequest(BaseModel):
+    broker_ticket: int
+    master_trade_id: int | None = None
+    symbol: str
+    side: Literal["BUY", "SELL"]
+    lot_size: float
+    entry_price: float
+    exit_price: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    pnl: float | None = None
+    strategy: str | None = None
+    status: Literal["OPEN", "CLOSED"]
+    close_reason: str | None = None
+    # ISO-8601 UTC timestamps. opened_at is required on the first POST
+    # for a ticket; closed_at must be present when status=='CLOSED'.
+    opened_at: str
+    closed_at: str | None = None
+
+
+@app.post("/me/ea-fill")
+def report_ea_fill(
+    body: EAFillReportRequest,
+    username: str = Depends(ea_caller),
+) -> dict:
+    """Per-trade fill report from the AntiGreedCopier EA.
+
+    Sent once when the EA opens a copied position (status=OPEN) and
+    again when it closes (status=CLOSED, exit/pnl populated). The
+    operator's MT5 is the source of truth for lot size, fill price,
+    commission/swap, and account currency — so the resulting pnl matches
+    what the operator sees in their broker statement, unlike admin's
+    journal which was being mistakenly shown to copy-trading users.
+
+    Idempotent on (username, broker_ticket): retries from a flaky
+    WebRequest don't duplicate rows; a later CLOSED report just fills in
+    exit/pnl/closed_at on the existing OPEN row.
+    """
+    try:
+        opened_at = datetime.fromisoformat(body.opened_at.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, "opened_at must be ISO-8601") from None
+    closed_at: datetime | None = None
+    if body.closed_at:
+        try:
+            closed_at = datetime.fromisoformat(body.closed_at.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(400, "closed_at must be ISO-8601") from None
+    if body.status == "CLOSED" and closed_at is None:
+        raise HTTPException(400, "closed_at required when status=CLOSED")
+    ea_fill_store.upsert(
+        username,
+        broker_ticket=body.broker_ticket,
+        master_trade_id=body.master_trade_id,
+        symbol=body.symbol,
+        side=body.side,
+        lot_size=body.lot_size,
+        entry_price=body.entry_price,
+        opened_at=opened_at,
+        status=body.status,
+        exit_price=body.exit_price,
+        stop_loss=body.stop_loss,
+        take_profit=body.take_profit,
+        pnl=body.pnl,
+        strategy=body.strategy,
+        close_reason=body.close_reason,
+        closed_at=closed_at,
     )
     return {"ok": True}
 
