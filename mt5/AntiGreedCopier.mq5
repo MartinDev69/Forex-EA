@@ -34,7 +34,7 @@
 // Build stamp shown on the panel's header sub-line — bumped on every
 // layout change. If the panel doesn't show this exact string, MT5 is
 // running a stale compiled binary; recompile and re-attach the EA.
-#define EA_BUILD "v1.12"
+#define EA_BUILD "v1.13"
 
 #include <Trade/Trade.mqh>
 
@@ -265,23 +265,32 @@ void Poll()
    g_last_poll_ok  = TimeCurrent();
 
    string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+
+   // Walk every event object FIRST, then advance the bookmark. The
+   // previous order ("save bookmark, then dispatch") meant a crash
+   // mid-dispatch lost every unprocessed event — the next poll asked
+   // for events after the new bookmark, skipping the rest of the
+   // batch. Now an unfinished batch gets replayed on the next poll;
+   // the server's per-event dedup (GV_PREFIX on OPEN, no-GV on CLOSE/
+   // MODIFY) makes the replay a safe no-op for anything we already
+   // handled.
+   string events_segment = JsonExtractArray(body, "events");
+   if(StringLen(events_segment) > 0)
+   {
+      int pos = 0;
+      while(true)
+      {
+         string obj = JsonNextObject(events_segment, pos);
+         if(StringLen(obj) == 0) break;
+         DispatchEvent(obj);
+      }
+   }
+
    string new_bookmark = JsonStringField(body, "bookmark");
    if(StringLen(new_bookmark) > 0 && new_bookmark != g_bookmark)
    {
       g_bookmark = new_bookmark;
       WriteBookmark(g_bookmark);
-   }
-
-   // Walk every event object. The feed returns them oldest-first.
-   string events_segment = JsonExtractArray(body, "events");
-   if(StringLen(events_segment) == 0) return;
-
-   int pos = 0;
-   while(true)
-   {
-      string obj = JsonNextObject(events_segment, pos);
-      if(StringLen(obj) == 0) break;
-      DispatchEvent(obj);
    }
 }
 
@@ -324,6 +333,14 @@ void HandleModify(long trade_id, double sl, double tp)
       return;
    }
    ulong ticket = (ulong)GlobalVariableGet(key);
+   if(ticket == 0)
+   {
+      // In-flight OPEN reservation — the position hasn't been
+      // assigned a real ticket yet. The MODIFY will be re-delivered
+      // on the next poll (bookmark replay) once the slot is populated.
+      if(Verbose) Print("AntiGreedCopier: MODIFY for in-flight trade_id=", trade_id);
+      return;
+   }
    if(!PositionSelectByTicket(ticket))
    {
       // Position already gone — likely closed broker-side.
@@ -387,14 +404,34 @@ void HandleOpen(long trade_id, const string &symbol, const string &side,
    }
    double use_sl = (PlaceStopLoss && sl > 0) ? sl : 0;
    double use_tp = (PlaceTakeProfit && tp > 0) ? tp : 0;
-   bool ok = false;
    string comment = StringFormat("AGcopy #%I64d", trade_id);
+   string gv_key  = GV_PREFIX + (string)trade_id;
+
+   // Reserve the dedup slot BEFORE placing the trade. The
+   // duplicate-OPEN check at the top of HandleOpen() trips on
+   // GlobalVariableCheck (existence, not value) so a sentinel 0 still
+   // blocks a re-fire from a retried event. Without the reservation,
+   // a crash between trade.Buy returning successfully and
+   // GlobalVariableSet would let the next bookmark replay open a
+   // SECOND copy of the same master trade. The trade-off: if we
+   // crash mid-trade.Buy (before MT5 actually places it), the slot
+   // stays reserved and we'll skip the signal on retry — a missed
+   // trade is better than a phantom duplicate, and the periodic
+   // BackfillRecentFills sweep will rewrite the GV with the real
+   // ticket if MT5 actually opened it before we died.
+   GlobalVariableSet(gv_key, 0.0);
+
+   bool ok = false;
    if(side == "BUY")
       ok = trade.Buy(lot, symbol, 0, use_sl, use_tp, comment);
    else if(side == "SELL")
       ok = trade.Sell(lot, symbol, 0, use_sl, use_tp, comment);
    if(!ok)
    {
+      // Trade was rejected — release the reservation so that if the
+      // server later resends the same OPEN (signal feed glitch or
+      // bookmark replay) we get another shot at it.
+      GlobalVariableDel(gv_key);
       Print("AntiGreedCopier: OPEN failed for ", side, " ", symbol,
             " lot=", lot, " retcode=", trade.ResultRetcode(),
             " (", trade.ResultRetcodeDescription(), ")");
@@ -402,9 +439,9 @@ void HandleOpen(long trade_id, const string &symbol, const string &side,
    }
    ulong ticket = trade.ResultOrder();
    if(ticket == 0) ticket = trade.ResultDeal();
-   // Persist trade_id → ticket so a restart can still find the position
-   // when CLOSE arrives later.
-   GlobalVariableSet(GV_PREFIX + (string)trade_id, (double)ticket);
+   // Replace the sentinel with the real ticket so HandleClose /
+   // HandleModify / ReconcileClosedPositions can find the position.
+   GlobalVariableSet(gv_key, (double)ticket);
    if(Verbose)
       Print("AntiGreedCopier: OPEN ", side, " ", symbol, " ", lot, " lot ticket=", ticket);
    // Report the OPEN fill to the dashboard so the operator's Trades
@@ -433,6 +470,19 @@ void HandleClose(long trade_id, const string &symbol)
       return;
    }
    ulong ticket = (ulong)GlobalVariableGet(key);
+   if(ticket == 0)
+   {
+      // Sentinel from an in-flight OPEN (HandleOpen reserves the slot
+      // *before* trade.Buy/Sell returns; if we crashed in between, the
+      // ticket is still 0). Don't delete the reservation — that would
+      // re-arm the duplicate-OPEN guard against the next bookmark
+      // replay. The reservation gets cleared either when the position
+      // actually opens (HandleOpen overwrites with the real ticket) or
+      // when BackfillRecentFills finds the position via its AGcopy
+      // comment and rewrites the GV.
+      if(Verbose) Print("AntiGreedCopier: CLOSE for in-flight trade_id=", trade_id);
+      return;
+   }
    if(!PositionSelectByTicket(ticket))
    {
       // Position already gone — clean up the map.
