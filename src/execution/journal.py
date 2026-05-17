@@ -124,13 +124,18 @@ class TradeJournal:
 
     def list_open(self) -> list[dict]:
         """Every journal row currently marked OPEN with a broker ticket.
+
         Used by the bot's auto-reconciler to detect entries that have
-        already closed broker-side but never got their journal update.
+        already closed broker-side but never got their journal update,
+        and by RiskManager seeding on bot start. SL/TP/lot_size are
+        included so the seed pass can rebuild portfolio heat instead of
+        treating restarts as a clean slate.
         """
         with self._conn() as c:
             rows = c.execute(
                 """
-                SELECT id, symbol, side, broker_ticket, entry_price, opened_at
+                SELECT id, symbol, side, broker_ticket, entry_price,
+                       stop_loss, take_profit, lot_size, strategy, opened_at
                 FROM trades
                 WHERE status = 'OPEN' AND closed_at IS NULL
                   AND broker_ticket IS NOT NULL

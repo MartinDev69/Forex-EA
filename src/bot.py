@@ -38,7 +38,7 @@ from src.narrator.composer import NarratorComposer
 from src.regime.classifier import RegimeClassifier, RegimeSnapshot
 from src.regime.store import RegimeStore
 from src.replay.recorder import PathRecorder
-from src.risk.position_sizing import lot_size_from_risk, pip_size
+from src.risk.position_sizing import lot_size_from_risk, pip_size, pip_value
 from src.risk.risk_manager import RiskManager
 from src.strategies.base import Signal, SignalType, Strategy
 from src.voice.killswitch import KillSwitchFlag
@@ -231,7 +231,8 @@ class Bot:
         for order in list(self.executor.open_orders()):
             if self.stop_manager is not None:
                 self._apply_trailing(order)
-            if self._should_close_order(order):
+            trigger = self._close_trigger(order)
+            if trigger is not None:
                 # Skip if we recently failed to close this ticket — the
                 # broker-side cause (no margin, market closed, retcode
                 # 10018) usually takes seconds to clear and re-firing
@@ -239,7 +240,10 @@ class Bot:
                 retry_after = self.state.close_retry_after.get(order.broker_ticket or order.id)
                 if retry_after and time.monotonic() < retry_after:
                     continue
-                self._close_order(order, "stop/target")
+                # trigger is "stop" or "target" — drives the comment we
+                # write into the broker close request AND the
+                # requested_close price used for the slippage stat.
+                self._close_order(order, trigger)
 
         # Propfirm bookkeeping — must happen before signal evaluation so a
         # mid-tick DD breach kills new entries this same tick.
@@ -320,9 +324,66 @@ class Bot:
         self._write_heartbeat(None)
         return acted
 
+    def _seed_risk_state_from_journal(self) -> None:
+        """Repopulate RiskState from journal rows that are still OPEN.
+
+        Without this, an `nssm restart` zeroes ``state.open_trade_count``
+        and ``state.open_risk_pct`` while the broker still holds the
+        positions — the max-open-trades and portfolio-heat gates would
+        permit ``max_open_trades`` *more* trades on top of what's
+        already there for one full cycle. We rebuild the counters from
+        the journal so the first tick after restart enforces the gates
+        against the real exposure.
+
+        risk_pct here is an estimate — the original was a function of
+        balance at open time, which we don't store. We rebuild it from
+        the persisted lot_size + stop_distance + current balance, which
+        slightly over- or under-counts when balance has drifted since
+        the trade opened. Close enough — the goal is to stop saying
+        "zero exposure" the moment we restart with live positions.
+        """
+        try:
+            open_rows = self.journal.list_open()
+        except Exception:
+            log.exception("seed_risk_state: journal.list_open failed; gates will under-count")
+            return
+        if not open_rows:
+            return
+        try:
+            balance = float(self.executor.account_balance())
+        except Exception:
+            log.exception("seed_risk_state: account_balance unavailable; risk_pct seed will be 0")
+            balance = 0.0
+        for r in open_rows:
+            try:
+                symbol = r["symbol"]
+                entry = float(r["entry_price"])
+                sl = float(r["stop_loss"])
+                lot = float(r["lot_size"])
+                ps = pip_size(symbol)
+                if ps <= 0 or balance <= 0:
+                    # Count the trade so max_open_trades is honoured even
+                    # when we can't compute its risk contribution.
+                    self.risk.register_trade_opened(0.0)
+                    continue
+                stop_dist_pips = abs(entry - sl) / ps
+                per_lot_risk = stop_dist_pips * pip_value(symbol)
+                risk_amount = per_lot_risk * lot
+                risk_pct = risk_amount / balance
+                self.risk.register_trade_opened(risk_pct)
+            except Exception:
+                log.exception("seed_risk_state: failed for trade #%s", r.get("id"))
+        log.info(
+            "seeded risk state from %d journal open rows: count=%d heat=%.2f%%",
+            len(open_rows),
+            self.risk.state.open_trade_count,
+            self.risk.state.open_risk_pct * 100.0,
+        )
+
     def run_forever(self) -> None:
         self.state.running = True
         log.info("Bot loop starting — symbols=%s, tf=%s", self.config.symbols, self.config.timeframe)
+        self._seed_risk_state_from_journal()
         was_paused = False
         while self.state.running:
             # Lifecycle pause: when an operator clicks Stop on the dashboard
@@ -1121,15 +1182,39 @@ class Bot:
         log.info("TRAIL %s %s SL %.5f → %.5f",
                  order.side.value, order.symbol, prev, new_sl)
 
-    def _should_close_order(self, order: Order) -> bool:
+    def _close_trigger(self, order: Order) -> str | None:
+        """Return "target" if the most recent bar wicked through TP,
+        "stop" if it wicked through SL, or None if neither.
+
+        Used to drive both the close decision *and* the close-reason
+        attribution downstream (fills.requested_price uses the level
+        that triggered the exit; without this we'd record every TP win
+        with the SL price as the "requested" close, garbage-filling
+        the execution-quality slippage column).
+
+        Edge case — both hit on the same bar (gap, fast wick): we
+        can't reconstruct intra-bar order, so default to "stop". The
+        broker still gives us the real fill; this only affects the
+        slippage stat. Being pessimistic here means our slippage
+        numbers are biased slightly worse than reality, which is the
+        right direction for an honest dashboard.
+        """
         bars = self.feed.latest_bars(order.symbol, self.config.timeframe, 2)
         if bars.empty:
-            return False
+            return None
         last = bars.iloc[-1]
         high, low = float(last["high"]), float(last["low"])
         if order.side == SignalType.BUY:
-            return low <= order.stop_loss or high >= order.take_profit
-        return high >= order.stop_loss or low <= order.take_profit
+            hit_sl = low <= order.stop_loss
+            hit_tp = high >= order.take_profit
+        else:
+            hit_sl = high >= order.stop_loss
+            hit_tp = low <= order.take_profit
+        if hit_sl:
+            return "stop"
+        if hit_tp:
+            return "target"
+        return None
 
     def _close_order(self, order: Order, reason: str) -> None:
         # The "requested" close price is the level that triggered the exit:
