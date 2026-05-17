@@ -50,9 +50,13 @@ def test_lot_size_basic():
     assert lots == pytest.approx(0.2, abs=0.01)
 
 
-def test_lot_size_minimum_applied():
+def test_lot_size_skips_when_below_min():
+    # $100 balance, 1% risk = $1 budget; 200-pip stop on EURUSD is
+    # $2000 per lot, so the math wants 0.0005 lots — well under the
+    # 0.01-lot broker minimum. Returning min_lot would deliver ~20×
+    # the intended risk; we return 0 instead and the bot skips.
     lots = lot_size_from_risk(100, 0.01, 200, "EURUSD")
-    assert lots >= 0.01
+    assert lots == 0.0
 
 
 def test_risk_manager_blocks_over_max_trades():

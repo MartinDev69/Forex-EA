@@ -159,6 +159,15 @@ def lot_size_from_risk(
 
     risk_amount = balance × risk_pct
     lots = risk_amount / (stop_distance_pips × pip_value_per_lot)
+
+    Returns ``0`` when the math says less than ``min_lot`` — the bot
+    treats 0 as "skip this signal". The previous version floored to
+    min_lot, which over-risked small accounts: a 0.5% intended risk
+    on a $500 account with a wide stop could land at 0.01 lots
+    delivering ~2% actual risk per trade. For prop-firm accounts that
+    quickly chews through the daily-loss budget. Skipping is the safer
+    default; operators who need every signal can dial up risk_per_trade
+    or down the stop distance instead.
     """
     if stop_distance_pips <= 0:
         raise ValueError("stop_distance_pips must be > 0")
@@ -169,5 +178,10 @@ def lot_size_from_risk(
     per_lot_risk = stop_distance_pips * pip_value(symbol)
     raw_lots = risk_amount / per_lot_risk
 
-    stepped = round(raw_lots / lot_step) * lot_step
-    return max(min_lot, min(max_lot, round(stepped, 2)))
+    # Floor to the broker's step (round-down) so we never round up past
+    # the intended risk envelope. The previous round() could bump a
+    # 0.014-lot computation to 0.02 lots (43% extra risk per trade).
+    stepped = (raw_lots // lot_step) * lot_step
+    if stepped < min_lot:
+        return 0.0
+    return min(max_lot, round(stepped, 2))

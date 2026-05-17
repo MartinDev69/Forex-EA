@@ -9,7 +9,7 @@ Implements the portfolio-level safeguards from the guide:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Callable, Optional, Sequence, TYPE_CHECKING
 
@@ -40,7 +40,15 @@ class RiskState:
     open_trade_count: int = 0
     open_risk_pct: float = 0.0
     daily_pnl: float = 0.0
-    last_reset: date = field(default_factory=date.today)
+    # UTC date of the last daily_pnl reset. Stays None until the first
+    # daily_reset_if_needed() call so we honour the RiskManager's
+    # injected clock (tests pin "now" to a fixed UTC date that doesn't
+    # match the host's local date). The previous default of date.today()
+    # was *local* date, so on a non-UTC VPS the circuit breaker reset
+    # at local midnight rather than UTC — typically a couple of hours
+    # off from when the dashboard, propfirm guard, and daily summary
+    # all rolled over, giving operators a brief "free loss" window.
+    last_reset: date | None = None
 
 
 class RiskManager:
@@ -64,7 +72,20 @@ class RiskManager:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def daily_reset_if_needed(self) -> None:
-        today = date.today()
+        # UTC day boundary — matches PropFirmGuard, the dashboard's
+        # TODAY P&L, and the bot's daily-summary digest. Without this,
+        # `date.today()` (local) reset the daily-loss circuit breaker
+        # at local midnight, which on a SAST VPS = 22:00 UTC the
+        # previous day. Operators saw a ~2h window where the gate had
+        # already reset but the dashboard still showed the prior day's
+        # loss against today's budget.
+        today = self._clock().date()
+        if self.state.last_reset is None:
+            # First call after process start — seed without zeroing
+            # daily_pnl, so register_trade_closed pnls from earlier
+            # in the same UTC day aren't lost on bot restart.
+            self.state.last_reset = today
+            return
         if today != self.state.last_reset:
             self.state.daily_pnl = 0.0
             self.state.last_reset = today
