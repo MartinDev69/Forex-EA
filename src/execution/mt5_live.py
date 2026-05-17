@@ -87,6 +87,12 @@ class MT5DataFeed:
 
     # Don't hammer mt5.initialize() — broker dropouts can come in bursts.
     _RECONNECT_BACKOFF_S = 5.0
+    # Failed symbol_select calls are rate-limited so a permanently-
+    # invalid symbol (typo, wrong broker suffix) doesn't trigger one
+    # symbol_select per tick. 30s is short enough for a transient
+    # broker glitch to recover, long enough that 100 ticks/min won't
+    # spam the log.
+    _SELECT_RETRY_S = 30.0
 
     def __init__(
         self,
@@ -101,6 +107,13 @@ class MT5DataFeed:
         # silently breaks any pair the operator adds via SYMBOLS unless we
         # do it ourselves.
         self._selected: set[str] = set()
+        # When symbol_select returns False (broker glitch, typo, wrong
+        # suffix), we don't cache success — but we DO record the
+        # last-attempt time so the next _ensure_selected call within
+        # SELECT_RETRY_S short-circuits instead of re-firing. Falls
+        # back to a real retry afterwards so a transient failure can
+        # recover without an EA restart.
+        self._select_attempted_at: dict[str, float] = {}
         # Callable that re-runs mt5.initialize() with the bot's stored
         # credentials. Returns True on success. Set by main.py at startup;
         # tests/local-dev usually pass None and accept that the feed can't
@@ -111,19 +124,30 @@ class MT5DataFeed:
     def _ensure_selected(self, symbol: str) -> None:
         """Best-effort push the symbol into Market Watch.
 
-        Some broker builds reject symbol_select with a generic 'Terminal: Call
-        failed' even though copy_rates works fine on the same symbol. So we
-        try once per process, swallow any failure, and let copy_rates be the
-        real source of truth — it surfaces a clear "no rates" error if the
-        symbol genuinely isn't on this server.
+        Only marks the symbol as selected when symbol_select returns
+        True. Some broker builds reject symbol_select with a generic
+        "Terminal: Call failed" even though copy_rates works fine on
+        the same symbol — those still get cached so we don't hammer
+        symbol_select on every tick. Genuinely unavailable symbols
+        (typo, wrong suffix) used to be cached "added" the first time
+        too, so they stayed silently broken between EA reconnects. Now
+        a failed select isn't cached; the rate-limit comes from
+        ``_select_attempted_at`` so we retry at most once every
+        SELECT_RETRY_S seconds instead of every tick.
         """
         if symbol in self._selected:
             return
-        self._selected.add(symbol)  # mark before the call — never retry per tick
+        now = time.monotonic()
+        last_try = self._select_attempted_at.get(symbol, 0.0)
+        if now - last_try < self._SELECT_RETRY_S:
+            return
+        self._select_attempted_at[symbol] = now
         try:
-            self._mt5.symbol_select(symbol, True)
+            ok = bool(self._mt5.symbol_select(symbol, True))
         except Exception:
-            pass
+            ok = False
+        if ok:
+            self._selected.add(symbol)
 
     def _terminal_connected(self) -> bool:
         """True iff MT5 reports an active broker connection. Wrapped in a
@@ -157,8 +181,11 @@ class MT5DataFeed:
             return False
         if ok:
             # Market Watch is empty after re-init; force every symbol to be
-            # re-selected on its next latest_bars call.
+            # re-selected on its next latest_bars call. Also wipe the
+            # failed-select cache so a symbol that only failed because
+            # of the broker dropping isn't held off for 30s longer.
             self._selected.clear()
+            self._select_attempted_at.clear()
             log.info("MT5 reconnected")
         else:
             log.warning("MT5 reconnect attempt did not restore the connection")

@@ -95,6 +95,12 @@ class TradeJournal:
         """Log a SL/TP modification so the signal feed can emit a MODIFY
         event to operator EAs. Both fields may be present or only one —
         the EA applies whichever non-null values it receives.
+
+        Also patches the matching ``trades`` row's stop_loss /
+        take_profit so the reconciler, drift baselines, and admin's
+        own /trades view see the live levels instead of the original
+        ones set at open. Operator-side ``ea_fills`` is unaffected —
+        each operator's fill carries the SL their EA actually applied.
         """
         now = now or datetime.now(timezone.utc)
         with self._conn() as c:
@@ -102,6 +108,16 @@ class TradeJournal:
                 "INSERT INTO trade_modifications "
                 "(trade_id, ts, stop_loss, take_profit) VALUES (?,?,?,?)",
                 (trade_id, now.isoformat(), stop_loss, take_profit),
+            )
+            # COALESCE keeps the existing column value when this call
+            # only carries one of the two fields (e.g., a trailing SL
+            # update should leave the original TP alone).
+            c.execute(
+                "UPDATE trades SET "
+                "  stop_loss   = COALESCE(?, stop_loss), "
+                "  take_profit = COALESCE(?, take_profit) "
+                "WHERE id = ?",
+                (stop_loss, take_profit, trade_id),
             )
 
     def record_close(self, order: Order) -> None:

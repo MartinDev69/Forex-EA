@@ -991,6 +991,10 @@ class Bot:
             order.extra["regime"] = regime.trend.value
         requested_price = signal.price
         send_started = time.perf_counter()
+        # Capture balance now so the post-place risk-pct math uses the
+        # same number the gate just evaluated against — keeps the heat
+        # accounting consistent if balance shifts between calls.
+        account_balance_at_send = self.executor.account_balance()
         order = self.executor.place(order)
         latency_ms = (time.perf_counter() - send_started) * 1000.0
         self._record_fill(order, "OPEN", requested_price, latency_ms)
@@ -1008,7 +1012,16 @@ class Bot:
         # Dedup was marked at the top of _handle_signal so we can't
         # re-fire on restart even if a hard kill lands here.
         self._record_explanation(order, signal, strategy, regime, role, weight, bars=bars)
-        self.risk.register_trade_opened(self.risk.limits.risk_per_trade * weight)
+        # Book the actual risk this trade is taking, not the budget %.
+        # When MT5Executor._fit_to_margin scales a 1-lot order down to
+        # 0.3 lots, the booked risk is 0.3× the budget — registering the
+        # full budget would over-attribute portfolio heat and stop the
+        # bot opening unrelated signals it could safely take.
+        actual_risk_pct = self._compute_actual_risk_pct(
+            order, account_balance_at_send,
+        )
+        order.extra["booked_risk_pct"] = actual_risk_pct
+        self.risk.register_trade_opened(actual_risk_pct)
         if self.risk.propfirm_guard is not None:
             try:
                 self.risk.propfirm_guard.note_trade_opened()
@@ -1182,6 +1195,26 @@ class Bot:
         log.info("TRAIL %s %s SL %.5f → %.5f",
                  order.side.value, order.symbol, prev, new_sl)
 
+    def _compute_actual_risk_pct(self, order: Order, balance: float) -> float:
+        """Estimate the risk pct of an order from its persisted fields.
+
+        risk_pct = stop_distance_pips × pip_value × lot_size / balance
+
+        Returns 0 if any input is unusable — the caller still calls
+        register_trade_opened(0.0), which lets the trade count
+        towards max_open_trades without distorting heat.
+        """
+        try:
+            ps = pip_size(order.symbol)
+            if ps <= 0 or balance <= 0:
+                return 0.0
+            stop_dist_pips = abs(order.entry_price - order.stop_loss) / ps
+            per_lot_risk = stop_dist_pips * pip_value(order.symbol)
+            return (per_lot_risk * order.lot_size) / balance
+        except Exception:
+            log.exception("_compute_actual_risk_pct failed for #%s", order.id)
+            return 0.0
+
     def _close_trigger(self, order: Order) -> str | None:
         """Return "target" if the most recent bar wicked through TP,
         "stop" if it wicked through SL, or None if neither.
@@ -1264,10 +1297,19 @@ class Bot:
                 self.narrator.narrate(closed.id)
             except Exception:
                 log.exception("narrator failed for trade %d", closed.id)
-        # Pull the per-trade weight off the order so we credit back the
-        # exact amount we charged on open (1.0 default if it wasn't set).
-        weight = float(order.extra.get("risk_weight", 1.0)) if order.extra else 1.0
-        self.risk.register_trade_closed(self.risk.limits.risk_per_trade * weight, closed.pnl)
+        # Credit back the SAME risk_pct we booked on open, not a
+        # weight-derived estimate. booked_risk_pct accounts for margin
+        # scaling that happened inside MT5Executor.place — without it,
+        # close would refund the full budget % even after open booked
+        # only the scaled-down amount, leaving heat permanently negative
+        # (and the gate effectively disabled).
+        booked = (
+            float(order.extra.get("booked_risk_pct"))
+            if order.extra and order.extra.get("booked_risk_pct") is not None
+            else self.risk.limits.risk_per_trade
+            * float(order.extra.get("risk_weight", 1.0) if order.extra else 1.0)
+        )
+        self.risk.register_trade_closed(booked, closed.pnl)
         if hasattr(self.notifier, "trade_closed"):
             hold_minutes: float | None = None
             if closed.opened_at and closed.closed_at:
