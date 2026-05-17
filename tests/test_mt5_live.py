@@ -101,7 +101,11 @@ class _FakeMT5:
     def account_info(self):
         return self.account
 
-    def positions_get(self):
+    def positions_get(self, ticket=None, symbol=None):
+        if ticket is not None:
+            return tuple(p for p in self.positions if p.ticket == ticket)
+        if symbol is not None:
+            return tuple(p for p in self.positions if p.symbol == symbol)
         return list(self.positions)
 
     def last_error(self):

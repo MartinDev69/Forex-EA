@@ -354,20 +354,72 @@ class MT5Executor:
             log.warning(order.close_reason)
             return order
 
+        # Look up the live position by ticket — primary source for
+        # remaining volume (so a partial manual close doesn't make us
+        # try to sell more than is open) and a sanity check that the
+        # position still exists at the broker. Returns None when MT5
+        # is disconnected; positions_get([ticket]) returns an empty
+        # tuple when the ticket no longer exists.
+        ticket = int(order.broker_ticket)
+        try:
+            positions = self._mt5.positions_get(ticket=ticket)
+        except Exception:
+            positions = None
+        if positions is None and self._maybe_reconnect():
+            try:
+                positions = self._mt5.positions_get(ticket=ticket)
+            except Exception:
+                positions = None
+        if positions is None:
+            order.status = OrderStatus.REJECTED
+            order.close_reason = "positions_get unavailable (broker disconnected?)"
+            log.warning("close: %s", order.close_reason)
+            return order
+        if len(positions) == 0:
+            # Position already gone — broker-side SL/TP fired, or it
+            # was closed manually. The journal reconciler will pick
+            # this up on its next tick via fetch_close_info().
+            order.status = OrderStatus.REJECTED
+            order.close_reason = f"position #{ticket} no longer open"
+            log.info("close: %s", order.close_reason)
+            return order
+        live_volume = float(positions[0].volume)
+        if live_volume <= 0:
+            order.status = OrderStatus.REJECTED
+            order.close_reason = f"position #{ticket} has zero volume"
+            log.warning("close: %s", order.close_reason)
+            return order
+
         # Opposite side closes the position.
         order_type = (
             self._mt5.ORDER_TYPE_SELL if order.side == SignalType.BUY
             else self._mt5.ORDER_TYPE_BUY
         )
         tick = self._mt5.symbol_info_tick(order.symbol)
+        if tick is None and self._maybe_reconnect():
+            tick = self._mt5.symbol_info_tick(order.symbol)
+        if tick is None:
+            # Symbol may have dropped from Market Watch, market closed,
+            # or the broker stopped quoting. Mark REJECTED so the bot's
+            # close-retry cooldown kicks in instead of throwing an
+            # AttributeError that bypasses the cooldown and spams the
+            # log every tick.
+            order.status = OrderStatus.REJECTED
+            order.close_reason = f"symbol_info_tick({order.symbol}) returned None"
+            log.warning("close: %s", order.close_reason)
+            return order
         price = float(tick.bid) if order.side == SignalType.BUY else float(tick.ask)
 
         request = {
             "action": self._mt5.TRADE_ACTION_DEAL,
             "symbol": order.symbol,
-            "volume": float(order.lot_size),
+            # Use the position's CURRENT volume, not what the order
+            # opened with — a manual partial close by the operator
+            # would leave order.lot_size > remaining and the broker
+            # would reject the whole close.
+            "volume": live_volume,
             "type": order_type,
-            "position": int(order.broker_ticket),
+            "position": ticket,
             "price": price,
             "deviation": self.deviation,
             "magic": self.magic,
