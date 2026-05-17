@@ -590,13 +590,36 @@ class Bot:
                     pnl=close_info["pnl"],
                     close_reason="reconciled_from_mt5",
                 )
-                pnl = close_info["pnl"]
+                pnl = float(close_info["pnl"])
+                # Critical refund: tell RiskState the position is gone.
+                # Without this, every broker-side SL/TP hit leaks the
+                # trade's booked risk into open_risk_pct permanently
+                # — after a few SL hits the portfolio heat cap is
+                # exceeded and the bot silently stops opening new
+                # trades. Signal-mode strategies still alert because
+                # they bypass the risk gate, which is why the user
+                # sees "signals work but execution stops". Same
+                # estimate as _seed_risk_state_from_journal: compute
+                # risk_pct from stop_distance × pip_value × lot_size
+                # / current balance.
+                refund_risk_pct = 0.0
+                try:
+                    bal = float(self.executor.account_balance())
+                    ps = pip_size(row["symbol"])
+                    if ps > 0 and bal > 0:
+                        stop_dist = abs(float(row["entry_price"]) - float(row["stop_loss"])) / ps
+                        per_lot = stop_dist * pip_value(row["symbol"])
+                        refund_risk_pct = (per_lot * float(row["lot_size"])) / bal
+                except Exception:
+                    log.exception("reconcile: risk_pct estimate failed for #%s", ticket)
+                self.risk.register_trade_closed(refund_risk_pct, pnl)
                 sign = "+" if pnl >= 0 else ""
                 log.info(
                     "reconciled phantom open #%s %s %s → CLOSED at %.5f "
-                    "PnL %s%.2f",
+                    "PnL %s%.2f (refunded heat %.3f%%)",
                     ticket, row.get("side", "?"), row.get("symbol", "?"),
                     close_info["exit_price"], sign, pnl,
+                    refund_risk_pct * 100.0,
                 )
             except Exception:
                 log.exception("reconcile: journal mark_closed failed for #%s", ticket)
