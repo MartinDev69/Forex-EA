@@ -13,6 +13,7 @@ opens its own connection.
 from __future__ import annotations
 
 import sqlite3
+from src.utils.db import connect as db_connect
 from pathlib import Path
 
 # Modes a strategy can run in. Anything else gets coerced to 'execute'
@@ -60,7 +61,7 @@ class StrategyToggleStore:
             self._ensure_mode_column(c)
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
+        conn = db_connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
 

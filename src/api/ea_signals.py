@@ -11,6 +11,7 @@ ordering key the EA passes back as ``since`` on the next poll.
 from __future__ import annotations
 
 import sqlite3
+from src.utils.db import connect as db_connect
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,7 +43,7 @@ class SignalFeed:
         self.db_path = Path(db_path)
 
     def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.db_path)
+        c = db_connect(self.db_path)
         c.row_factory = sqlite3.Row
         return c
 

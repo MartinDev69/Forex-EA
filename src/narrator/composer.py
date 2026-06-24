@@ -123,7 +123,9 @@ class NarratorComposer:
     def gather(self, trade_id: int) -> TradeContext | None:
         """Load journal + explanation + fills aggregates for one trade."""
         import sqlite3
-        with sqlite3.connect(self.db_path) as c:
+
+        from src.utils.db import connect as db_connect
+        with db_connect(self.db_path) as c:
             c.row_factory = sqlite3.Row
             t = c.execute(
                 "SELECT * FROM trades WHERE id = ?", (trade_id,),

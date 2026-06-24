@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import sqlite3
+from src.utils.db import connect as db_connect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,7 +38,13 @@ from .ad_id import ADMIN_AD_ID
 # of url-safe random). Using a per-DB salt would mean losing the DB kills the
 # key too; rotating AUTH_SECRET already kills the key and we accept that.
 _SALT = b"forex-ea:broker-config:v1"
-_KDF_ITERATIONS = 200_000
+# 200k PBKDF2 iterations is the secure production default. The test suite turns
+# this way down via BROKER_KDF_ITERATIONS so deriving the Fernet key on every
+# store init doesn't dominate the run. Never lower it in production.
+try:
+    _KDF_ITERATIONS = max(1, int(os.environ.get("BROKER_KDF_ITERATIONS", "200000")))
+except ValueError:
+    _KDF_ITERATIONS = 200_000
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS broker_config (
@@ -118,7 +126,7 @@ class BrokerConfigStore:
         return base64.urlsafe_b64encode(kdf.derive(secret.encode("utf-8")))
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = db_connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 

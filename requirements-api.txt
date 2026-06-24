@@ -1,0 +1,36 @@
+# API-only dependency set.
+#
+# This is the subset of requirements.txt that the FastAPI control API actually
+# imports at runtime (verified: importing src.api.server pulls in only
+# numpy/pandas/pyarrow from the heavy stack). It deliberately EXCLUDES:
+#   - ML:          scikit-learn, xgboost  (xgboost alone drags in ~400 MB of
+#                                          unused nvidia-cu12 CUDA libraries)
+#   - backtesting: backtrader
+#   - plotting:    matplotlib, plotly
+#   - test-only:   pytest, pytest-cov, httpx
+#   - MetaTrader5: Windows-only; the bot, not the API, uses it
+# Those belong to the trading bot, which runs on the Windows VPS — not in this
+# Linux container. Keep this file in sync with requirements.txt when the API's
+# imports change.
+
+# Data stack (bar/calendar handling in the API)
+pandas>=2.1.0
+numpy>=1.26.0
+pyarrow>=15.0.0
+python-dotenv>=1.0.0
+
+# Web framework
+fastapi>=0.109.0
+uvicorn>=0.27.0
+pydantic>=2.5.0
+
+# Auth + credential encryption at rest
+bcrypt>=4.0.0
+PyJWT>=2.8.0
+cryptography>=42.0.0
+
+# Telegram signup/notifier bot (imported by the API at startup)
+python-telegram-bot>=20.7
+
+# Scheduling for the background scan loops
+schedule>=1.2.0

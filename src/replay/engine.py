@@ -9,6 +9,7 @@ SL fires first — the conservative assumption operators expect.
 from __future__ import annotations
 
 import sqlite3
+from src.utils.db import connect as db_connect
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -147,7 +148,7 @@ class ReplayEngine:
     # ------------------------------------------------------------------ internals
 
     def _load_trade(self, trade_id: int) -> dict | None:
-        with sqlite3.connect(self.db_path) as c:
+        with db_connect(self.db_path) as c:
             c.row_factory = sqlite3.Row
             row = c.execute(
                 "SELECT * FROM trades WHERE id = ?", (trade_id,),

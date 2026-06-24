@@ -1,0 +1,31 @@
+# Forex-EA control API — one-command local/VPS run.
+#
+#   docker compose up -d --build      # build + start in the background
+#   docker compose logs -f            # follow logs
+#   docker compose down               # stop & remove
+#
+# Requires a .env file alongside this one (copy .env.example). At minimum it
+# must set AUTH_SECRET (32+ random chars) — the API fails closed without it.
+services:
+  api:
+    build: .
+    image: forex-ea-api
+    container_name: forex-ea-api
+    ports:
+      - "8000:8000"
+    # Broker creds, AUTH_SECRET, Telegram tokens, etc. come from .env.
+    env_file:
+      - .env
+    # Persist SQLite (trades, users, broker configs) across restarts. The
+    # Dockerfile creates /app/data owned by the non-root appuser.
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    # Reuses the HEALTHCHECK baked into the image (GET /health). Declared here
+    # too so `docker compose ps` shows health and start ordering can depend on it.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

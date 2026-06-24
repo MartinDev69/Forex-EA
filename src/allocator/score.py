@@ -10,6 +10,7 @@ can still seed an entry in the allocation store.
 from __future__ import annotations
 
 import sqlite3
+from src.utils.db import connect as db_connect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,7 +49,7 @@ def score_pairs(
     """
     now = datetime.now(timezone.utc).isoformat()
     out: list[StrategyScore] = []
-    conn = sqlite3.connect(Path(db_path))
+    conn = db_connect(Path(db_path))
     conn.row_factory = sqlite3.Row
     try:
         for strategy, symbol in pairs:

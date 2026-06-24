@@ -7,6 +7,7 @@ in chronological order; the engine walks them in the order returned.
 from __future__ import annotations
 
 import sqlite3
+from src.utils.db import connect as db_connect
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,7 +43,7 @@ class PathStore:
             c.executescript(_SCHEMA)
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
+        conn = db_connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
 
