@@ -47,5 +47,14 @@
 	<true/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Unlock the AntiGreed control panel without retyping your password.</string>
+	<!-- The control API is reached over plain HTTP at a raw IP
+	     (http://141.11.232.239:8000), so iOS App Transport Security must
+	     allow cleartext. Replace with HTTPS (tunnel/domain) and remove this
+	     for production. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

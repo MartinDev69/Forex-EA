@@ -5,7 +5,7 @@
 //   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000       (Android emu)
 //   flutter run --dart-define=API_BASE_URL=http://<mac-lan-ip>:8000   (real device on LAN)
 
-const _prodApiBaseUrl = 'http://163.5.178.251:8000';
+const _prodApiBaseUrl = 'http://141.11.232.239:8000';
 
 String get apiBaseUrl {
   const override = String.fromEnvironment('API_BASE_URL');
@@ -20,4 +20,4 @@ const appVersion = '1.0.0';
 /// Build sub-tag — bumped on every visible UI change so we can verify
 /// at a glance which APK is actually installed on a phone. Shown next
 /// to the version in the dashboard footer.
-const appBuildTag = 'b13';
+const appBuildTag = 'b14';
