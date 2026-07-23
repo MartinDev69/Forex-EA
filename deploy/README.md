@@ -65,6 +65,48 @@ The dashboard's **MT5 broker** card lets you pick from a preset list (Exness, XM
 
 For Deriv users: the presets target Deriv's **MT5** accounts. The native Deriv WebSocket API (synthetic indices etc.) is a separate adapter and not wired in.
 
+## Running Deriv — Volatility 10 (1s) only
+
+This deployment is configured to trade **one** market: `Volatility 10 (1s) Index` on Deriv's MT5 platform. Nothing about the engine changes — signals, execution, risk, and the watchdog all run as-is, just pointed at a single synthetic index.
+
+**One-time setup on the VPS:**
+
+1. Open a **Deriv** account (https://deriv.com) and create an MT5 **Derived** account — the type that carries synthetic indices. Note its login, password, and server.
+2. Install the **Deriv MT5** terminal (`C:\Program Files\Deriv MT5\terminal64.exe`).
+3. Launch it, log into the Derived account, and enable **Algo Trading** (the toolbar button must be green).
+4. In **Market Watch**: right-click → *Show All*, then confirm the symbol is listed as **`Volatility 10 (1s) Index`**. The bot cannot fetch bars for a symbol that isn't in Market Watch, and the label must match `.env` exactly.
+
+**`.env` (demo first, then real):**
+
+```ini
+MT5_LOGIN=<your Deriv login>
+MT5_PASSWORD=<your Deriv password>
+MT5_SERVER=Deriv-Demo                 # prove it works here first…
+MT5_PATH=C:\Program Files\Deriv MT5\terminal64.exe
+USE_MT5=1
+
+SYMBOLS=Volatility 10 (1s) Index      # exactly one symbol — no comma
+MAX_OPEN_TRADES=1                     # one trade at a time
+CORRELATION_ENABLED=0                 # no cross-pair heat to throttle
+```
+
+When demo is proven, change **only** `MT5_SERVER` to the real one (`DerivSVG-Server`, `DerivSVG-Server-02`, or `DerivSVG-Server-03` — your account panel shows which) and restart the bot.
+
+**Verify the switch (signals + execution):**
+
+```powershell
+.\deploy\service-control.ps1 restart
+Get-Content C:\forex-ea\logs\forex-ea.log -Tail 30    # look for: MT5 connected … server=Deriv-Demo
+```
+
+Then watch for a signal firing on `Volatility 10 (1s) Index` and a resulting open position. On demo, check the **first few trades' lot sizes** — a synthetic index has a very different point value from forex, so `RISK_PER_TRADE=0.01` maps to a different lot than it did on Exness.
+
+**Backfilling bars for the ML filter** uses the same symbol string (quote it — it has spaces):
+
+```powershell
+venv\Scripts\python scripts\fetch_bars.py --symbols "Volatility 10 (1s) Index" --timeframe M15
+```
+
 ## Dashboard login
 
 The API serves a single-page dashboard at `http://<vps>:8000/` — dark-themed, live-polling, with strategy toggles and an equity chart. Endpoints other than `/health` require a bearer token.
@@ -152,6 +194,15 @@ Pipe the JSON output to whatever alerting you prefer (Telegram bot, email, Prome
 **`nssm not found`** — install it (`choco install nssm`) or put the directory on PATH.
 
 **Bot service starts then stops immediately** — tail `logs\bot.stderr.log`. Typical causes: bad MT5 credentials in `.env`, MT5 terminal not running, Algo Trading disabled in MT5.
+
+**`MT5 initialize failed: (-10005, 'IPC timeout')`** — a stale/hung `terminal64.exe` is holding the IPC pipe, so a fresh init can't connect. Restarting the service alone does **not** fix it — kill the terminal so the bot relaunches a clean one:
+```powershell
+taskkill /F /IM terminal64.exe
+.\deploy\service-control.ps1 restart
+```
+If it recurs, check for a modal dialog blocking the terminal (login failure, "trial expired", update prompt) and confirm the watchdog scheduled task is actually running (`Get-ScheduledTask *watchdog*`) — its job is to recycle a wedged terminal automatically.
+
+**No bars / no signals on `Volatility 10 (1s) Index`** — the symbol isn't in Market Watch, or the `SYMBOLS` string doesn't match the terminal's label character-for-character. Right-click Market Watch → *Show All* and compare exactly.
 
 **`MetaTrader5` import fails on install** — check that the venv uses Python 3.12, not 3.13. Recreate the venv if it was made with the wrong version.
 
