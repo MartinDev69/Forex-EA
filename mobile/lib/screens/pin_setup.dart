@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../theme.dart';
 
 /// Two-stage PIN entry: enter once, then re-enter to confirm. Returns the
 /// chosen PIN on success, null if the user aborts.
@@ -93,7 +94,7 @@ class _PinSetupScreenState extends State<_PinSetupScreen> {
                 step == 1
                     ? 'You\'ll use this to unlock the app on every launch.'
                     : 'Just to make sure you\'ve got it.',
-                style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
+                style: TextStyle(color: kMuted, fontSize: 12),
               ),
               const SizedBox(height: 32),
               TextField(
@@ -119,7 +120,7 @@ class _PinSetupScreenState extends State<_PinSetupScreen> {
                 const SizedBox(height: 12),
                 Text(
                   _error!,
-                  style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                  style: const TextStyle(color: kLoss, fontSize: 12),
                 ),
               ],
               const SizedBox(height: 24),

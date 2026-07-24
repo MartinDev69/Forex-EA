@@ -90,24 +90,24 @@ class StrategyChart extends StatelessWidget {
             for (final o in overlays.where((o) => o['name'] != null))
               _LegendChip(
                 label: (o['name'] as String?) ?? '',
-                color: _parseHex((o['color'] as String?) ?? '#8fa0aa'),
+                color: _parseHex((o['color'] as String?) ?? '#64748b'),
                 muted: muted,
               ),
             _LegendChip(
               label: 'Entry',
               color: side == 'BUY'
-                  ? (isDark ? kNeonGreen : kLightWin)
-                  : (isDark ? kNeonRed : kLightLoss),
+                  ? (isDark ? kWin : kLightWin)
+                  : (isDark ? kLoss : kLightLoss),
               muted: muted,
             ),
             _LegendChip(
               label: 'SL',
-              color: isDark ? kNeonRed : kLightLoss,
+              color: isDark ? kLoss : kLightLoss,
               muted: muted,
             ),
             _LegendChip(
               label: 'TP',
-              color: isDark ? kNeonGreen : kLightWin,
+              color: isDark ? kWin : kLightWin,
               muted: muted,
             ),
           ],
@@ -138,7 +138,7 @@ class _LegendChip extends StatelessWidget {
 
 Color _parseHex(String hex) {
   final clean = hex.replaceAll('#', '');
-  if (clean.length != 6) return const Color(0xFF8fa0aa);
+  if (clean.length != 6) return const Color(0xFF64748B);
   return Color(int.parse('FF$clean', radix: 16));
 }
 
@@ -227,7 +227,7 @@ class _StrategyChartPainter extends CustomPainter {
     // BB envelope as a translucent fill first so candles draw on top.
     for (final o in overlays) {
       if (o['kind'] != 'band') continue;
-      final color = _parseHex((o['color'] as String?) ?? '#8fa0aa');
+      final color = _parseHex((o['color'] as String?) ?? '#64748b');
       final upper = ((o['upper'] as List?) ?? const []).map(_num).toList();
       final lower = ((o['lower'] as List?) ?? const []).map(_num).toList();
       final path = Path();
@@ -266,8 +266,8 @@ class _StrategyChartPainter extends CustomPainter {
       if (o == null || h == null || l == null || c == null) continue;
       final up = c >= o;
       final color = up
-          ? (isDark ? kNeonGreen : kLightWin)
-          : (isDark ? kNeonRed : kLightLoss);
+          ? (isDark ? kWin : kLightWin)
+          : (isDark ? kLoss : kLightLoss);
       final x = xAt(i);
       final wickPaint = Paint()
         ..color = color.withValues(alpha: 0.85)
@@ -285,20 +285,20 @@ class _StrategyChartPainter extends CustomPainter {
     // Line overlays on top of candles
     for (final o in overlays) {
       if (o['kind'] != 'line') continue;
-      final color = _parseHex((o['color'] as String?) ?? '#8fa0aa');
+      final color = _parseHex((o['color'] as String?) ?? '#64748b');
       final vals = ((o['values'] as List?) ?? const []).map(_num).toList();
       _drawLine(canvas, vals, color, xAt, yAt);
     }
 
     // Entry / SL / TP horizontal lines + label badges on the right.
     final entryColor = isBuy
-        ? (isDark ? kNeonGreen : kLightWin)
-        : (isDark ? kNeonRed : kLightLoss);
+        ? (isDark ? kWin : kLightWin)
+        : (isDark ? kLoss : kLightLoss);
     _drawLevel(canvas, size, entry, entryColor, 'ENTRY ${entry.toStringAsFixed(decimals)}',
         padR, yAt);
-    _drawLevel(canvas, size, stop, isDark ? kNeonRed : kLightLoss,
+    _drawLevel(canvas, size, stop, isDark ? kLoss : kLightLoss,
         'SL ${stop.toStringAsFixed(decimals)}', padR, yAt);
-    _drawLevel(canvas, size, target, isDark ? kNeonGreen : kLightWin,
+    _drawLevel(canvas, size, target, isDark ? kWin : kLightWin,
         'TP ${target.toStringAsFixed(decimals)}', padR, yAt);
 
     // Signal arrow on the latest bar.
@@ -355,7 +355,7 @@ class _StrategyChartPainter extends CustomPainter {
         // Guide lines (OB/OS/threshold)
         for (final g in (sp['guides'] as List? ?? const [])) {
           final gy = sy((g['y'] as num).toDouble());
-          final gColor = _parseHex((g['color'] as String?) ?? '#8fa0aa')
+          final gColor = _parseHex((g['color'] as String?) ?? '#64748b')
               .withValues(alpha: 0.5);
           final paint = Paint()..color = gColor..strokeWidth = 1;
           var gx = padL;
@@ -378,13 +378,13 @@ class _StrategyChartPainter extends CustomPainter {
 
         final kind = sp['kind'] as String?;
         if (kind == 'line') {
-          final color = _parseHex((sp['color'] as String?) ?? '#22ee88');
+          final color = _parseHex((sp['color'] as String?) ?? '#38bdf8');
           final vals = ((sp['values'] as List?) ?? const []).map(_num).toList();
           _drawLine(canvas, vals, color, xAt, sy);
         } else if (kind == 'double_line') {
-          final pColor = _parseHex((sp['primary_color'] as String?) ?? '#22ee88');
-          final sColor = _parseHex((sp['secondary_color'] as String?) ?? '#ffc73a');
-          final tColor = _parseHex((sp['tertiary_color'] as String?) ?? '#ff3355');
+          final pColor = _parseHex((sp['primary_color'] as String?) ?? '#38bdf8');
+          final sColor = _parseHex((sp['secondary_color'] as String?) ?? '#a78bfa');
+          final tColor = _parseHex((sp['tertiary_color'] as String?) ?? '#f59e0b');
           final pVals = ((sp['primary'] as List?) ?? const []).map(_num).toList();
           final sVals = ((sp['secondary'] as List?) ?? const []).map(_num).toList();
           _drawLine(canvas, pVals, pColor, xAt, sy);
@@ -404,8 +404,8 @@ class _StrategyChartPainter extends CustomPainter {
             final ttop = y0 < y1 ? y0 : y1;
             final h2 = (y1 - y0).abs().clamp(1.0, double.infinity);
             final hcolor = (v >= 0
-                ? (isDark ? kNeonGreen : kLightWin)
-                : (isDark ? kNeonRed : kLightLoss))
+                ? (isDark ? kWin : kLightWin)
+                : (isDark ? kLoss : kLightLoss))
                 .withValues(alpha: 0.5);
             canvas.drawRect(
               Rect.fromLTWH(x - candleW / 2, ttop, candleW, h2),
@@ -418,8 +418,8 @@ class _StrategyChartPainter extends CustomPainter {
             Paint()..color = (isDark ? kMuted : kLightMuted).withValues(alpha: 0.5)
               ..strokeWidth = 1,
           );
-          final mColor = _parseHex((sp['color'] as String?) ?? '#22ee88');
-          final sColor = _parseHex((sp['signal_color'] as String?) ?? '#ff3355');
+          final mColor = _parseHex((sp['color'] as String?) ?? '#38bdf8');
+          final sColor = _parseHex((sp['signal_color'] as String?) ?? '#a78bfa');
           final mVals = ((sp['macd'] as List?) ?? const []).map(_num).toList();
           final sVals = ((sp['signal'] as List?) ?? const []).map(_num).toList();
           _drawLine(canvas, mVals, mColor, xAt, sy);

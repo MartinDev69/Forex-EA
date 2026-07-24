@@ -304,7 +304,7 @@ class _TradeTabBar extends StatelessWidget {
   Widget _tab(BuildContext context, _TradeTab tab, String label, int count) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final active = current == tab;
-    final activeBg = isDark ? const Color(0xFF12151F) : const Color(0xFFE8EDF4);
+    final activeBg = isDark ? kSurface2 : kLightSurface2;
     return Expanded(
       child: GestureDetector(
         onTap: () => onChange(tab),
@@ -333,8 +333,8 @@ class _TradeTabBar extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                 decoration: BoxDecoration(
                   color: active
-                      ? (isDark ? kNeonGreen : kLightWin).withValues(alpha: 0.12)
-                      : (isDark ? const Color(0xFF181C2A) : const Color(0xFFE8EDF4)),
+                      ? (isDark ? kAccent : kLightAccent).withValues(alpha: 0.12)
+                      : (isDark ? kSurface2 : kLightSurface2),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
@@ -344,7 +344,7 @@ class _TradeTabBar extends StatelessWidget {
                     fontSize: 10,
                     fontWeight: FontWeight.w700,
                     color: active
-                        ? (isDark ? kNeonGreen : kLightWin)
+                        ? (isDark ? kAccent : kLightAccent)
                         : mutedColor(context),
                   ),
                 ),
@@ -367,8 +367,8 @@ class _PendingTile extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final isBuy = order.isBuy;
     final color = isBuy
-        ? (isDark ? kNeonGreen : kLightWin)
-        : (isDark ? kNeonRed : kLightLoss);
+        ? (isDark ? kWin : kLightWin)
+        : (isDark ? kLoss : kLightLoss);
     final muted = mutedColor(context);
     final label = order.orderType.replaceAll('_', ' ').toUpperCase();
     return Container(
@@ -376,7 +376,7 @@ class _PendingTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: isDark ? kSurface : kLightSurface,
         border: Border.all(color: isDark ? kEdge : kLightEdge),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kRadius),
       ),
       child: Row(
         children: [
@@ -458,8 +458,8 @@ class _TradeTile extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final isBuy = trade.side == 'BUY';
     final sideColor = isBuy
-        ? (isDark ? kNeonGreen : kLightWin)
-        : (isDark ? kNeonRed : kLightLoss);
+        ? (isDark ? kWin : kLightWin)
+        : (isDark ? kLoss : kLightLoss);
     final muted = mutedColor(context);
     // pnl is null while we're waiting on the operator's EA to report a
     // fill. Render "—" with a neutral tone in that case.
@@ -467,21 +467,18 @@ class _TradeTile extends StatelessWidget {
     final pnlColor = trade.pnl == null
         ? muted
         : pnlPositive
-            ? (isDark ? kNeonGreen : kLightWin)
-            : (isDark ? kNeonRed : kLightLoss);
-    final pnlShadow = (isDark && trade.pnl != null)
-        ? <Shadow>[Shadow(color: pnlColor.withValues(alpha: 0.5), blurRadius: 8)]
-        : const <Shadow>[];
+            ? (isDark ? kWin : kLightWin)
+            : (isDark ? kLoss : kLightLoss);
 
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(kRadius),
       child: Container(
         padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
         decoration: BoxDecoration(
           color: isDark ? kSurface : kLightSurface,
           border: Border.all(color: isDark ? kEdge : kLightEdge),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(kRadius),
         ),
         child: Row(
           children: [
@@ -565,7 +562,6 @@ class _TradeTile extends StatelessWidget {
                       fontWeight: FontWeight.w700,
                       fontSize: 14,
                       fontFeatures: const [FontFeature.tabularFigures()],
-                      shadows: pnlShadow,
                     ),
                   ),
                   const SizedBox(height: 3),
@@ -652,7 +648,7 @@ class _ExplanationSheetState extends State<_ExplanationSheet> {
                   height: 4,
                   margin: const EdgeInsets.only(bottom: 16),
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade600,
+                    color: kMuted,
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -664,7 +660,7 @@ class _ExplanationSheetState extends State<_ExplanationSheet> {
               const SizedBox(height: 4),
               Text(
                 '${widget.trade.symbol} · ${widget.trade.side}',
-                style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                style: TextStyle(color: kMuted, fontSize: 12),
               ),
               const SizedBox(height: 16),
               if (_status == 'loading')
@@ -675,12 +671,12 @@ class _ExplanationSheetState extends State<_ExplanationSheet> {
               else if (_status == 'missing')
                 Text(
                   'No explanation logged for this trade — it pre-dates the explain feature, or was opened with explanations disabled.',
-                  style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                  style: TextStyle(color: kMuted, fontSize: 12),
                 )
               else if (_status == 'error')
                 Text(
                   "Couldn't load explanation. Try again later.",
-                  style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                  style: const TextStyle(color: kLoss, fontSize: 12),
                 )
               else if (_exp != null)
                 _ExplanationBody(exp: _exp!),
@@ -734,7 +730,7 @@ class _ExplanationBody extends StatelessWidget {
               if (exp.regimeAtrPct != null)
                 'ATR pct ${(exp.regimeAtrPct! * 100).toStringAsFixed(0)}%',
             ].join(' · '),
-            style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+            style: TextStyle(color: kMuted, fontSize: 11),
           ),
         ],
         if (exp.notes.isNotEmpty) ...[
@@ -744,12 +740,12 @@ class _ExplanationBody extends StatelessWidget {
             decoration: BoxDecoration(
               color: Colors.black.withValues(alpha: 0.20),
               borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: Colors.grey.shade800),
+              border: Border.all(color: kEdge),
             ),
             child: Text(
               '"${exp.notes}"',
               style: TextStyle(
-                color: Colors.grey.shade300,
+                color: kMuted,
                 fontSize: 12,
                 fontStyle: FontStyle.italic,
               ),
@@ -762,7 +758,7 @@ class _ExplanationBody extends StatelessWidget {
             children: [
               Icon(Icons.show_chart,
                   size: 14, color: Theme.of(context).brightness == Brightness.dark
-                      ? kNeonGreen : kLightWin),
+                      ? kAccent : kLightAccent),
               const SizedBox(width: 6),
               Text(
                 'CHART AT SIGNAL TIME',
@@ -771,7 +767,7 @@ class _ExplanationBody extends StatelessWidget {
                   letterSpacing: 2.0,
                   fontWeight: FontWeight.w700,
                   color: Theme.of(context).brightness == Brightness.dark
-                      ? kNeonGreen : kLightWin,
+                      ? kAccent : kLightAccent,
                 ),
               ),
             ],
@@ -799,14 +795,14 @@ class _ExplanationBody extends StatelessWidget {
   static Color _allocatorTone(String role) {
     switch (role) {
       case 'champion':
-        return Colors.greenAccent;
+        return kWin;
       case 'challenger':
-        return Colors.lightBlueAccent;
+        return kAccent;
       case 'probe':
-        return Colors.amber;
+        return kAmber;
       case 'cold':
       default:
-        return Colors.grey;
+        return kMuted;
     }
   }
 }
@@ -832,7 +828,7 @@ class _IndicatorPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accent = isDark ? kNeonGreen : kLightWin;
+    final accent = isDark ? kAccent : kLightAccent;
     final entries = indicators.entries.toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -905,7 +901,7 @@ class _Tag extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = tone ?? Colors.grey.shade400;
+    final c = tone ?? kMuted;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
@@ -960,12 +956,12 @@ class _Cell extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.20),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.grey.shade800),
+        border: Border.all(color: kEdge),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: TextStyle(color: Colors.grey.shade500, fontSize: 10)),
+          Text(label, style: TextStyle(color: kMuted, fontSize: 10)),
           const SizedBox(height: 2),
           Text(
             value,

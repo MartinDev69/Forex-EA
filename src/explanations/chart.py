@@ -19,6 +19,19 @@ from src.indicators.trend import ema, macd
 from src.indicators.volatility import bollinger_bands
 
 
+# Chart series palette. Indicator lines are deliberately NOT green/red:
+# those two are reserved for P&L sign and for threshold guides, so a
+# series never implies "good"/"bad" purely by its colour. Ordered by how
+# fast the series reacts, which keeps multi-EMA charts readable.
+# Mirrors the --accent/--green/--red tokens in the web + mobile themes.
+C_FAST = "#38bdf8"  # fast series  — EMA8/12/20/21, %K, RSI, +DI
+C_MID = "#a78bfa"   # mid series   — EMA26/50, %D, MACD signal, -DI
+C_SLOW = "#f59e0b"  # slow series  — EMA55/200, ADX
+C_BAND = "#64748b"  # envelopes and bands
+C_OS = "#34d399"    # oversold guide   (signal green)
+C_OB = "#f87171"    # overbought guide (signal red)
+
+
 # Number of trailing bars to capture per signal. 50 is enough to draw
 # a meaningful chart with EMAs warmed up, without bloating the journal.
 SNAPSHOT_BARS = 50
@@ -92,25 +105,25 @@ def standard_overlays(ohlc: pd.DataFrame, count: int = SNAPSHOT_BARS) -> list[di
         {
             "name": "EMA20",
             "kind": "line",
-            "color": "#22ee88",
+            "color": C_FAST,
             "values": _series_values(ema20, count),
         },
         {
             "name": "EMA50",
             "kind": "line",
-            "color": "#ffc73a",
+            "color": C_MID,
             "values": _series_values(ema50, count),
         },
         {
             "name": "EMA200",
             "kind": "line",
-            "color": "#ff3355",
+            "color": C_SLOW,
             "values": _series_values(ema200, count),
         },
         {
             "name": "BB",
             "kind": "band",
-            "color": "#8fa0aa",
+            "color": C_BAND,
             "upper": _series_values(bb["upper"], count),
             "middle": _series_values(bb["middle"], count),
             "lower": _series_values(bb["lower"], count),
@@ -137,9 +150,9 @@ def strategy_decorations(
 
     if name == "ma_crossover":
         overlays += [
-            {"name": "EMA12", "kind": "line", "color": "#22ee88",
+            {"name": "EMA12", "kind": "line", "color": C_FAST,
              "values": _series_values(ema(close, 12), count), "emphasis": True},
-            {"name": "EMA26", "kind": "line", "color": "#ff3355",
+            {"name": "EMA26", "kind": "line", "color": C_MID,
              "values": _series_values(ema(close, 26), count), "emphasis": True},
         ]
 
@@ -147,11 +160,11 @@ def strategy_decorations(
         subplots.append({
             "name": "RSI(14)", "kind": "line",
             "values": _series_values(rsi(close, 14), count),
-            "color": "#22ee88",
+            "color": C_FAST,
             "y_min": 0, "y_max": 100,
             "guides": [
-                {"y": 30, "label": "OS", "color": "#22ee88"},
-                {"y": 70, "label": "OB", "color": "#ff3355"},
+                {"y": 30, "label": "OS", "color": C_OS},
+                {"y": 70, "label": "OB", "color": C_OB},
             ],
         })
 
@@ -160,9 +173,9 @@ def strategy_decorations(
         upper = float(prior["high"].rolling(20).max().iloc[-1])
         lower = float(prior["low"].rolling(20).min().iloc[-1])
         overlays += [
-            {"name": "Channel high", "kind": "line", "color": "#22ee88",
+            {"name": "Channel high", "kind": "line", "color": C_FAST,
              "values": [upper] * min(count, len(ohlc)), "emphasis": True},
-            {"name": "Channel low", "kind": "line", "color": "#ff3355",
+            {"name": "Channel low", "kind": "line", "color": C_MID,
              "values": [lower] * min(count, len(ohlc)), "emphasis": True},
         ]
 
@@ -174,8 +187,8 @@ def strategy_decorations(
             "macd": _series_values(m["macd"], count),
             "signal": _series_values(m["signal"], count),
             "histogram": _series_values(m["histogram"], count),
-            "color": "#22ee88",
-            "signal_color": "#ff3355",
+            "color": C_FAST,
+            "signal_color": C_MID,
         })
 
     elif name == "bollinger_bounce":
@@ -183,11 +196,11 @@ def strategy_decorations(
         subplots.append({
             "name": "RSI(14)", "kind": "line",
             "values": _series_values(rsi(close, 14), count),
-            "color": "#22ee88",
+            "color": C_FAST,
             "y_min": 0, "y_max": 100,
             "guides": [
-                {"y": 35, "label": "OS", "color": "#22ee88"},
-                {"y": 65, "label": "OB", "color": "#ff3355"},
+                {"y": 35, "label": "OS", "color": C_OS},
+                {"y": 65, "label": "OB", "color": C_OB},
             ],
         })
 
@@ -198,22 +211,22 @@ def strategy_decorations(
             "kind": "double_line",
             "primary": _series_values(st["%K"], count),
             "secondary": _series_values(st["%D"], count),
-            "primary_color": "#22ee88",
-            "secondary_color": "#ffc73a",
+            "primary_color": C_FAST,
+            "secondary_color": C_MID,
             "y_min": 0, "y_max": 100,
             "guides": [
-                {"y": 20, "label": "OS", "color": "#22ee88"},
-                {"y": 80, "label": "OB", "color": "#ff3355"},
+                {"y": 20, "label": "OS", "color": C_OS},
+                {"y": 80, "label": "OB", "color": C_OB},
             ],
         })
 
     elif name == "triple_ma_alignment":
         overlays += [
-            {"name": "EMA8", "kind": "line", "color": "#22ee88",
+            {"name": "EMA8", "kind": "line", "color": C_FAST,
              "values": _series_values(ema(close, 8), count), "emphasis": True},
-            {"name": "EMA21", "kind": "line", "color": "#ffc73a",
+            {"name": "EMA21", "kind": "line", "color": C_MID,
              "values": _series_values(ema(close, 21), count), "emphasis": True},
-            {"name": "EMA55", "kind": "line", "color": "#ff3355",
+            {"name": "EMA55", "kind": "line", "color": C_SLOW,
              "values": _series_values(ema(close, 55), count), "emphasis": True},
         ]
 
@@ -223,23 +236,23 @@ def strategy_decorations(
             mother = ohlc.iloc[-3]
             mh = float(mother["high"]); ml = float(mother["low"])
             overlays += [
-                {"name": "Mother high", "kind": "line", "color": "#22ee88",
+                {"name": "Mother high", "kind": "line", "color": C_FAST,
                  "values": [mh] * min(count, len(ohlc)), "emphasis": True},
-                {"name": "Mother low", "kind": "line", "color": "#ff3355",
+                {"name": "Mother low", "kind": "line", "color": C_MID,
                  "values": [ml] * min(count, len(ohlc)), "emphasis": True},
             ]
 
     elif name == "engulfing_pattern":
         overlays.append(
-            {"name": "EMA50", "kind": "line", "color": "#ffc73a",
+            {"name": "EMA50", "kind": "line", "color": C_MID,
              "values": _series_values(ema(close, 50), count), "emphasis": True}
         )
 
     elif name == "ema_pullback":
         overlays += [
-            {"name": "EMA21", "kind": "line", "color": "#22ee88",
+            {"name": "EMA21", "kind": "line", "color": C_FAST,
              "values": _series_values(ema(close, 21), count), "emphasis": True},
-            {"name": "EMA200", "kind": "line", "color": "#ff3355",
+            {"name": "EMA200", "kind": "line", "color": C_SLOW,
              "values": _series_values(ema(close, 200), count), "emphasis": True},
         ]
 
@@ -251,12 +264,12 @@ def strategy_decorations(
             "primary": _series_values(adx_df["adx"], count),
             "secondary": _series_values(adx_df["plus_di"], count),
             "tertiary": _series_values(adx_df["minus_di"], count),
-            "primary_color": "#ffc73a",
-            "secondary_color": "#22ee88",
-            "tertiary_color": "#ff3355",
+            "primary_color": C_SLOW,
+            "secondary_color": C_FAST,
+            "tertiary_color": C_MID,
             "y_min": 0, "y_max": 60,
             "guides": [
-                {"y": 25, "label": "Trend", "color": "#ffc73a"},
+                {"y": 25, "label": "Trend", "color": C_SLOW},
             ],
         })
         # Lookback high/low markers on the price chart too.
@@ -265,9 +278,9 @@ def strategy_decorations(
             upper = float(prior["high"].rolling(20).max().iloc[-1])
             lower = float(prior["low"].rolling(20).min().iloc[-1])
             overlays += [
-                {"name": "Lookback high", "kind": "line", "color": "#22ee88",
+                {"name": "Lookback high", "kind": "line", "color": C_FAST,
                  "values": [upper] * min(count, len(ohlc)), "emphasis": True},
-                {"name": "Lookback low", "kind": "line", "color": "#ff3355",
+                {"name": "Lookback low", "kind": "line", "color": C_MID,
                  "values": [lower] * min(count, len(ohlc)), "emphasis": True},
             ]
 

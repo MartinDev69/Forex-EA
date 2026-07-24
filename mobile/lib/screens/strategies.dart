@@ -313,7 +313,7 @@ class _StrategyTile extends StatelessWidget {
     final muted = mutedColor(context);
     final accent = isSignal
         ? (isDark ? kAmber : kAmber)
-        : (isDark ? kNeonGreen : kLightWin);
+        : (isDark ? kAccent : kLightAccent);
     final accentBg = accent.withValues(alpha: isDark ? 0.10 : 0.08);
     final borderColor = strategy.enabled
         ? accent.withValues(alpha: isDark ? 0.28 : 0.30)
@@ -325,7 +325,7 @@ class _StrategyTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: strategy.enabled ? accentBg : (isDark ? kSurface : kLightSurface),
         border: Border.all(color: borderColor),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kRadius),
       ),
       child: Row(
         children: [
@@ -411,7 +411,7 @@ class _ReadOnlyStrategyTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final muted = mutedColor(context);
-    final accent = isDark ? kNeonGreen : kLightWin;
+    final accent = isDark ? kAccent : kLightAccent;
     final borderColor = strategy.enabled
         ? accent.withValues(alpha: isDark ? 0.28 : 0.30)
         : (isDark ? kEdge : kLightEdge);
@@ -432,7 +432,7 @@ class _ReadOnlyStrategyTile extends StatelessWidget {
             ? accent.withValues(alpha: isDark ? 0.10 : 0.08)
             : (isDark ? kSurface : kLightSurface),
         border: Border.all(color: borderColor),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kRadius),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,

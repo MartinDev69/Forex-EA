@@ -5,6 +5,7 @@ import '../api/client.dart';
 import '../models/subscription_request.dart';
 import '../models/user.dart';
 import '../widgets/logo_spinner.dart';
+import '../theme.dart';
 
 class UsersScreen extends StatefulWidget {
   const UsersScreen({super.key, required this.apiClient});
@@ -84,7 +85,7 @@ class _UsersScreenState extends State<UsersScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            style: FilledButton.styleFrom(backgroundColor: kLoss),
             child: const Text('Reject'),
           ),
         ],
@@ -105,7 +106,7 @@ class _UsersScreenState extends State<UsersScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
-        backgroundColor: ok ? null : Colors.red.shade800,
+        backgroundColor: ok ? null : kLoss,
       ),
     );
   }
@@ -243,7 +244,7 @@ class _UsersScreenState extends State<UsersScreen> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            style: FilledButton.styleFrom(backgroundColor: kLoss),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Delete'),
           ),
@@ -287,7 +288,7 @@ class _UsersScreenState extends State<UsersScreen> {
                     Padding(
                       padding: const EdgeInsets.all(24),
                       child: Text('Error: $_error',
-                          style: const TextStyle(color: Colors.redAccent)),
+                          style: const TextStyle(color: kLoss)),
                     ),
                   ])
                 : ListView(
@@ -298,7 +299,7 @@ class _UsersScreenState extends State<UsersScreen> {
                           padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                           child: Text(
                             'Unclaimed pool: ${_pool!.size} of 100',
-                            style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                            style: TextStyle(color: kMuted, fontSize: 12),
                           ),
                         ),
                       if (_requests.isNotEmpty) ...[
@@ -308,7 +309,7 @@ class _UsersScreenState extends State<UsersScreen> {
                             'PENDING SIGNUP REQUESTS',
                             style: TextStyle(
                               fontSize: 10, letterSpacing: 2,
-                              color: Colors.amberAccent, fontWeight: FontWeight.w700,
+                              color: kAmber, fontWeight: FontWeight.w700,
                             ),
                           ),
                         ),
@@ -383,20 +384,20 @@ class _UserTile extends StatelessWidget {
                 ? 'active'
                 : 'pending';
     final statusColor = user.isAdmin
-        ? Colors.cyanAccent
+        ? kAccent
         : user.expired
-            ? Colors.redAccent
+            ? kLoss
             : user.passwordSet
-                ? Colors.greenAccent
-                : Colors.amberAccent;
+                ? kWin
+                : kAmber;
     final subscription = _formatSubscription();
     final subColor = user.expired
-        ? Colors.redAccent
+        ? kLoss
         : (user.expiresAt != null && (DateTime.tryParse(user.expiresAt!)
                 ?.difference(DateTime.now().toUtc())
                 .inHours ?? 1000) < 48)
-            ? Colors.amberAccent
-            : Colors.grey.shade400;
+            ? kAmber
+            : kMuted;
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Padding(
@@ -430,7 +431,7 @@ class _UserTile extends StatelessWidget {
                     ),
                     if (isSelf) ...[
                       const SizedBox(width: 6),
-                      Text('(you)', style: TextStyle(color: Colors.grey.shade500, fontSize: 11)),
+                      Text('(you)', style: TextStyle(color: kMuted, fontSize: 11)),
                     ],
                     const SizedBox(width: 8),
                     Container(
@@ -452,7 +453,7 @@ class _UserTile extends StatelessWidget {
                     ),
                   ]),
                   if (user.email != null && user.email!.isNotEmpty)
-                    Text(user.email!, style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
+                    Text(user.email!, style: TextStyle(color: kMuted, fontSize: 11)),
                   if (subscription.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
@@ -467,7 +468,7 @@ class _UserTile extends StatelessWidget {
                       ),
                     ),
                   if (user.createdAt.isNotEmpty)
-                    Text(user.createdAt, style: TextStyle(color: Colors.grey.shade600, fontSize: 10)),
+                    Text(user.createdAt, style: TextStyle(color: kMuted, fontSize: 10)),
                 ],
               ),
             ),
@@ -491,7 +492,7 @@ class _UserTile extends StatelessWidget {
                   child: Text(
                     'Delete',
                     style: TextStyle(
-                      color: (isSelf || user.isAdmin) ? Colors.grey : Colors.redAccent,
+                      color: (isSelf || user.isAdmin) ? kMuted : kLoss,
                     ),
                   ),
                 ),
@@ -606,11 +607,11 @@ class _AssignDialogState extends State<_AssignDialog> {
               'They will receive an email link to pick their own password. '
               'The setup link expires in 24 hours; the subscription itself '
               'expires after the duration above.',
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+              style: TextStyle(color: kMuted, fontSize: 11),
             ),
             if (_error != null) ...[
               const SizedBox(height: 12),
-              Text(_error!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+              Text(_error!, style: const TextStyle(color: kLoss, fontSize: 12)),
             ],
           ],
         ),
@@ -686,7 +687,7 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
           ),
           if (_error != null) ...[
             const SizedBox(height: 12),
-            Text(_error!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+            Text(_error!, style: const TextStyle(color: kLoss, fontSize: 12)),
           ],
         ],
       ),
@@ -723,8 +724,8 @@ class _RequestTile extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
       decoration: BoxDecoration(
-        color: Colors.amber.withValues(alpha: 0.08),
-        border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
+        color: kAmber.withValues(alpha: 0.08),
+        border: Border.all(color: kAmber.withValues(alpha: 0.4)),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -732,7 +733,7 @@ class _RequestTile extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.person_add_alt, size: 18, color: Colors.amber.shade300),
+              Icon(Icons.person_add_alt, size: 18, color: kAmber),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -743,14 +744,14 @@ class _RequestTile extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
-                  color: Colors.amber.withValues(alpha: 0.18),
+                  color: kAmber.withValues(alpha: 0.18),
                   borderRadius: BorderRadius.circular(5),
                 ),
                 child: Text(
                   request.duration.toUpperCase(),
                   style: TextStyle(
                     fontSize: 10, fontWeight: FontWeight.w700,
-                    color: Colors.amber.shade300, letterSpacing: 1.2,
+                    color: kAmber, letterSpacing: 1.2,
                   ),
                 ),
               ),
@@ -772,7 +773,7 @@ class _RequestTile extends StatelessWidget {
                   icon: const Icon(Icons.check, size: 16),
                   label: const Text('Approve'),
                   style: FilledButton.styleFrom(
-                    backgroundColor: Colors.greenAccent.shade700,
+                    backgroundColor: kWin,
                     foregroundColor: Colors.black,
                   ),
                 ),
@@ -780,10 +781,10 @@ class _RequestTile extends StatelessWidget {
               const SizedBox(width: 10),
               OutlinedButton.icon(
                 onPressed: onReject,
-                icon: const Icon(Icons.close, size: 16, color: Colors.redAccent),
-                label: const Text('Reject', style: TextStyle(color: Colors.redAccent)),
+                icon: const Icon(Icons.close, size: 16, color: kLoss),
+                label: const Text('Reject', style: TextStyle(color: kLoss)),
                 style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: Colors.red.shade400),
+                  side: BorderSide(color: kLoss),
                 ),
               ),
             ],
@@ -804,7 +805,7 @@ class _RequestTile extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.grey.shade400, fontSize: 11,
+                color: kMuted, fontSize: 11,
                 letterSpacing: 1.2, fontWeight: FontWeight.w600,
               ),
             ),

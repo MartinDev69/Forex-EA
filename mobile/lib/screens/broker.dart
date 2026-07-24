@@ -4,6 +4,7 @@ import '../api/client.dart';
 import '../models/broker.dart';
 import '../utils/twofa.dart';
 import '../widgets/logo_spinner.dart';
+import '../theme.dart';
 
 class BrokerScreen extends StatefulWidget {
   const BrokerScreen({super.key, required this.apiClient});
@@ -181,7 +182,7 @@ class _BrokerScreenState extends State<BrokerScreen> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            style: FilledButton.styleFrom(backgroundColor: kLoss),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Remove'),
           ),
@@ -291,7 +292,7 @@ class _StatusCard extends StatelessWidget {
                   width: 10, height: 10,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: connected ? Colors.greenAccent : Colors.redAccent,
+                    color: connected ? kWin : kLoss,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -300,7 +301,7 @@ class _StatusCard extends StatelessWidget {
                   style: TextStyle(
                     letterSpacing: 2,
                     fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade300,
+                    color: kMuted,
                     fontSize: 12,
                   ),
                 ),
@@ -308,7 +309,7 @@ class _StatusCard extends StatelessWidget {
                 if (status?.staleS != null)
                   Text(
                     _staleLabel(status!.staleS!),
-                    style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+                    style: TextStyle(color: kMuted, fontSize: 11),
                   ),
               ],
             ),
@@ -316,7 +317,7 @@ class _StatusCard extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 status!.lastError!,
-                style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                style: const TextStyle(color: kLoss, fontSize: 12),
               ),
             ],
             if (status?.connected == true && status?.accountInfo != null) ...[
@@ -373,7 +374,7 @@ class _Pair extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: TextStyle(color: Colors.grey.shade500, fontSize: 10, letterSpacing: 1.5)),
+        Text(label, style: TextStyle(color: kMuted, fontSize: 10, letterSpacing: 1.5)),
         const SizedBox(height: 2),
         Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
       ],
@@ -421,7 +422,7 @@ class _FormCard extends StatelessWidget {
           children: [
             Text(
               'Broker',
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 10, letterSpacing: 1.5),
+              style: TextStyle(color: kMuted, fontSize: 10, letterSpacing: 1.5),
             ),
             const SizedBox(height: 6),
             DropdownButtonFormField<String>(
@@ -438,7 +439,7 @@ class _FormCard extends StatelessWidget {
               const SizedBox(height: 6),
               Text(
                 activePreset!.notes,
-                style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+                style: TextStyle(color: kMuted, fontSize: 11),
               ),
             ],
             const SizedBox(height: 14),
@@ -503,7 +504,7 @@ class _FormCard extends StatelessWidget {
                 'record your broker for display; we don\'t connect to them '
                 'from this server.',
                 style: TextStyle(
-                  color: Colors.grey.shade500, fontSize: 11, height: 1.45,
+                  color: kMuted, fontSize: 11, height: 1.45,
                 ),
               ),
             ],
@@ -557,8 +558,8 @@ class _ActionRow extends StatelessWidget {
           if (hasSaved)
             TextButton.icon(
               onPressed: busy ? null : onClear,
-              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-              label: const Text('Remove', style: TextStyle(color: Colors.redAccent)),
+              icon: const Icon(Icons.delete_outline, color: kLoss),
+              label: const Text('Remove', style: TextStyle(color: kLoss)),
             ),
         ],
       ),
@@ -572,7 +573,7 @@ class _TestResultCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = result.ok ? Colors.greenAccent : Colors.redAccent;
+    final color = result.ok ? kWin : kLoss;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -591,7 +592,7 @@ class _TestResultCard extends StatelessWidget {
             ),
             if (result.error != null) ...[
               const SizedBox(height: 8),
-              Text(result.error!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+              Text(result.error!, style: const TextStyle(color: kLoss, fontSize: 12)),
             ],
             if (result.ok && result.account != null) ...[
               const SizedBox(height: 12),
@@ -622,7 +623,7 @@ class _ErrorCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      color: Colors.red.shade900,
+      color: kLoss.withValues(alpha: 0.14),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(

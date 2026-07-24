@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../api/client.dart';
 import '../services/quick_unlock.dart';
 import 'pin_setup.dart';
+import '../theme.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.apiClient, required this.onSignedIn});
@@ -195,7 +196,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   Text(
                     'Control plane',
                     style: TextStyle(
-                      color: Colors.grey.shade400,
+                      color: kMuted,
                       letterSpacing: 3,
                       fontSize: 11,
                     ),
@@ -243,13 +244,13 @@ class _LoginScreenState extends State<LoginScreen> {
                       width: double.infinity,
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.red.shade900.withValues(alpha: 0.3),
-                        border: Border.all(color: Colors.red.shade700),
+                        color: kLoss.withValues(alpha: 0.12),
+                        border: Border.all(color: kLoss.withValues(alpha: 0.4)),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
                         _error!,
-                        style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                        style: const TextStyle(color: kLoss, fontSize: 12),
                       ),
                     ),
                   ],
@@ -272,7 +273,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     'Sign in with the AD-ID assigned to you by the admin and the '
                     'password you set from the email link.',
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+                    style: TextStyle(color: kMuted, fontSize: 11),
                   ),
                     ],
                   ),

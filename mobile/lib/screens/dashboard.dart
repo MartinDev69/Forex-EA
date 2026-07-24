@@ -311,7 +311,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       FilledButton(
                         onPressed: () => Navigator.of(ctx).pop(true),
                         style: FilledButton.styleFrom(
-                          backgroundColor: Colors.red.shade700,
+                          backgroundColor: kLoss,
                         ),
                         child: const Text('Forget'),
                       ),
@@ -430,17 +430,14 @@ class _WelcomeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accent = isDark ? kNeonGreen : kLightWin;
+    final accent = isDark ? kAccent : kLightAccent;
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
       decoration: BoxDecoration(
         color: isDark ? kSurface : kLightSurface,
-        border: Border.all(color: accent.withValues(alpha: 0.20)),
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: isDark
-            ? [BoxShadow(color: accent.withValues(alpha: 0.10), blurRadius: 18, spreadRadius: -8)]
-            : null,
+        border: Border.all(color: accent.withValues(alpha: 0.30)),
+        borderRadius: BorderRadius.circular(kRadius),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -515,7 +512,7 @@ class _EaSetupCardState extends State<_EaSetupCard> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accent = isDark ? kNeonGreen : kLightWin;
+    final accent = isDark ? kAccent : kLightAccent;
     final cfg = widget.config;
     // Three states for the API-key field:
     //   - cfg.apiKey populated → just issued / rotated; show with mask toggle.
@@ -538,7 +535,7 @@ class _EaSetupCardState extends State<_EaSetupCard> {
       decoration: BoxDecoration(
         color: isDark ? kSurface : kLightSurface,
         border: Border.all(color: isDark ? kEdge : kLightEdge),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kRadius),
       ),
       child: Theme(
         // Strip ExpansionTile's default top/bottom divider — the card
@@ -757,7 +754,7 @@ class _EaStep extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accent = isDark ? kNeonGreen : kLightWin;
+    final accent = isDark ? kAccent : kLightAccent;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
@@ -795,7 +792,7 @@ class _HeroStrip extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final edge = isDark ? kEdge : kLightEdge;
     final overlayDark = isDark ? Colors.black : Colors.white;
-    final eyebrowColor = isDark ? kNeonGreen : kLightWin;
+    final eyebrowColor = isDark ? kAccent : kLightAccent;
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 6, 12, 12),
       height: 132,
@@ -1018,29 +1015,20 @@ class _KpiTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final glow = tone == TickerTone.loss
-        ? (isDark ? kNeonRed : kLightLoss)
-        : (isDark ? kNeonGreen : kLightWin);
-    final hasGlow = tone != TickerTone.neutral;
+    final toneColor = tone == TickerTone.loss
+        ? (isDark ? kLoss : kLightLoss)
+        : (isDark ? kWin : kLightWin);
+    final isToned = tone != TickerTone.neutral;
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
       decoration: BoxDecoration(
         color: isDark ? kSurface : kLightSurface,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kRadius),
         border: Border.all(
-          color: hasGlow
-              ? glow.withValues(alpha: isDark ? 0.22 : 0.30)
+          color: isToned
+              ? toneColor.withValues(alpha: 0.30)
               : (isDark ? kEdge : kLightEdge),
         ),
-        boxShadow: hasGlow && isDark
-            ? [
-                BoxShadow(
-                  color: glow.withValues(alpha: 0.18),
-                  blurRadius: 18,
-                  spreadRadius: -8,
-                ),
-              ]
-            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1073,12 +1061,12 @@ class _RolePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isAdmin = role == 'admin';
-    final fg = isAdmin ? Colors.cyanAccent : Colors.grey.shade300;
+    final fg = isAdmin ? kAccent : kMuted;
     return Container(
       margin: const EdgeInsets.only(right: 4),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
-        color: (isAdmin ? Colors.cyanAccent : Colors.grey).withValues(alpha: 0.12),
+        color: (isAdmin ? kAccent : kMuted).withValues(alpha: 0.12),
         border: Border.all(color: fg.withValues(alpha: 0.5)),
         borderRadius: BorderRadius.circular(6),
       ),
@@ -1109,7 +1097,7 @@ class _StatusCard extends StatelessWidget {
               children: [
                 Icon(
                   running ? Icons.play_circle : Icons.stop_circle,
-                  color: running ? Colors.greenAccent : Colors.redAccent,
+                  color: running ? kWin : kLoss,
                   size: 32,
                 ),
                 const SizedBox(width: 12),
@@ -1137,14 +1125,14 @@ class _StatusCard extends StatelessWidget {
                   icon: Icon(running ? Icons.stop : Icons.play_arrow),
                   label: Text(running ? 'Stop bot' : 'Start bot'),
                   style: FilledButton.styleFrom(
-                    backgroundColor: running ? Colors.redAccent : Colors.greenAccent.shade700,
+                    backgroundColor: running ? kLoss : kWin,
                   ),
                 ),
               )
             else
               Text(
                 'Read-only account · ask an admin to start or stop the bot.',
-                style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                style: TextStyle(color: kMuted, fontSize: 12),
               ),
           ],
         ),
@@ -1166,7 +1154,7 @@ class _AccountCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
       padding: const EdgeInsets.all(18),
-      decoration: glowPanel(context, tone: pnlTone),
+      decoration: panelDecoration(context, tone: pnlTone),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1258,7 +1246,7 @@ class _Row extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: TextStyle(color: Colors.grey.shade400)),
+          Text(label, style: TextStyle(color: kMuted)),
           Text(
             value,
             style: TextStyle(
@@ -1316,13 +1304,13 @@ class _BlackoutCard extends StatelessWidget {
             Text(headline, style: TextStyle(color: color, fontWeight: FontWeight.w600)),
             if (subline != null) ...[
               const SizedBox(height: 4),
-              Text(subline, style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
+              Text(subline, style: TextStyle(color: kMuted, fontSize: 12)),
             ],
             if (!status.enabled) ...[
               const SizedBox(height: 8),
               Text(
                 'Blackout disabled. Trades will not be blocked around events.',
-                style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+                style: TextStyle(color: kMuted, fontSize: 11),
               ),
             ],
           ],
@@ -1342,13 +1330,13 @@ class _BlackoutCard extends StatelessWidget {
   static Color _colorFor(String tone) {
     switch (tone) {
       case 'danger':
-        return Colors.redAccent;
+        return kLoss;
       case 'warn':
-        return Colors.amber;
+        return kAmber;
       case 'ok':
-        return Colors.greenAccent;
+        return kWin;
       default:
-        return Colors.grey;
+        return kMuted;
     }
   }
 
@@ -1422,7 +1410,7 @@ class _RegimeCard extends StatelessWidget {
                 if (regime.adx != null)
                   Text(
                     'ADX ${regime.adx!.toStringAsFixed(0)}',
-                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                    style: TextStyle(color: kMuted, fontSize: 12),
                   ),
               ],
             ),
@@ -1430,7 +1418,7 @@ class _RegimeCard extends StatelessWidget {
             Text(headline, style: TextStyle(color: color, fontWeight: FontWeight.w600)),
             if (subline != null) ...[
               const SizedBox(height: 4),
-              Text(subline, style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
+              Text(subline, style: TextStyle(color: kMuted, fontSize: 12)),
             ],
           ],
         ),
@@ -1442,7 +1430,7 @@ class _RegimeCard extends StatelessWidget {
     if (!r.isKnown) {
       return (
         Icons.help_outline,
-        Colors.grey,
+        kMuted,
         'Unknown',
         'Waiting for the bot to classify this symbol.',
       );
@@ -1452,26 +1440,26 @@ class _RegimeCard extends StatelessWidget {
       case 'trend_up':
         return (
           Icons.trending_up,
-          Colors.greenAccent,
+          kWin,
           'Trend up$vol',
           'Trend strategies are favored; mean-reversion will be gated.',
         );
       case 'trend_down':
         return (
           Icons.trending_down,
-          Colors.redAccent,
+          kLoss,
           'Trend down$vol',
           'Trend strategies are favored; mean-reversion will be gated.',
         );
       case 'range':
         return (
           Icons.swap_horiz,
-          Colors.amber,
+          kAmber,
           'Range$vol',
           'Mean-reversion is favored; trend entries will be gated.',
         );
       default:
-        return (Icons.help_outline, Colors.grey, r.label, null);
+        return (Icons.help_outline, kMuted, r.label, null);
     }
   }
 }
@@ -1487,7 +1475,7 @@ enum _CorrTier { strong, moderate, low }
   if (mag >= 0.60) {
     return (
       tier: _CorrTier.strong,
-      color: isDark ? kNeonRed : kLightLoss,
+      color: isDark ? kLoss : kLightLoss,
       label: 'Strong · $dir — same trade twice',
     );
   }
@@ -1559,7 +1547,7 @@ class _CollapsibleState extends State<_Collapsible> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accent = isDark ? kNeonGreen : kLightWin;
+    final accent = isDark ? kAccent : kLightAccent;
     final muted = mutedColor(context);
     final textColor = isDark ? kText : kLightText;
 
@@ -1717,7 +1705,7 @@ class _CorrelationCardState extends State<_CorrelationCard> {
             children: [
               _SummaryPill(
                 count: strong, label: 'strong',
-                color: isDark ? kNeonRed : kLightLoss,
+                color: isDark ? kLoss : kLightLoss,
                 selected: _filter == _CorrTier.strong,
                 onTap: () => setState(() => _filter = _CorrTier.strong),
               ),
@@ -1728,7 +1716,7 @@ class _CorrelationCardState extends State<_CorrelationCard> {
               ),
               _SummaryPill(
                 count: low, label: 'low',
-                color: isDark ? kNeonGreen : kLightWin,
+                color: isDark ? kWin : kLightWin,
                 selected: _filter == _CorrTier.low,
                 onTap: () => setState(() => _filter = _CorrTier.low),
               ),
@@ -1954,7 +1942,7 @@ class _DriftCardState extends State<_DriftCard> {
     final filtered = active.isEmpty
         ? widget.data.reports
         : widget.data.reports.where((r) => r.symbol == active).toList();
-    final muted = Colors.grey.shade400;
+    final muted = kMuted;
 
     return _Collapsible(
       icon: Icons.insights_outlined,
@@ -2041,7 +2029,7 @@ class _DriftRow extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             report.note,
-            style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+            style: TextStyle(color: kMuted, fontSize: 11),
           ),
           if (report.metrics.isNotEmpty) ...[
             const SizedBox(height: 6),
@@ -2059,13 +2047,13 @@ class _DriftRow extends StatelessWidget {
   static Color _statusColor(String status) {
     switch (status) {
       case 'ok':
-        return Colors.greenAccent;
+        return kWin;
       case 'warn':
-        return Colors.amber;
+        return kAmber;
       case 'danger':
-        return Colors.redAccent;
+        return kLoss;
       default:
-        return Colors.grey;
+        return kMuted;
     }
   }
 }
@@ -2089,7 +2077,7 @@ class _DriftMetricChip extends StatelessWidget {
           children: [
             Text(
               metric.name.replaceAll('_', ' '),
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 9),
+              style: TextStyle(color: kMuted, fontSize: 9),
             ),
             Text(
               '${metric.live.toStringAsFixed(2)}/${metric.baseline.toStringAsFixed(2)}',
@@ -2119,7 +2107,7 @@ class _ExecutionQualityCard extends StatelessWidget {
       storageKey: 'card.fillStats',
       trailing: Text(
         'last ${data.windowHours}h',
-        style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+        style: TextStyle(color: kMuted, fontSize: 12),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2159,7 +2147,7 @@ class _ExecutionRow extends StatelessWidget {
               Text(
                 '${stats.fillCount} fills'
                 '${stats.rejectedCount > 0 ? " · ${stats.rejectedCount} rejected" : ""}',
-                style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                style: TextStyle(color: kMuted, fontSize: 11),
               ),
             ],
           ),
@@ -2191,9 +2179,9 @@ class _ExecutionRow extends StatelessWidget {
   }
 
   static Color _toneFor(FillSymbolStats s) {
-    if (s.avgSlippagePips >= 1.5 || s.rejectedCount > 2) return Colors.redAccent;
-    if (s.avgSlippagePips >= 0.5 || s.rejectedCount > 0) return Colors.amber;
-    return Colors.greenAccent;
+    if (s.avgSlippagePips >= 1.5 || s.rejectedCount > 2) return kLoss;
+    if (s.avgSlippagePips >= 0.5 || s.rejectedCount > 0) return kAmber;
+    return kWin;
   }
 }
 
@@ -2215,7 +2203,7 @@ class _StatChip extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: TextStyle(color: Colors.grey.shade500, fontSize: 9)),
+            Text(label, style: TextStyle(color: kMuted, fontSize: 9)),
             Text(
               value,
               style: const TextStyle(
@@ -2325,7 +2313,7 @@ class _AllocatorRow extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               alloc.note,
-              style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+              style: TextStyle(color: kMuted, fontSize: 11),
             ),
           ],
         ],
@@ -2336,14 +2324,14 @@ class _AllocatorRow extends StatelessWidget {
   static Color _toneFor(String role) {
     switch (role) {
       case 'champion':
-        return Colors.greenAccent;
+        return kWin;
       case 'challenger':
-        return Colors.lightBlueAccent;
+        return kAccent;
       case 'probe':
-        return Colors.amber;
+        return kAmber;
       case 'cold':
       default:
-        return Colors.grey;
+        return kMuted;
     }
   }
 }
@@ -2355,7 +2343,7 @@ class _ErrorCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      color: Colors.red.shade900,
+      color: kLoss.withValues(alpha: 0.14),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
@@ -2385,7 +2373,7 @@ class _PropFirmCard extends StatelessWidget {
     final fmt = moneyFmt(currency);
     final muted = mutedColor(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accent = isDark ? kNeonGreen : kLightWin;
+    final accent = isDark ? kAccent : kLightAccent;
 
     final dailyPct = (data.dailyLossPct ?? 0) * 100;
     final dailyLimitPct = (data.maxDailyLossPct ?? 0) * 100;
@@ -2400,10 +2388,10 @@ class _PropFirmCard extends StatelessWidget {
     Color statusColor;
     String statusLabel;
     if (data.killedPermanently == true || data.killedToday == true) {
-      statusColor = Colors.redAccent;
+      statusColor = kLoss;
       statusLabel = data.killedPermanently == true ? 'KILLED' : 'KILLED TODAY';
     } else if (dailyPct >= dailyLimitPct * 0.8 || ddPct >= ddLimitPct * 0.8) {
-      statusColor = Colors.amber;
+      statusColor = kAmber;
       statusLabel = 'AT RISK';
     } else {
       statusColor = accent;
@@ -2416,7 +2404,7 @@ class _PropFirmCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: isDark ? kSurface : kLightSurface,
         border: Border.all(color: statusColor.withValues(alpha: 0.35)),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kRadius),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2453,7 +2441,7 @@ class _PropFirmCard extends StatelessWidget {
           if (data.killedReason != null) ...[
             const SizedBox(height: 8),
             Text(data.killedReason!,
-                style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+                style: TextStyle(color: kLoss, fontSize: 12)),
           ],
           const SizedBox(height: 14),
           _PropfirmRow(
@@ -2472,7 +2460,7 @@ class _PropFirmCard extends StatelessWidget {
                 '/ ${fmt.format(data.dailyLossLimitAmount ?? 0)}',
             pct: dailyPct,
             limit: dailyLimitPct,
-            color: Colors.amber,
+            color: kAmber,
             inverted: true,
           ),
           const SizedBox(height: 10),
@@ -2482,7 +2470,7 @@ class _PropFirmCard extends StatelessWidget {
                 '/ ${fmt.format(data.totalDrawdownLimitAmount ?? 0)}',
             pct: ddPct,
             limit: ddLimitPct,
-            color: Colors.redAccent,
+            color: kLoss,
             inverted: true,
           ),
           if (data.minTradingDays != null) ...[

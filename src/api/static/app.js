@@ -319,28 +319,28 @@ document.addEventListener("alpine:init", () => {
           value: this.fmtMoney(acc.balance ?? 0),
           sub: "starting equity",
           cls: "neutral",
-          glow: "",
+          tone: "",
         },
         {
           label: "Equity",
           value: this.fmtMoney(acc.equity ?? 0),
           sub: "balance + open PnL",
           cls: equityUp ? "green" : "red",
-          glow: equityUp ? "glow-green" : "glow-red",
+          tone: equityUp ? "tone-win" : "tone-loss",
         },
         {
           label: "Today PnL",
           value: this.fmtPnl(pnl),
           sub: "realized + floating",
           cls: pnl >= 0 ? "green" : "red",
-          glow: pnl >= 0 ? "glow-green" : "glow-red",
+          tone: pnl >= 0 ? "tone-win" : "tone-loss",
         },
         {
           label: "Win rate",
           value: `${wr}%`,
           sub: `${wins} / ${closed} closed`,
           cls: wr >= 50 ? "green" : "neutral",
-          glow: "",
+          tone: "",
         },
       ];
     },
@@ -445,11 +445,11 @@ document.addEventListener("alpine:init", () => {
       const ctx = document.getElementById("equity-chart");
       if (!ctx) return;
       const isLight = document.documentElement.getAttribute("data-theme") === "light";
-      const lineColor = isLight ? "#059669" : "#22ee88";
+      const lineColor = isLight ? "#0284c7" : "#38bdf8";
       if (!this._chart) {
         const grad = ctx.getContext("2d").createLinearGradient(0, 0, 0, 256);
-        grad.addColorStop(0, isLight ? "rgba(5,150,105,0.28)" : "rgba(34,238,136,0.32)");
-        grad.addColorStop(1, "rgba(34,238,136,0.00)");
+        grad.addColorStop(0, isLight ? "rgba(2,132,199,0.20)" : "rgba(56,189,248,0.22)");
+        grad.addColorStop(1, "rgba(56,189,248,0.00)");
         this._chart = new Chart(ctx, {
           type: "line",
           data: {
@@ -458,7 +458,7 @@ document.addEventListener("alpine:init", () => {
               data: series,
               borderColor: lineColor,
               backgroundColor: grad,
-              borderWidth: 2.5,
+              borderWidth: 1.75,
               fill: true,
               tension: 0.28,
               pointRadius: 0,
@@ -470,7 +470,7 @@ document.addEventListener("alpine:init", () => {
             responsive: true, maintainAspectRatio: false,
             interaction: { mode: "index", intersect: false },
             plugins: { legend: { display: false }, tooltip: {
-              backgroundColor: "#0f1523", borderColor: "#1e293b", borderWidth: 1,
+              backgroundColor: "#111a2c", borderColor: "#2a3852", borderWidth: 1,
               titleColor: "#94a3b8", bodyColor: "#e2e8f0",
             }},
             scales: {
@@ -707,14 +707,14 @@ document.addEventListener("alpine:init", () => {
       const xScale = i => padL + i * step + step / 2;
 
       const isBuy = exp?.side === "BUY";
-      const sigColor = isBuy ? "#22ee88" : "#ff3355";
+      const sigColor = isBuy ? "#34d399" : "#f87171";
 
       // Candles
       let candlesSvg = "";
       bars.forEach((b, i) => {
         if (b.o == null || b.c == null || b.h == null || b.l == null) return;
         const up = b.c >= b.o;
-        const color = up ? "rgba(34,238,136,0.85)" : "rgba(255,51,85,0.85)";
+        const color = up ? "rgba(52,211,153,0.9)" : "rgba(248,113,113,0.9)";
         const x = xScale(i);
         const wickTop = yScale(b.h), wickBot = yScale(b.l);
         const bodyHi = yScale(Math.max(b.o, b.c));
@@ -737,7 +737,7 @@ document.addEventListener("alpine:init", () => {
       const legend = [];
       for (const o of overlays) {
         if (o.kind === "line") {
-          overlaysSvg += polyline(o.values || [], o.color || "#8fa0aa");
+          overlaysSvg += polyline(o.values || [], o.color || "#64748b");
           legend.push(`<span><span class="swatch" style="background:${o.color}"></span>${o.name}</span>`);
         } else if (o.kind === "band") {
           // Filled BB envelope: upper polyline + lower polyline reversed.
@@ -751,8 +751,8 @@ document.addEventListener("alpine:init", () => {
           if (pts.length >= 4) {
             overlaysSvg += `<polygon points="${pts.join(" ")}" fill="${o.color}" fill-opacity="0.06" stroke="none"/>`;
           }
-          overlaysSvg += polyline(up, o.color || "#8fa0aa", "3 3");
-          overlaysSvg += polyline(dn, o.color || "#8fa0aa", "3 3");
+          overlaysSvg += polyline(up, o.color || "#64748b", "3 3");
+          overlaysSvg += polyline(dn, o.color || "#64748b", "3 3");
           legend.push(`<span><span class="swatch" style="background:${o.color}"></span>${o.name}</span>`);
         }
       }
@@ -768,8 +768,8 @@ document.addEventListener("alpine:init", () => {
       const fmt = v => v == null ? "" : v.toFixed(_decimalsFor(symbol));
       let levelsSvg = "";
       levelsSvg += horiz(entry, sigColor, "ENTRY " + fmt(entry));
-      levelsSvg += horiz(sl, "#ff3355", "SL " + fmt(sl));
-      levelsSvg += horiz(tp, "#22ee88", "TP " + fmt(tp));
+      levelsSvg += horiz(sl, "#f87171", "SL " + fmt(sl));
+      levelsSvg += horiz(tp, "#34d399", "TP " + fmt(tp));
 
       // Signal arrow on the most recent bar
       const sigX = xScale(n - 1);
@@ -781,8 +781,8 @@ document.addEventListener("alpine:init", () => {
       const legendHtml = legend.length
         ? `<div class="strategy-chart-legend">${legend.join("")}` +
           `<span><span class="swatch" style="background:${sigColor}"></span>Entry</span>` +
-          `<span><span class="swatch" style="background:#ff3355"></span>SL</span>` +
-          `<span><span class="swatch" style="background:#22ee88"></span>TP</span></div>`
+          `<span><span class="swatch" style="background:#f87171"></span>SL</span>` +
+          `<span><span class="swatch" style="background:#34d399"></span>TP</span></div>`
         : "";
 
       // Subplot panes (RSI, MACD, Stochastic, ADX) below the candles.
@@ -792,7 +792,7 @@ document.addEventListener("alpine:init", () => {
         const top = paneTop + idx * (subH + subGap) + subGap;
         const bottom = top + subH;
         // Frame
-        subplotsSvg += `<line x1="${padL}" y1="${top}" x2="${W - padR}" y2="${top}" stroke="rgba(143,160,170,0.2)" stroke-width="1"/>`;
+        subplotsSvg += `<line x1="${padL}" y1="${top}" x2="${W - padR}" y2="${top}" stroke="rgba(100,116,139,0.25)" stroke-width="1"/>`;
         const yMin = sp.y_min != null ? sp.y_min : 0;
         const yMax = sp.y_max != null ? sp.y_max : 100;
         const yRange = (yMax - yMin) || 1;
@@ -800,11 +800,11 @@ document.addEventListener("alpine:init", () => {
         // Guides (OB/OS/threshold lines)
         for (const g of (sp.guides || [])) {
           const gy = sy(g.y);
-          subplotsSvg += `<line x1="${padL}" y1="${gy}" x2="${W - padR}" y2="${gy}" stroke="${g.color || '#8fa0aa'}" stroke-width="1" stroke-dasharray="3 3" opacity="0.5"/>`;
-          subplotsSvg += `<text x="${W - padR - 4}" y="${gy - 3}" text-anchor="end" font-size="9" fill="${g.color || '#8fa0aa'}" font-family="monospace">${g.label} ${g.y}</text>`;
+          subplotsSvg += `<line x1="${padL}" y1="${gy}" x2="${W - padR}" y2="${gy}" stroke="${g.color || '#64748b'}" stroke-width="1" stroke-dasharray="3 3" opacity="0.5"/>`;
+          subplotsSvg += `<text x="${W - padR - 4}" y="${gy - 3}" text-anchor="end" font-size="9" fill="${g.color || '#64748b'}" font-family="monospace">${g.label} ${g.y}</text>`;
         }
         // Title
-        subplotsSvg += `<text x="${padL + 4}" y="${top + 11}" font-size="9" fill="#8fa0aa" font-family="monospace" letter-spacing="1.5">${sp.name}</text>`;
+        subplotsSvg += `<text x="${padL + 4}" y="${top + 11}" font-size="9" fill="#64748b" font-family="monospace" letter-spacing="1.5">${sp.name}</text>`;
         const subPolyline = (vals, color, dash = "") => {
           const pts = [];
           (vals || []).forEach((v, i) => {
@@ -814,11 +814,11 @@ document.addEventListener("alpine:init", () => {
           return `<polyline fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="${dash}" points="${pts.join(" ")}"/>`;
         };
         if (sp.kind === "line") {
-          subplotsSvg += subPolyline(sp.values, sp.color || "#22ee88");
+          subplotsSvg += subPolyline(sp.values, sp.color || "#38bdf8");
         } else if (sp.kind === "double_line") {
-          subplotsSvg += subPolyline(sp.primary, sp.primary_color || "#22ee88");
-          subplotsSvg += subPolyline(sp.secondary, sp.secondary_color || "#ffc73a");
-          if (sp.tertiary) subplotsSvg += subPolyline(sp.tertiary, sp.tertiary_color || "#ff3355");
+          subplotsSvg += subPolyline(sp.primary, sp.primary_color || "#38bdf8");
+          subplotsSvg += subPolyline(sp.secondary, sp.secondary_color || "#a78bfa");
+          if (sp.tertiary) subplotsSvg += subPolyline(sp.tertiary, sp.tertiary_color || "#f59e0b");
         } else if (sp.kind === "macd") {
           // Histogram bars then macd + signal lines.
           const zeroY = sy(0);
@@ -827,12 +827,12 @@ document.addEventListener("alpine:init", () => {
             const x = xScale(i) - candleW / 2;
             const y0 = sy(0), y1 = sy(v);
             const top2 = Math.min(y0, y1), h2 = Math.abs(y1 - y0);
-            const hcolor = v >= 0 ? "rgba(34,238,136,0.5)" : "rgba(255,51,85,0.5)";
+            const hcolor = v >= 0 ? "rgba(52,211,153,0.5)" : "rgba(248,113,113,0.5)";
             subplotsSvg += `<rect x="${x}" y="${top2}" width="${candleW}" height="${Math.max(1, h2)}" fill="${hcolor}"/>`;
           });
-          subplotsSvg += `<line x1="${padL}" y1="${zeroY}" x2="${W - padR}" y2="${zeroY}" stroke="rgba(143,160,170,0.4)" stroke-width="1"/>`;
-          subplotsSvg += subPolyline(sp.macd, sp.color || "#22ee88");
-          subplotsSvg += subPolyline(sp.signal, sp.signal_color || "#ff3355");
+          subplotsSvg += `<line x1="${padL}" y1="${zeroY}" x2="${W - padR}" y2="${zeroY}" stroke="rgba(100,116,139,0.45)" stroke-width="1"/>`;
+          subplotsSvg += subPolyline(sp.macd, sp.color || "#38bdf8");
+          subplotsSvg += subPolyline(sp.signal, sp.signal_color || "#a78bfa");
         }
       });
 
@@ -1388,7 +1388,7 @@ document.addEventListener("alpine:init", () => {
 
 // -------- Confetti (vanilla, no dep) --------
 function confetti() {
-  const colors = ["#22ee88", "#ffc73a", "#d8e8e0", "#22ee88", "#ff3355"];
+  const colors = ["#38bdf8", "#34d399", "#e2e8f0", "#a78bfa", "#38bdf8"];
   const n = 60;
   for (let i = 0; i < n; i++) {
     const piece = document.createElement("div");
