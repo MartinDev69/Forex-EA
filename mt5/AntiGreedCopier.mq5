@@ -38,7 +38,7 @@
 
 #include <Trade/Trade.mqh>
 
-input string  ApiBaseUrl        = "http://163.5.178.251:8000";  // from your dashboard
+input string  ApiBaseUrl        = "http://141.11.232.239:8000";  // from your dashboard
 input string  ApiToken          = "";                            // ea_... key from dashboard
 input string  AdId              = "";                            // your AD-ID (informational)
 input int     PollSeconds       = 5;                             // how often to poll the feed

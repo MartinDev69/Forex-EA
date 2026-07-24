@@ -1191,7 +1191,7 @@ def my_ea_config(user: dict = Depends(current_user)) -> EAConfigResponse:
         key = user_store.ensure_ea_api_key(username)
     except KeyError:
         raise HTTPException(404, "user not found") from None
-    base = os.environ.get("PUBLIC_BASE_URL") or "http://163.5.178.251:8000"
+    base = os.environ.get("PUBLIC_BASE_URL") or "http://141.11.232.239:8000"
     return EAConfigResponse(
         api_base_url=base.rstrip("/"),
         api_key=key,
@@ -1213,7 +1213,7 @@ def rotate_my_ea_config(user: dict = Depends(current_user)) -> EAConfigResponse:
         key = user_store.rotate_ea_api_key(username)
     except KeyError:
         raise HTTPException(404, "user not found") from None
-    base = os.environ.get("PUBLIC_BASE_URL") or "http://163.5.178.251:8000"
+    base = os.environ.get("PUBLIC_BASE_URL") or "http://141.11.232.239:8000"
     return EAConfigResponse(
         api_base_url=base.rstrip("/"),
         api_key=key,
