@@ -34,23 +34,65 @@ See `deploy/README.md` → "Running Deriv — Volatility 10 (1s) only" for the f
 ## Where it runs (production = this VPS)
 
 - Repo root on the VPS: `C:\forex-ea`
-- Runs 24/7 as two **NSSM Windows services**:
-  - **ForexEABot** — the trading loop (`main.py`)
-  - **ForexEAApi** — the FastAPI dashboard/API (uvicorn, port 8000)
-- A **watchdog** runs via Task Scheduler (`scripts/watchdog.py`): restarts ForexEABot
-  if the heartbeat goes stale and kills a wedged MT5 terminal if the broker stays
-  disconnected. Confirm it's actually scheduled: `Get-ScheduledTask *watchdog*`.
+- Public dashboard/API: **`http://141.11.232.239:8000`**. (The old `163.5.178.251` is
+  dead — if you find it anywhere, it's stale.)
+- The three pieces start **three different ways**. This split is deliberate; don't
+  "unify" it back into services:
+
+| Piece | Starts via | Runs as | Logs |
+|-------|-----------|---------|------|
+| **Trading loop** (`main.py`) | scheduled task **`ForexEA-Bot`** → `deploy\run-bot.cmd` | `Administrator`, **Interactive**, at-logon trigger | `logs\bot-task.log` + `logs\forex-ea.log` |
+| **API / dashboard** (uvicorn :8000) | NSSM service **`ForexEAApi`** | `LocalSystem`, session 0 | `logs\api.stdout.log` + `logs\api.stderr.log` |
+| **Watchdog** (`scripts/watchdog.py`) | scheduled task **`ForexEA-Watchdog`** → `deploy\run-watchdog.cmd`, every 60s | `SYSTEM` | `logs\watchdog.log` + `watchdog_actions` table |
+
+**Why the bot is a task and not a service.** MT5 only initialises reliably when there's
+a real desktop session; from session 0 it fails with `-10005 IPC timeout`. So the
+trading loop runs inside the interactive session of an auto-logged-on user. The API has
+no such constraint, so it stayed an NSSM service.
+
+**Autologon wiring.** `Autologon.exe` (Sysinternals) set `AutoAdminLogon=1` /
+`DefaultUserName=Administrator` / `DefaultDomainName=VPS35079963` under
+`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon`, with the password stored
+as an **LSA secret** (not plaintext in the registry — don't "fix" this by adding a
+`DefaultPassword` value). Boot → Administrator logs in automatically → the at-logon
+trigger fires `ForexEA-Bot` → MT5 and `main.py` come up in that session. **If autologon
+ever breaks, the box boots to the lock screen and the bot never starts** — while the API
+still does, so a green dashboard is not proof the bot is running.
+
+The bot task self-heals: `RestartCount=999`, `RestartInterval=1 min`, execution time
+limit disabled (runs forever).
+
+**Vestigial:** the old NSSM service `ForexEABot` still exists but is **Stopped +
+Disabled**. Leave it that way — starting it would run a second `main.py` against the
+same account.
 
 ## Operating commands (run from `C:\forex-ea`)
 
 | Task | Command |
 |------|---------|
-| Service status | `.\deploy\service-control.ps1 status` |
-| Restart both | `.\deploy\service-control.ps1 restart` |
-| Tail bot / API stderr | `.\deploy\service-control.ps1 logs bot` / `logs api` |
+| Status of all three | `.\deploy\service-control.ps1 status` |
+| Restart bot + API | `.\deploy\service-control.ps1 restart` |
+| Restart just the bot | `.\deploy\service-control.ps1 restart bot` |
+| Tail bot / API logs | `.\deploy\service-control.ps1 logs bot` / `logs api` |
 | Health check | `python deploy\healthcheck.py` |
-| Pull + redeploy (restarts services) | `.\deploy\update.ps1` |
-| Live log tail | `Get-Content C:\forex-ea\logs\forex-ea.log -Tail 30` |
+| Pull + redeploy | `.\deploy\update.ps1` |
+
+Raw equivalents, if you'd rather not use the wrapper:
+
+```powershell
+Get-ScheduledTask   ForexEA-Bot, ForexEA-Watchdog          # task state
+Get-ScheduledTaskInfo ForexEA-Bot                          # LastRunTime / LastTaskResult
+Get-Service ForexEAApi                                     # API service
+Stop-ScheduledTask -TaskName ForexEA-Bot; Start-ScheduledTask -TaskName ForexEA-Bot
+Restart-Service ForexEAApi
+```
+
+**Is the bot actually alive?** The task showing `Running` only means the `.cmd` wrapper
+is up. The authoritative signal is the DB heartbeat the watchdog reads —
+`watchdog_heartbeat.last_tick_at` (and `broker_status.updated_at`) in `data/trades.db`
+should be seconds old, with `watchdog_actions` logging `all healthy`. Note that
+`logs\forex-ea.log` can sit unwritten for a long stretch while the bot is perfectly
+healthy, so **log silence alone is not evidence the bot is down.**
 
 `update.ps1` refuses to pull with uncommitted local changes — run `git status` first.
 
@@ -78,24 +120,34 @@ strategies, one instance per symbol — see `build_strategies` in `main.py`) ·
 
 ## Known failure modes
 
-- **`MT5 initialize failed: (-10005, 'IPC timeout')`** — a stale/hung `terminal64.exe`
-  holds the IPC pipe. `Restart-Service` alone does NOT fix it. Kill the terminal so the
+- **`MT5 initialize failed: (-10005, 'IPC timeout')`** — either a stale/hung
+  `terminal64.exe` is holding the IPC pipe, or the bot is running without an interactive
+  desktop session. Restarting alone does NOT fix the first case; kill the terminal so the
   bot relaunches a clean one: `taskkill /F /IM terminal64.exe` then
-  `.\deploy\service-control.ps1 restart`. Also check for a blocking modal in the MT5 GUI
-  (login failure, trial expired, update prompt).
+  `.\deploy\service-control.ps1 restart bot`. Also check for a blocking modal in the MT5
+  GUI (login failure, trial expired, update prompt). If it's persistent and reproducible
+  from a clean start, confirm autologon still works and that `ForexEA-Bot`'s principal is
+  still `Administrator` / **Interactive** — a task flipped to "Run whether user is logged
+  on or not" lands in session 0 and will IPC-timeout forever.
 - **No bars / no signals** on the V10 symbol — it isn't in MT5 **Market Watch**, or the
   `SYMBOLS` string doesn't match the terminal's label character-for-character. Right-click
   Market Watch → Show All and compare exactly.
-- **Bot service starts then stops** — tail `logs\bot.stderr.log`; usual causes are bad
-  MT5 credentials, terminal not running, or Algo Trading disabled in MT5.
+- **Bot starts then stops** — tail `logs\bot-task.log` (the task's own stdout/stderr;
+  `logs\bot.stderr.log` is from the retired NSSM service and is frozen in the past).
+  Usual causes are bad MT5 credentials, terminal not running, or Algo Trading disabled.
+- **Bot never starts after a reboot** — the box booted to a lock screen instead of
+  auto-logging in, so the at-logon trigger never fired. Check `AutoAdminLogon` under
+  `Winlogon` and re-run `deploy\Autologon.exe`. The API will look fine throughout.
 
 ## Verifying a change actually works
 
 Don't declare a trading change done from tests alone. On `Deriv-Demo`, restart the bot
-and confirm in the log: `MT5 connected … server=Deriv-Demo`, then a signal firing on
-`Volatility 10 (1s) Index` and a resulting open position. Check the first trades' **lot
-sizes** — a synthetic index's point value differs from forex, so `RISK_PER_TRADE` maps
-to a different lot than it did on Exness.
+(`.\deploy\service-control.ps1 restart bot`) and confirm in `logs\bot-task.log`:
+`MT5 connected … server=Deriv-Demo`, then a signal firing on `Volatility 10 (1s) Index`
+and a resulting open position — cross-check the position against the `trades` table in
+`data/trades.db`, since the file log is not a reliable record of fills. Check the first
+trades' **lot sizes** — a synthetic index's point value differs from forex, so
+`RISK_PER_TRADE` maps to a different lot than it did on Exness.
 
 ## Repo notes
 
