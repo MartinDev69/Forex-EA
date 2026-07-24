@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
-import '../theme.dart';
 
 /// Thrown by [runWithTwoFa] when the user dismissed the 2FA dialog.
 /// Distinct from a void return so callers can tell "completed with no
@@ -69,7 +68,7 @@ Future<String?> _ask2faCode(BuildContext context, String? hint) {
           const Text('Enter the 6-digit code from your authenticator.'),
           if (hint != null) ...[
             const SizedBox(height: 8),
-            Text(hint, style: const TextStyle(color: kLoss, fontSize: 12)),
+            Text(hint, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
           ],
           const SizedBox(height: 12),
           TextField(

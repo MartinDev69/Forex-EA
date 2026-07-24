@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../theme.dart';
 
 /// Drop-in replacement for CircularProgressIndicator. Pulses the AntiGreed
 /// logo at the requested size. Use whenever the app is fetching/initialising
@@ -61,7 +60,7 @@ class _LogoSpinnerState extends State<LogoSpinner>
           const SizedBox(height: 8),
           Text(
             widget.label!,
-            style: TextStyle(color: kMuted, fontSize: 11),
+            style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
           ),
         ],
       ],

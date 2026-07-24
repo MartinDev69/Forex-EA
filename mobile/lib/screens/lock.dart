@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 
 import '../api/client.dart';
 import '../services/quick_unlock.dart';
-import '../theme.dart';
 
 /// Shown on launch (or on resume from background) when the user has quick
 /// unlock enabled. Two paths to in: biometric prompt, or 4–6 digit PIN.
@@ -156,7 +155,7 @@ class _LockScreenState extends State<LockScreen> {
                   Text(
                     'Locked',
                     style: TextStyle(
-                      color: kMuted,
+                      color: Colors.grey.shade400,
                       letterSpacing: 3,
                       fontSize: 11,
                     ),
@@ -193,26 +192,26 @@ class _LockScreenState extends State<LockScreen> {
                       width: double.infinity,
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: kLoss.withValues(alpha: 0.12),
-                        border: Border.all(color: kLoss.withValues(alpha: 0.4)),
+                        color: Colors.red.shade900.withValues(alpha: 0.3),
+                        border: Border.all(color: Colors.red.shade700),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
                         _error!,
-                        style: const TextStyle(color: kLoss, fontSize: 12),
+                        style: const TextStyle(color: Colors.redAccent, fontSize: 12),
                       ),
                     ),
                   ] else if (_info != null) ...[
                     const SizedBox(height: 12),
                     Text(
                       _info!,
-                      style: TextStyle(color: kMuted, fontSize: 12),
+                      style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
                     ),
                   ] else if (_attemptsLeft < 5) ...[
                     const SizedBox(height: 12),
                     Text(
                       '$_attemptsLeft attempts left',
-                      style: TextStyle(color: kMuted, fontSize: 11),
+                      style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
                     ),
                   ],
                   const SizedBox(height: 16),
