@@ -31,23 +31,31 @@ from src.watchdog import HeartbeatStore, Watchdog, WatchdogConfig
 log = logging.getLogger("watchdog")
 
 DB_PATH = Path("data/trades.db")
-BOT_SERVICE = "ForexEABot"
+# The trading loop runs as an INTERACTIVE scheduled task (ForexEA-Bot), not a
+# session-0 service — MT5 only initialises reliably with a desktop session.
+# See deploy/README.md "Durable runtime". The watchdog restarts that task.
+BOT_TASK = "ForexEA-Bot"
 MT5_PROCESS_NAMES = ("terminal64.exe", "terminal.exe")
 
 
 def _restart_bot_service(dry_run: bool) -> tuple[bool, str]:
     if dry_run or platform.system() != "Windows":
-        return True, "dry-run / non-Windows: would have restarted ForexEABot"
+        return True, f"dry-run / non-Windows: would have restarted {BOT_TASK} task"
     try:
+        # Stop any running instance, then start a fresh one. Scheduler places it
+        # in the user's interactive session per the task's principal, even though
+        # the watchdog itself runs as SYSTEM.
         subprocess.run(
-            ["powershell", "-NoProfile", "-Command", f"Restart-Service -Name {BOT_SERVICE} -Force"],
+            ["powershell", "-NoProfile", "-Command",
+             f"Stop-ScheduledTask -TaskName {BOT_TASK} -ErrorAction SilentlyContinue; "
+             f"Start-Sleep -Seconds 2; Start-ScheduledTask -TaskName {BOT_TASK}"],
             check=True, capture_output=True, text=True, timeout=60,
         )
-        return True, f"Restart-Service {BOT_SERVICE} succeeded"
+        return True, f"restarted scheduled task {BOT_TASK}"
     except subprocess.CalledProcessError as exc:
-        return False, f"Restart-Service failed: {exc.stderr.strip() or exc.stdout.strip()}"
+        return False, f"restart task failed: {exc.stderr.strip() or exc.stdout.strip()}"
     except subprocess.TimeoutExpired:
-        return False, "Restart-Service timed out after 60s"
+        return False, "restart task timed out after 60s"
 
 
 def _recycle_mt5(dry_run: bool) -> tuple[bool, str]:

@@ -1,9 +1,9 @@
-# In-place redeploy: pull latest code, refresh deps, restart services.
+# In-place redeploy: pull latest code, refresh deps, restart the bot task + API service.
 #
 # Run from the repo root on the VPS:
 #   .\deploy\update.ps1
 #
-# Safe to run while the bot is live -- services get restarted in a controlled order.
+# Safe to run while the bot is live -- things get restarted in a controlled order.
 
 $ErrorActionPreference = "Stop"
 
@@ -34,17 +34,11 @@ if (-not (Test-Path $venvPython)) {
 Write-Host "Reinstalling requirements (upgrade-only-if-needed)"
 & $venvPython -m pip install -r (Join-Path $RepoRoot "requirements.txt") | Out-Host
 
-# --- Restart services ------------------------------------------------------
+# --- Restart the runtime ---------------------------------------------------
+# The bot is an interactive scheduled task, not a service (MT5 needs a desktop
+# session); only the API is an NSSM service. See CLAUDE.md "Where it runs".
 # Bot first (stops placing new orders), then API.
-$services = @("ForexEABot", "ForexEAApi")
-foreach ($svc in $services) {
-    if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
-        Write-Host "Restarting $svc"
-        Restart-Service -Name $svc
-    } else {
-        Write-Warning "Service $svc not installed -- skipping."
-    }
-}
+& (Join-Path $PSScriptRoot "service-control.ps1") restart
 
 Write-Host ""
 Write-Host "Update complete. Verify with:"
