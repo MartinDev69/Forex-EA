@@ -90,9 +90,10 @@ Restart-Service ForexEAApi
 **Is the bot actually alive?** The task showing `Running` only means the `.cmd` wrapper
 is up. The authoritative signal is the DB heartbeat the watchdog reads —
 `watchdog_heartbeat.last_tick_at` (and `broker_status.updated_at`) in `data/trades.db`
-should be seconds old, with `watchdog_actions` logging `all healthy`. Note that
-`logs\forex-ea.log` can sit unwritten for a long stretch while the bot is perfectly
-healthy, so **log silence alone is not evidence the bot is down.**
+should be seconds old, with `watchdog_actions` logging `all healthy`. `status` prints
+these. Since 2026-07-25 `logs\forex-ea.log` also carries loop-level records (`src.bot`,
+`src.execution.mt5_live`), so a live tail is now a real liveness signal too — before that
+fix the file only ever received `main.py`'s startup banner.
 
 `update.ps1` refuses to pull with uncommitted local changes — run `git status` first.
 
@@ -144,8 +145,8 @@ strategies, one instance per symbol — see `build_strategies` in `main.py`) ·
 Don't declare a trading change done from tests alone. On `Deriv-Demo`, restart the bot
 (`.\deploy\service-control.ps1 restart bot`) and confirm in `logs\bot-task.log`:
 `MT5 connected … server=Deriv-Demo`, then a signal firing on `Volatility 10 (1s) Index`
-and a resulting open position — cross-check the position against the `trades` table in
-`data/trades.db`, since the file log is not a reliable record of fills. Check the first
+and a resulting open position, cross-checked against the `trades` table in
+`data/trades.db`. Check the first
 trades' **lot sizes** — a synthetic index's point value differs from forex, so
 `RISK_PER_TRADE` maps to a different lot than it did on Exness.
 

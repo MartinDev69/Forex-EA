@@ -55,7 +55,7 @@ from src.strategies import (
 from src.narrator import NarrativeStore, NarratorComposer, build_provider
 from src.propfirm import PropFirmGuard, PropFirmStore, policy_from_env
 from src.replay import PathRecorder, PathStore
-from src.utils import get_logger
+from src.utils import setup_logging
 from src.voice import KillSwitchFlag
 from src.api.bot_control import BotControlStore
 from src.watchdog import HeartbeatStore
@@ -112,7 +112,7 @@ def _resolve_broker_config(settings) -> tuple[BrokerConfig, str]:
 
 def main() -> None:
     settings = load_settings()
-    log = get_logger("forex-ea", level=settings.log_level, log_dir=Path("logs"))
+    log = setup_logging(level=settings.log_level, log_dir=Path("logs"))
 
     use_mt5 = os.getenv("USE_MT5", "0") == "1"
     data_feed: DataFeed

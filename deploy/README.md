@@ -102,8 +102,23 @@ is logged on or not" puts it back in session 0 and MT5 will IPC-timeout forever.
 `.cmd` wrapper is up. The authoritative signal is the heartbeat in `data/trades.db` —
 `watchdog_heartbeat.last_tick_at` and `broker_status.updated_at` should both be seconds
 old, and `watchdog_actions` should be logging `all healthy`. `status` above prints these.
-`logs\forex-ea.log` can stay unwritten for long stretches on a healthy bot, so log silence
-alone does not mean it's down.
+`logs\forex-ea.log` now also carries loop-level records, so tailing it is a valid liveness
+check as well.
+
+## Logging
+
+`setup_logging()` in `src/utils/logger.py` configures the **root** logger — stdout plus a
+rotating `logs\forex-ea.log` (5 MB × 5). Every module uses the conventional
+`logging.getLogger(__name__)` and inherits those handlers, so records appear as
+`… | INFO | src.bot | …`.
+
+Handlers must stay on **root**. They previously sat on a logger *named* `"forex-ea"` with
+`propagate=False`, which meant only `main.py`'s own records ever reached the file: the
+whole `src.*` tree had no handlers, so its INFO was dropped at root's default WARNING
+level and its warnings fell through to `logging.lastResort` (bare, unformatted, stderr).
+Between 2026-06-24 and 2026-07-25 no signal, fill, or close was ever written to a log
+file. If you add a module, just use `logging.getLogger(__name__)` — don't attach handlers
+to it. Chatty third-party loggers are pinned to WARNING in `_NOISY`.
 
 ## Environment variables
 
