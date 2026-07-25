@@ -27,6 +27,7 @@ import asyncio
 import logging
 import os
 import sqlite3
+from src.utils.db import connect as db_connect
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -193,9 +194,24 @@ def _send_expiry_emails() -> None:
 
 app = FastAPI(title="Forex-EA Control API", version="0.3.0", lifespan=_lifespan)
 
+# CORS: an explicit allowlist, never "*". Combined with allow_credentials=True
+# a wildcard both defeats the point (any site could drive the authenticated
+# control API on a victim's behalf) and is rejected by browsers anyway. Native
+# mobile clients don't send an Origin header so they're unaffected by this —
+# it only governs browser/dashboard origins. Set CORS_ALLOW_ORIGINS (comma-
+# separated) in production to your dashboard's URL.
+_cors_origins = [
+    o.strip()
+    for o in os.environ.get(
+        "CORS_ALLOW_ORIGINS",
+        "http://localhost:8000,http://127.0.0.1:8000",
+    ).split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1073,7 +1089,7 @@ def test_broker(
         try:
             client.disconnect()
         except Exception:
-            pass
+            log.debug("broker test: disconnect during cleanup failed", exc_info=True)
 
 
 @app.get("/orders/pending")
@@ -1175,7 +1191,7 @@ def my_ea_config(user: dict = Depends(current_user)) -> EAConfigResponse:
         key = user_store.ensure_ea_api_key(username)
     except KeyError:
         raise HTTPException(404, "user not found") from None
-    base = os.environ.get("PUBLIC_BASE_URL") or "http://163.5.178.251:8000"
+    base = os.environ.get("PUBLIC_BASE_URL") or "http://141.11.232.239:8000"
     return EAConfigResponse(
         api_base_url=base.rstrip("/"),
         api_key=key,
@@ -1197,7 +1213,7 @@ def rotate_my_ea_config(user: dict = Depends(current_user)) -> EAConfigResponse:
         key = user_store.rotate_ea_api_key(username)
     except KeyError:
         raise HTTPException(404, "user not found") from None
-    base = os.environ.get("PUBLIC_BASE_URL") or "http://163.5.178.251:8000"
+    base = os.environ.get("PUBLIC_BASE_URL") or "http://141.11.232.239:8000"
     return EAConfigResponse(
         api_base_url=base.rstrip("/"),
         api_key=key,
@@ -1254,7 +1270,7 @@ def signal_feed_endpoint(
     # known timestamp so the EA can begin polling forward from there.
     if not since:
         try:
-            with sqlite3.connect(_DB) as c:
+            with db_connect(_DB) as c:
                 row = c.execute(
                     "SELECT COALESCE(MAX(ts), '1970-01-01T00:00:00+00:00') AS mx "
                     "FROM ("

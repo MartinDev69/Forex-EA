@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from src.utils.db import connect as db_connect
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -144,7 +145,7 @@ class TradeExplanationStore:
                 c.execute("ALTER TABLE trade_explanations ADD COLUMN subplots_json TEXT")
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
+        conn = db_connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
 

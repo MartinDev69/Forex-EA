@@ -1,0 +1,58 @@
+# Keep the build context small and never bake secrets/local state into the image.
+
+# Secrets & local env — NEVER copy these in
+.env
+.env.local
+*.key
+*.pem
+credentials.json
+
+# Virtualenvs (image builds its own)
+venv/
+env/
+.venv/
+
+# Local SQLite data & logs — mounted as a volume at runtime instead
+data/
+logs/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# The Flutter mobile app — separate artifact, not part of the API image
+mobile/
+
+# Windows-VPS deployment scripts — not used by the Linux container
+deploy/
+
+# Tests, notebooks, research — not needed at runtime
+tests/
+notebooks/
+docs/
+
+# Python caches & build cruft
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+backtest_results/
+*.pkl
+
+# Git & tooling
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# The Dockerfile itself and docs don't belong in the context payload
+Dockerfile
+.dockerignore
+*.md

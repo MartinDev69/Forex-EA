@@ -15,6 +15,7 @@ env/
 # Secrets & env
 .env
 .env.local
+.env.bak*
 *.key
 *.pem
 credentials.json
@@ -52,3 +53,7 @@ mobile/pubspec.lock
 # Backtest results
 backtest_results/
 *.pkl
+
+# Third-party ops binary: Sysinternals Autologon, redistributed under Microsoft's
+# EULA and re-downloaded per VPS rebuild -- see deploy/README.md "Durable runtime".
+deploy/Autologon.exe

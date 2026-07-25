@@ -7,6 +7,7 @@ cycle; the API/throttle read individual pairs or the whole table.
 from __future__ import annotations
 
 import sqlite3
+from src.utils.db import connect as db_connect
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,7 +38,7 @@ class CorrelationStore:
             c.executescript(_SCHEMA)
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = db_connect(self.db_path)
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
 

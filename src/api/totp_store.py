@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import sqlite3
+from src.utils.db import connect as db_connect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -68,7 +69,7 @@ class TOTPStore:
         return base64.urlsafe_b64encode(kdf.derive(secret.encode("utf-8")))
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = db_connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 

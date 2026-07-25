@@ -24,12 +24,23 @@ _DEFAULT_TTL_S = 60 * 60  # 1h
 # bcrypt truncates to 72 bytes; longer passwords collide. Reject instead of silently truncating.
 _MAX_PASSWORD_BYTES = 72
 
+
+def _bcrypt_rounds() -> int:
+    """Work factor for bcrypt. 12 is the secure production default; the test
+    suite drops this to the minimum via BCRYPT_ROUNDS so hashing hundreds of
+    passwords doesn't take minutes. bcrypt requires >= 4, so we clamp."""
+    try:
+        return max(4, int(os.environ.get("BCRYPT_ROUNDS", "12")))
+    except ValueError:
+        return 12
+
+
 _bearer = HTTPBearer(auto_error=False)
 
 # Pre-computed hash of an impossible password — used by authenticate() to make
 # the unknown-user path take roughly the same time as the known-user path, so
 # response timing can't be used to enumerate usernames.
-_DUMMY_HASH = bcrypt.hashpw(b"dummy-password-never-matches", bcrypt.gensalt(rounds=12))
+_DUMMY_HASH = bcrypt.hashpw(b"dummy-password-never-matches", bcrypt.gensalt(rounds=_bcrypt_rounds()))
 
 
 def _secret() -> str:
@@ -46,7 +57,7 @@ def hash_password(plaintext: str) -> str:
     pw_bytes = plaintext.encode("utf-8")
     if len(pw_bytes) > _MAX_PASSWORD_BYTES:
         raise ValueError(f"password too long ({len(pw_bytes)} bytes, max {_MAX_PASSWORD_BYTES})")
-    return bcrypt.hashpw(pw_bytes, bcrypt.gensalt(rounds=12)).decode("utf-8")
+    return bcrypt.hashpw(pw_bytes, bcrypt.gensalt(rounds=_bcrypt_rounds())).decode("utf-8")
 
 
 def verify_password(plaintext: str, hashed: str) -> bool:

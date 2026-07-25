@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from src.utils.db import connect as db_connect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,7 +44,7 @@ class HeartbeatStore:
             c.execute(_SCHEMA)
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = db_connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 

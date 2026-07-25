@@ -16,6 +16,7 @@ just update the row rather than inserting twice.
 from __future__ import annotations
 
 import sqlite3
+from src.utils.db import connect as db_connect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -98,7 +99,7 @@ class EAFillStore:
             c.executescript(_SCHEMA)
 
     def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.db_path)
+        c = db_connect(self.db_path)
         c.row_factory = sqlite3.Row
         return c
 

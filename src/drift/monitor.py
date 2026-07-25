@@ -16,6 +16,7 @@ Cost profile (relevant for VPS deploys):
 from __future__ import annotations
 
 import sqlite3
+from src.utils.db import connect as db_connect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -158,7 +159,7 @@ class DriftMonitor:
 
     def _live_metrics(self, strategy: str, symbol: str, window: int) -> dict:
         """Pull last `window` closed trades for this (strategy, symbol)."""
-        conn = sqlite3.connect(self.path)
+        conn = db_connect(self.path)
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
