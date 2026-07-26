@@ -62,6 +62,33 @@ class MT5Client:
             kwargs["path"] = self.path
         if not mt5.initialize(**kwargs):
             raise ConnectionError(f"MT5 initialize failed: {mt5.last_error()}")
+
+        # initialize() succeeds by ATTACHING to an already-running terminal, and
+        # in that case it can ignore the credentials above entirely -- leaving us
+        # authenticated as whatever account that terminal happens to be logged
+        # into. Without the checks below, wrong creds silently "connect" to the
+        # wrong account: /broker/test reported ok=True for login=1/password='p',
+        # and the bot would have traded whatever session it found. Authenticate
+        # explicitly, then prove the session is the account we asked for.
+        if not mt5.login(self.login, password=self.password, server=self.server):
+            err = mt5.last_error()
+            mt5.shutdown()
+            raise ConnectionError(
+                f"MT5 login failed for {self.login}@{self.server}: {err}"
+            )
+        info = mt5.account_info()
+        if info is None:
+            err = mt5.last_error()
+            mt5.shutdown()
+            raise ConnectionError(f"MT5 account_info failed after login: {err}")
+        if int(info.login) != int(self.login):
+            actual = info.login
+            mt5.shutdown()
+            raise ConnectionError(
+                f"MT5 session belongs to account {actual}, expected {self.login} "
+                "— refusing to trade an unintended account."
+            )
+
         self._connected = True
         return True
 
