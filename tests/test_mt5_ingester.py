@@ -189,6 +189,10 @@ def _seed_bars_for_update() -> pd.DataFrame:
     )
 
 
-def test_ingester_raises_without_mt5():
+def test_ingester_raises_without_mt5(monkeypatch):
+    # Simulate the package being absent rather than relying on the host lacking
+    # it -- on the Windows VPS MetaTrader5 *is* installed, so the bare
+    # MT5Ingester(mt5_module=None) fell through to a successful _load_mt5().
+    monkeypatch.setattr("src.data.mt5_ingester._load_mt5", lambda: None)
     with pytest.raises(RuntimeError, match="MetaTrader5 is not available"):
         MT5Ingester(mt5_module=None)
