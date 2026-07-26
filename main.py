@@ -152,6 +152,29 @@ def main() -> None:
             info = mt5_client.account_info()
             log.info("MT5 connected: login=%s server=%s balance=%.2f %s",
                      info.login, info.server, info.balance, info.currency)
+
+            # AutoTrading is a terminal-side toggle (the "Algo Trading" button /
+            # [Experts] Enabled in config\common.ini). With it off every order is
+            # rejected with retcode=10027 while the bot otherwise looks perfectly
+            # healthy: heartbeat ticking, broker connected, signals firing. That
+            # silently cost ~32h of trading on 2026-07-24..26 and was invisible
+            # until loop-level logging started reaching forex-ea.log. Check it at
+            # startup so the reason is the first thing in the log, not a mystery.
+            try:
+                import MetaTrader5 as _mt5_chk  # noqa: PLC0415 — Windows-only runtime import
+                term = _mt5_chk.terminal_info()
+                if term is not None and not term.trade_allowed:
+                    log.warning(
+                        "AutoTrading is DISABLED in the MT5 terminal — every order will be "
+                        "rejected with retcode=10027 and NO trades will be placed. Enable the "
+                        "Algo Trading button in the terminal, or set [Experts] Enabled=1 in "
+                        "its config\\common.ini and restart."
+                    )
+                elif term is not None:
+                    log.info("AutoTrading enabled in terminal (trade_allowed=True).")
+            except Exception:
+                log.debug("terminal_info() AutoTrading check failed", exc_info=True)
+
             # Hand the same MetaTrader5 module the client uses to the pip
             # resolver — pip_size/pip_value calls now query symbol_info on
             # the live terminal instead of guessing from the symbol name.

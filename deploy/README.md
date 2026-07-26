@@ -280,6 +280,21 @@ taskkill /F /IM terminal64.exe
 ```
 If it recurs, check for a modal dialog blocking the terminal (login failure, "trial expired", update prompt) and confirm the watchdog task is running (`Get-ScheduledTask *watchdog*`) — its job is to recycle a wedged terminal automatically. If it's constant from a clean start, confirm `ForexEA-Bot`'s principal is still `Administrator` / `Interactive`; a task moved to session 0 IPC-timeouts forever.
 
+**Signals fire but no trades appear — `retcode=10027 AutoTrading disabled by client`** — the terminal's Algo Trading toggle is off, so MT5 rejects every order. Nothing else looks wrong: the heartbeat ticks, the broker shows connected, strategies evaluate normally. Startup now logs `AutoTrading enabled in terminal (trade_allowed=True)`, or warns loudly if not — check that line first.
+
+**Fix it in the GUI — the toggle is the only thing that sticks.** Focus the terminal window and press **Ctrl+E** (or click the Algo Trading toolbar button; it must be green):
+
+```powershell
+$p = Get-Process terminal64
+(New-Object -ComObject WScript.Shell).AppActivate($p.Id)
+Start-Sleep -Milliseconds 800
+(New-Object -ComObject WScript.Shell).SendKeys("^e")
+```
+
+Then `.\deploy\service-control.ps1 restart bot` and confirm the startup line says `trade_allowed=True`. This requires an interactive session — over RDP, check `(Get-Process terminal64).SessionId` matches your own.
+
+> Editing `[Experts] Enabled=1` in `config\common.ini` **does not work on its own.** A running terminal flushes its in-memory state over that file every few minutes, reverting it — verified here: the file was set to `1` with the terminal closed, the terminal started and reported `trade_allowed=True`, and it had rewritten `Enabled=0` within three minutes. Use the GUI toggle.
+
 **No bars / no signals on `Volatility 10 (1s) Index`** — the symbol isn't in Market Watch, or the `SYMBOLS` string doesn't match the terminal's label character-for-character. Right-click Market Watch → *Show All* and compare exactly.
 
 **`MetaTrader5` import fails on install** — check that the venv uses Python 3.12, not 3.13. Recreate the venv if it was made with the wrong version.

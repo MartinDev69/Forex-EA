@@ -135,6 +135,15 @@ strategies, one instance per symbol — see `build_strategies` in `main.py`) ·
   from a clean start, confirm autologon still works and that `ForexEA-Bot`'s principal is
   still `Administrator` / **Interactive** — a task flipped to "Run whether user is logged
   on or not" lands in session 0 and will IPC-timeout forever.
+- **Signals fire but nothing ever fills — `retcode=10027 AutoTrading disabled by client`.**
+  The terminal's Algo Trading toggle is off. *Everything else looks perfectly healthy*:
+  heartbeat ticking, broker connected, strategies evaluating — the bot just silently
+  places nothing. This cost ~32h of trading on 2026-07-24..26. `main.py` now logs
+  `AutoTrading enabled in terminal (trade_allowed=True)` at startup, or a loud warning if
+  not, so check that line first. **Fix it in the GUI**: focus the terminal and press
+  **Ctrl+E** (the Algo Trading button must be green), then restart the bot. Editing
+  `[Experts] Enabled=1` in `config\common.ini` does *not* hold — a running terminal
+  flushes its in-memory state over that file within minutes. See `deploy/README.md`.
 - **No bars / no signals** on the V10 symbol — it isn't in MT5 **Market Watch**, or the
   `SYMBOLS` string doesn't match the terminal's label character-for-character. Right-click
   Market Watch → Show All and compare exactly.
