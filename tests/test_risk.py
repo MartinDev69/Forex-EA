@@ -88,6 +88,51 @@ def test_risk_manager_approves_clean_request():
     assert decision.lot_size and decision.lot_size > 0
 
 
+# ------------------------------------------------- daily profit target
+
+def test_daily_profit_target_blocks_once_reached():
+    rm = RiskManager(RiskLimits(daily_profit_target=15.0))
+    rm.register_trade_closed(risk_pct=0.01, pnl=15.0)
+    decision = rm.evaluate(10_000, 50, "EURUSD", lot_sizer=lot_size_from_risk)
+    assert not decision.approved
+    assert "daily profit target reached" in decision.reason
+
+
+def test_daily_profit_target_allows_below_target():
+    rm = RiskManager(RiskLimits(daily_profit_target=15.0))
+    rm.register_trade_closed(risk_pct=0.01, pnl=14.99)
+    assert rm.evaluate(10_000, 50, "EURUSD", lot_sizer=lot_size_from_risk).approved
+
+
+def test_daily_profit_target_disabled_by_default():
+    """Zero target must not gate anything — existing deployments unaffected."""
+    rm = RiskManager(RiskLimits())
+    rm.register_trade_closed(risk_pct=0.01, pnl=5_000.0)
+    assert rm.evaluate(10_000, 50, "EURUSD", lot_sizer=lot_size_from_risk).approved
+
+
+def test_daily_profit_target_resets_next_utc_day():
+    """Banking the target must not wedge the bot permanently."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc)
+    rm = RiskManager(RiskLimits(daily_profit_target=15.0), clock=lambda: now)
+    rm.register_trade_closed(risk_pct=0.01, pnl=20.0)
+    assert not rm.evaluate(10_000, 50, "EURUSD", lot_sizer=lot_size_from_risk).approved
+
+    now = now + timedelta(days=1)
+    assert rm.evaluate(10_000, 50, "EURUSD", lot_sizer=lot_size_from_risk).approved
+
+
+def test_daily_loss_breaker_still_wins_over_profit_target():
+    """A losing day must stay blocked by the loss breaker, not slip through."""
+    rm = RiskManager(RiskLimits(max_daily_loss_pct=0.05, daily_profit_target=15.0))
+    rm.register_trade_closed(risk_pct=0.01, pnl=-600)
+    decision = rm.evaluate(10_000, 50, "EURUSD", lot_sizer=lot_size_from_risk)
+    assert not decision.approved
+    assert "circuit breaker" in decision.reason
+
+
 # --------------------------------------------------------------- PipResolver
 
 

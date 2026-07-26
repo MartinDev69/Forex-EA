@@ -18,6 +18,7 @@ class Settings:
     max_open_trades: int
     max_daily_loss_pct: float
     max_portfolio_heat_pct: float
+    daily_profit_target: float
 
     telegram_bot_token: str
     telegram_chat_id: str
@@ -47,6 +48,9 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         # than the old 6% default — most blow-ups were stacked-correlation
         # piles on the same direction.
         max_portfolio_heat_pct=float(os.getenv("MAX_PORTFOLIO_HEAT_PCT", "0.04")),
+        # Absolute account-currency profit that stops new entries for the UTC
+        # day. 0 = off (default), so existing deployments are unaffected.
+        daily_profit_target=float(os.getenv("DAILY_PROFIT_TARGET", "0")),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         log_level=os.getenv("LOG_LEVEL", "INFO"),

@@ -134,6 +134,9 @@ def main() -> None:
     data_feed: DataFeed
     executor: Executor
     mt5_client: MT5Client | None = None
+    # Captured on connect so the risk/target sanity check below can express
+    # risk_per_trade in account currency. None when running on the mock feed.
+    account_balance: float | None = None
     status_store = BrokerStatusStore(Path("data/trades.db"))
     pending_store = PendingOrderStore(Path("data/trades.db"))
     dedup_store = SignalDedupStore(Path("data/trades.db"))
@@ -152,6 +155,7 @@ def main() -> None:
             info = mt5_client.account_info()
             log.info("MT5 connected: login=%s server=%s balance=%.2f %s",
                      info.login, info.server, info.balance, info.currency)
+            account_balance = info.balance
 
             # AutoTrading is a terminal-side toggle (the "Algo Trading" button /
             # [Experts] Enabled in config\common.ini). With it off every order is
@@ -270,17 +274,46 @@ def main() -> None:
             max_open_trades=settings.max_open_trades,
             max_daily_loss_pct=settings.max_daily_loss_pct,
             max_portfolio_heat_pct=settings.max_portfolio_heat_pct,
+            daily_profit_target=settings.daily_profit_target,
         ),
         portfolio_throttle=portfolio_throttle,
         propfirm_guard=propfirm_guard,
     )
     log.info(
-        "Risk: %.2f%%/trade · max %d open · daily-loss %.0f%% · portfolio-heat %.0f%%",
+        # %.2f, not %.0f — a 0.5% daily-loss cap rendered as "daily-loss 0%",
+        # which reads like the breaker is disabled when it is actually tight.
+        "Risk: %.2f%%/trade · max %d open · daily-loss %.2f%% · portfolio-heat %.2f%%",
         settings.risk_per_trade * 100,
         settings.max_open_trades,
         settings.max_daily_loss_pct * 100,
         settings.max_portfolio_heat_pct * 100,
     )
+    if settings.daily_profit_target > 0:
+        log.info(
+            "Daily profit target: %.2f — new entries stop for the UTC day once "
+            "realised P&L reaches it (open trades keep being managed).",
+            settings.daily_profit_target,
+        )
+        # A target does not create profit; it only stops trading once reached.
+        # If one full-size loss is worth several days of target, the target is
+        # decorative — the first loser erases a week. Surface that ratio at
+        # startup rather than leaving the operator to work it out from fills.
+        if account_balance is not None:
+            risk_amount = settings.risk_per_trade * account_balance
+            if risk_amount > settings.daily_profit_target:
+                log.warning(
+                    "Risk/target mismatch: one full-size loss is %.2f, which is "
+                    "%.1fx the %.2f daily target. Lower RISK_PER_TRADE (currently "
+                    "%.2f%%) or raise the target, or a single loser wipes out "
+                    "%.1f days of gains.",
+                    risk_amount,
+                    risk_amount / settings.daily_profit_target,
+                    settings.daily_profit_target,
+                    settings.risk_per_trade * 100,
+                    risk_amount / settings.daily_profit_target,
+                )
+    else:
+        log.info("Daily profit target: disabled (DAILY_PROFIT_TARGET=0)")
     journal = TradeJournal(Path("data/trades.db"))
     toggle_store = StrategyToggleStore(Path("data/trades.db"))
     toggle_store.initialize_defaults({

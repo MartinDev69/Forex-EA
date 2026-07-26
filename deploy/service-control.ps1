@@ -50,6 +50,31 @@ function Stop-BotTask {
 function Start-BotTask {
     Write-Host "Starting task $BotTask"
     Start-ScheduledTask -TaskName $BotTask
+
+    # Starting an *interactive* task from an interactive shell is unreliable:
+    # the spawned process lands in the calling session and Windows tears it down
+    # with CONTROL_C_EXIT (0xC000013A) when the calling shell exits. Observed
+    # 2026-07-26 -- every shell-started instance wrote exactly ONE heartbeat and
+    # died, while every watchdog-started one (SYSTEM, own session) ran for
+    # hundreds of ticks. Verify rather than reporting a false success: the
+    # heartbeat must still be advancing a few seconds later.
+    Start-Sleep -Seconds 12
+    $probe = Join-Path $RepoRoot "venv\Scripts\python.exe"
+    $db = Join-Path $RepoRoot "data\trades.db"
+    if ((Test-Path $probe) -and (Test-Path $db)) {
+        $first = & $probe -c "import sqlite3;print(sqlite3.connect(r'$db').execute(`"select tick_count from watchdog_heartbeat where process_name='bot'`").fetchone()[0])" 2>$null
+        Start-Sleep -Seconds 20
+        $second = & $probe -c "import sqlite3;print(sqlite3.connect(r'$db').execute(`"select tick_count from watchdog_heartbeat where process_name='bot'`").fetchone()[0])" 2>$null
+        if ($first -eq $second) {
+            Write-Warning "$BotTask is NOT ticking (heartbeat stuck at $first)."
+            Write-Warning "A shell-started interactive task often dies with the shell. The"
+            Write-Warning "watchdog will relaunch it correctly within WATCHDOG_COOLDOWN_S"
+            Write-Warning "(default 600s), or start it from an elevated non-interactive"
+            Write-Warning "context: schtasks /run /tn $BotTask"
+        } else {
+            Write-Host "$BotTask is ticking ($first -> $second)"
+        }
+    }
 }
 
 function Restart-BotTask {
