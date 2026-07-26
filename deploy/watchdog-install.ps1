@@ -1,7 +1,7 @@
 # Register the watchdog as a Windows scheduled task.
 #
-# Runs scripts/watchdog.py every 60s under SYSTEM, so it has rights to
-# Restart-Service and taskkill MT5 even if the operator user is logged out.
+# Runs scripts/watchdog.py every 60s under SYSTEM, so it has rights to restart
+# the ForexEA-Bot task and taskkill MT5 even if the operator user is logged out.
 #
 # Idempotent -- re-running replaces the existing task.
 
@@ -29,7 +29,7 @@ $logsDir = Join-Path $RepoRoot "logs"
 if (-not (Test-Path $logsDir)) { New-Item -ItemType Directory -Path $logsDir | Out-Null }
 
 # Wrap the python call in cmd /c so we can redirect stdout/stderr to a log
-# file. The log gets one line per tick -- easy to tail with service-control.
+# file. Tail it with: .\deploy\service-control.ps1 logs watchdog
 $logFile = Join-Path $logsDir "watchdog.log"
 $cmd = "/c `"$venvPython`" `"$watchdogScript`" >> `"$logFile`" 2>&1"
 

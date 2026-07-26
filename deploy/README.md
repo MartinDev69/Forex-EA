@@ -17,18 +17,16 @@ git clone <repo-url> C:\forex-ea
 cd C:\forex-ea
 .\deploy\install.ps1
 notepad .env                     # fill in MT5 credentials, symbols, Telegram, etc.
-.\deploy\service-install.ps1     # registers the ForexEAApi service (see caveat below)
+.\deploy\service-install.ps1     # registers the ForexEAApi service (API only)
+.\deploy\bot-task-install.ps1    # registers the ForexEA-Bot interactive task
 .\deploy\watchdog-install.ps1    # registers the ForexEA-Watchdog scheduled task
+.\deploy\Autologon.exe           # so a desktop session exists after reboot
 python deploy\healthcheck.py     # verify
 ```
 
 `install.ps1` creates the venv, installs requirements, creates `data/` and `logs/` directories, and copies `.env.example` to `.env` if it's missing.
 
-> **Caveat:** `service-install.ps1` predates the current run model and still registers a
-> `ForexEABot` NSSM service alongside `ForexEAApi`. **The bot must not run as a service**
-> — see "Durable runtime" below. After running it, stop and disable `ForexEABot`
-> (`Stop-Service ForexEABot; Set-Service ForexEABot -StartupType Disabled`) and set up
-> the interactive task instead. Only the `ForexEAApi` half of that script is still correct.
+The three registration scripts map one-to-one onto the three pieces in "Durable runtime" below. `service-install.ps1` installs **only** the API, and actively removes a legacy `ForexEABot` service if it finds one — the bot must never run as a service.
 
 ## Durable runtime
 
@@ -65,21 +63,10 @@ in that session. **If autologon breaks, the VPS sits at the lock screen and the 
 starts, while the API keeps serving happily** — so a reachable dashboard is not evidence
 the bot is alive.
 
-Registering the bot task from scratch:
-
-```powershell
-$action    = New-ScheduledTaskAction -Execute "C:\forex-ea\deploy\run-bot.cmd"
-$trigger   = New-ScheduledTaskTrigger -AtLogOn -User "Administrator"
-$principal = New-ScheduledTaskPrincipal -UserId "Administrator" -LogonType Interactive -RunLevel Highest
-$settings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew `
-                -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-                -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -AllowStartIfOnBatteries
-Register-ScheduledTask -TaskName "ForexEA-Bot" -Action $action -Trigger $trigger `
-    -Principal $principal -Settings $settings -Force
-```
-
-`-LogonType Interactive` is the load-bearing flag. Flipping the task to "Run whether user
-is logged on or not" puts it back in session 0 and MT5 will IPC-timeout forever.
+Registering the bot task from scratch is scripted — `.\deploy\bot-task-install.ps1`
+(idempotent; `-User` defaults to the current user). `-LogonType Interactive` is the
+load-bearing flag inside it. Flipping the task to "Run whether user is logged on or not"
+puts it back in session 0 and MT5 will IPC-timeout forever.
 
 ## Day-to-day
 
@@ -139,7 +126,9 @@ The dashboard's **MT5 broker** card lets you pick from a preset list (Exness, XM
 
 **Testing a connection** (`POST /broker/test`) opens a temporary MT5 session in the API process, fetches `account_info`, and disconnects. On macOS/Linux the `MetaTrader5` wheel doesn't exist, so the test reports `ok=false` — meaning you can *save* creds from a Mac but must *verify* on the Windows VPS.
 
-**Priority at startup:** `main.py` reads the DB-stored config first; if missing or undecryptable, it falls back to `MT5_LOGIN`/`MT5_PASSWORD`/`MT5_SERVER` from `.env`. The bot writes its own connection status back to `broker_status` every start, so the dashboard's status badge reflects reality without needing IPC.
+**Priority at startup:** the bot reads `MT5_LOGIN`/`MT5_PASSWORD`/`MT5_SERVER` from **`.env`, and only `.env`**. Earlier docs claimed the DB-stored config took precedence; it never did — `main.py` called `get_decrypted()` without its required `username` argument and a bare `except` hid the `TypeError`. The dead branch was removed on 2026-07-25; a stored dashboard config now logs a warning saying it is being ignored. Making it authoritative requires a designated bot-owner user, since the rows are per-operator. The bot writes its connection status back to `broker_status` every start, so the dashboard's status badge reflects reality without needing IPC.
+
+**Credentials are verified.** `MT5Client.connect()` calls `mt5.login()` and then asserts `account_info().login` matches the requested account. `mt5.initialize()` alone is not authentication — it succeeds by attaching to an already-running terminal and ignores the credentials passed to it, which is why `/broker/test` once returned `ok=true` for a junk login.
 
 > **Rotating `AUTH_SECRET` invalidates saved broker passwords** (as well as all JWT sessions). If you rotate, clear the broker config via the dashboard and re-enter.
 
@@ -290,6 +279,21 @@ taskkill /F /IM terminal64.exe
 .\deploy\service-control.ps1 restart bot
 ```
 If it recurs, check for a modal dialog blocking the terminal (login failure, "trial expired", update prompt) and confirm the watchdog task is running (`Get-ScheduledTask *watchdog*`) — its job is to recycle a wedged terminal automatically. If it's constant from a clean start, confirm `ForexEA-Bot`'s principal is still `Administrator` / `Interactive`; a task moved to session 0 IPC-timeouts forever.
+
+**Signals fire but no trades appear — `retcode=10027 AutoTrading disabled by client`** — the terminal's Algo Trading toggle is off, so MT5 rejects every order. Nothing else looks wrong: the heartbeat ticks, the broker shows connected, strategies evaluate normally. Startup now logs `AutoTrading enabled in terminal (trade_allowed=True)`, or warns loudly if not — check that line first.
+
+**Fix it in the GUI — the toggle is the only thing that sticks.** Focus the terminal window and press **Ctrl+E** (or click the Algo Trading toolbar button; it must be green):
+
+```powershell
+$p = Get-Process terminal64
+(New-Object -ComObject WScript.Shell).AppActivate($p.Id)
+Start-Sleep -Milliseconds 800
+(New-Object -ComObject WScript.Shell).SendKeys("^e")
+```
+
+Then `.\deploy\service-control.ps1 restart bot` and confirm the startup line says `trade_allowed=True`. This requires an interactive session — over RDP, check `(Get-Process terminal64).SessionId` matches your own.
+
+> Editing `[Experts] Enabled=1` in `config\common.ini` **does not work on its own.** A running terminal flushes its in-memory state over that file every few minutes, reverting it — verified here: the file was set to `1` with the terminal closed, the terminal started and reported `trade_allowed=True`, and it had rewritten `Enabled=0` within three minutes. Use the GUI toggle.
 
 **No bars / no signals on `Volatility 10 (1s) Index`** — the symbol isn't in Market Watch, or the `SYMBOLS` string doesn't match the terminal's label character-for-character. Right-click Market Watch → *Show All* and compare exactly.
 
