@@ -1,14 +1,22 @@
-# Register the bot + API as Windows services using NSSM.
+# Register the API as a Windows service using NSSM.
 #
 # Prerequisites:
 #   * NSSM installed and on PATH (https://nssm.cc -- chocolatey: `choco install nssm`).
 #   * .\deploy\install.ps1 has been run (venv exists).
 #
-# Services created:
-#   ForexEABot -- runs main.py in a loop.
+# Service created:
 #   ForexEAApi -- uvicorn serving src.api.server:app on port 8000.
 #
-# Both run as the current user by default. For production, use
+# The BOT is deliberately NOT installed here. MT5 only initialises reliably with
+# a real desktop session; from session 0 -- where every Windows service runs --
+# mt5.initialize() returns (-10005, 'IPC timeout') forever. The trading loop is
+# an interactive scheduled task instead: run .\deploy\bot-task-install.ps1.
+# See CLAUDE.md "Where it runs" and deploy/README.md "Durable runtime".
+#
+# This script actively removes a legacy ForexEABot service if it finds one --
+# leaving it installed risks a second main.py trading the same account.
+#
+# Runs as the current user by default. For production, use
 # `nssm set <svc> ObjectName <user> <pass>` to run under a dedicated service account.
 
 $ErrorActionPreference = "Stop"
@@ -59,19 +67,16 @@ function Install-Svc {
     Write-Host "$Name configured"
 }
 
-# --- Bot --------------------------------------------------------------------
-Install-Svc `
-    -Name "ForexEABot" `
-    -Exe $venvPython `
-    -AppArgs "main.py" `
-    -Cwd $RepoRoot `
-    -StdoutLog (Join-Path $logsDir "bot.stdout.log") `
-    -StderrLog (Join-Path $logsDir "bot.stderr.log")
-
-# Environment for the bot service -- tells main.py to use real MT5 and load the ML model if present.
-# PYTHONUTF8=1 forces Python's UTF-8 mode so log lines with non-ASCII chars don't
-# blow up when Windows' default code page is cp1252 (services have no console).
-& nssm set ForexEABot AppEnvironmentExtra "USE_MT5=1" "PYTHONUTF8=1" | Out-Null
+# --- Remove any legacy bot service ------------------------------------------
+# Older revisions of this script installed the bot as a session-0 NSSM service.
+# That can never work (IPC timeout) and would double-trade if it ever did, so
+# tear it down rather than leave it for someone to "helpfully" start.
+$legacyBot = Get-Service -Name "ForexEABot" -ErrorAction SilentlyContinue
+if ($legacyBot) {
+    Write-Warning "Removing legacy ForexEABot service -- the bot runs as the ForexEA-Bot scheduled task now."
+    & nssm stop ForexEABot confirm | Out-Null
+    & nssm remove ForexEABot confirm | Out-Null
+}
 
 # --- API -------------------------------------------------------------------
 $uvicornExe = Join-Path $RepoRoot "venv\Scripts\uvicorn.exe"
@@ -85,13 +90,15 @@ Install-Svc `
 & nssm set ForexEAApi AppEnvironmentExtra "PYTHONUTF8=1" | Out-Null
 
 # --- Start -----------------------------------------------------------------
-Write-Host "Starting services"
+Write-Host "Starting ForexEAApi"
 Start-Service ForexEAApi
-Start-Service ForexEABot
 
 Start-Sleep -Seconds 3
-Get-Service ForexEABot, ForexEAApi | Format-Table -AutoSize
+Get-Service ForexEAApi | Format-Table -AutoSize
 
 Write-Host ""
-Write-Host "Done. Verify with:"
+Write-Host "API installed. The bot is NOT a service -- register its task with:"
+Write-Host "  .\deploy\bot-task-install.ps1"
+Write-Host "  .\deploy\watchdog-install.ps1"
+Write-Host "Then verify with:"
 Write-Host "  python deploy\healthcheck.py"

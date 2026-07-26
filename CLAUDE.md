@@ -102,9 +102,14 @@ fix the file only ever received `main.py`'s startup banner.
 - `.env` (loaded by `main.py` via python-dotenv) holds all runtime config. It is
   **gitignored** and lives only on the VPS — a `git pull` never changes it. `.env.example`
   is the committed template.
-- Broker credentials have two sources: the **dashboard-stored** config in
-  `data/trades.db` (Fernet-encrypted with a key derived from `AUTH_SECRET`) takes
-  precedence over the `.env` `MT5_*` values. `main.py` logs which source it used.
+- Broker credentials come from **`.env` only** (`MT5_LOGIN` / `MT5_PASSWORD` /
+  `MT5_SERVER` / `MT5_PATH`). The dashboard can also store a Fernet-encrypted config in
+  `data/trades.db`, and this file used to claim that took precedence — it never did.
+  `main.py` called `get_decrypted()` without the required `username` argument and a bare
+  `except` swallowed the `TypeError`, so every start silently fell through to `.env`.
+  As of 2026-07-25 the dead branch is gone and `main.py` logs a warning if a dashboard
+  config exists while being ignored. Wiring it up needs a designated bot-owner user in
+  the API — per-user rows give an unattended process no correct row to pick.
 - Notable env keys: `USE_MT5` (1=real MT5, unset=mock feed), `SYMBOLS`, `TIMEFRAME`,
   `RISK_PER_TRADE`, `MAX_OPEN_TRADES`, `CORRELATION_ENABLED`, `AUTH_SECRET` (required
   for the API), `ML_MODEL_PATH` / `ML_THRESHOLD` (optional signal filter).

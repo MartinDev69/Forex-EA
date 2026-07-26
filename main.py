@@ -7,10 +7,12 @@ it connects to your configured MetaTrader 5 demo account instead.
 """
 from __future__ import annotations
 
+import logging
 import os
+import sqlite3
 from pathlib import Path
 
-from src.api.broker_config import BrokerConfig, BrokerConfigStore
+from src.api.broker_config import BrokerConfig
 from src.api.broker_status import BrokerStatusStore
 from src.api.pending_orders import PendingOrderStore
 from src.execution.signal_dedup import SignalDedupStore
@@ -85,19 +87,33 @@ def build_strategies(symbols: list[str]) -> dict:
 
 
 def _resolve_broker_config(settings) -> tuple[BrokerConfig, str]:
-    """Prefer the DB-stored broker config (editable from the dashboard) over
-    .env values. Returns (config, source) where source is 'dashboard' or 'env'.
+    """Resolve MT5 credentials. `.env` is the single source of truth.
+
+    This used to claim the dashboard-stored config took precedence, but it called
+    `store.get_decrypted()` with no argument while the method requires a
+    `username` — a TypeError swallowed by a bare `except`, so the dashboard path
+    silently never ran and every start fell through to .env anyway.
+
+    It is deliberately not wired up rather than repaired: dashboard configs are
+    keyed per operator username and there is no designated "bot user", so an
+    unattended process has no correct row to choose. The only row stored on this
+    VPS pointed at a retired Exness account — adopting it automatically would
+    have moved a live bot to the wrong broker. Wiring this up needs an explicit
+    bot-owner concept in the API first.
     """
-    auth_secret = os.getenv("AUTH_SECRET")
-    if auth_secret:
-        try:
-            store = BrokerConfigStore(Path("data/trades.db"), secret=auth_secret)
-            cfg = store.get_decrypted()
-            if cfg is not None:
-                return cfg, "dashboard"
-        except Exception:
-            # Fall through to env — if the DB config is broken, env is the safety net.
-            pass
+    log = logging.getLogger(__name__)
+    try:
+        with sqlite3.connect(Path("data/trades.db")) as conn:
+            stored = conn.execute("SELECT count(*) FROM broker_config").fetchone()[0]
+        if stored:
+            log.warning(
+                "%d dashboard broker config(s) stored but IGNORED — this bot trades the "
+                ".env account (MT5_LOGIN=%s, MT5_SERVER=%s). Clear them in the dashboard "
+                "to avoid confusion.",
+                stored, settings.mt5_login, settings.mt5_server,
+            )
+    except Exception:
+        log.debug("broker_config presence check failed", exc_info=True)
     return (
         BrokerConfig(
             broker="env",
