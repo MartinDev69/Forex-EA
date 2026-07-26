@@ -26,6 +26,17 @@ class RiskLimits:
     max_daily_loss_pct: float = 0.05
     max_portfolio_heat_pct: float = 0.06
     min_balance: float = 100.0
+    # Absolute profit in account currency at which the bot stops opening new
+    # trades for the rest of the UTC day. 0 disables it. The mirror image of
+    # max_daily_loss_pct: that one caps the downside, this one banks a good day
+    # instead of giving it back. Absolute rather than a percentage because
+    # operators think in "I want $15 a day", not "I want 0.155% a day".
+    #
+    # NOTE: a target does not create profit. It only stops trading once the
+    # day's realised P&L reaches it. Set risk_per_trade so a single loss is
+    # comparable to the target -- if one loser is worth six days of target,
+    # the target will rarely survive the week.
+    daily_profit_target: float = 0.0
 
 
 @dataclass
@@ -143,6 +154,14 @@ class RiskManager:
         daily_loss_pct = -self.state.daily_pnl / account_balance if account_balance > 0 else 0
         if daily_loss_pct >= lim.max_daily_loss_pct:
             return RiskDecision(False, f"daily loss circuit breaker ({daily_loss_pct:.2%})")
+
+        if lim.daily_profit_target > 0 and self.state.daily_pnl >= lim.daily_profit_target:
+            return RiskDecision(
+                False,
+                f"daily profit target reached "
+                f"({self.state.daily_pnl:.2f} >= {lim.daily_profit_target:.2f}) — "
+                f"no new trades until UTC midnight",
+            )
 
         if self.blackout_checker is not None:
             event = self.blackout_checker.current_blackout(symbol, now=self._clock())

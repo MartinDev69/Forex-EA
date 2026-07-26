@@ -62,6 +62,31 @@ $settings = New-ScheduledTaskSettingsSet `
 Register-ScheduledTask -TaskName $TaskName `
     -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 
+# New-ScheduledTaskSettingsSet silently drops RestartCount/RestartInterval --
+# Register-ScheduledTask writes the task with both fields empty, so the bot gets
+# no auto-restart at all and a crash leaves it down until the watchdog notices.
+# Verified on 2026-07-26: the registered XML had <RestartCount/> empty despite
+# being passed 999. Patch them into the XML and re-register.
+# The restart policy lives in the XML as a <RestartOnFailure> container with
+# <Interval> and <Count> children -- NOT the flat RestartCount/RestartInterval
+# that New-ScheduledTaskSettingsSet accepts. Writing the flat names back is
+# rejected with "The task XML contains an unexpected node".
+$xml = [xml](Export-ScheduledTask -TaskName $TaskName)
+$ns = $xml.DocumentElement.NamespaceURI
+$s = $xml.Task.Settings
+if (-not $s.SelectSingleNode("*[local-name()='RestartOnFailure']")) {
+    $rof = $xml.CreateElement("RestartOnFailure", $ns)
+    $iv = $xml.CreateElement("Interval", $ns); $iv.InnerText = "PT1M"
+    $ct = $xml.CreateElement("Count", $ns);    $ct.InnerText = "999"
+    # Schema order: Interval before Count, and RestartOnFailure last in Settings.
+    $rof.AppendChild($iv) | Out-Null
+    $rof.AppendChild($ct) | Out-Null
+    $s.AppendChild($rof) | Out-Null
+    Register-ScheduledTask -TaskName $TaskName -Xml $xml.OuterXml -User $User -Force | Out-Null
+    $chk = ([xml](Export-ScheduledTask -TaskName $TaskName)).Task.Settings.RestartOnFailure
+    Write-Host "Restart policy: Count=$($chk.Count) Interval=$($chk.Interval)"
+}
+
 Write-Host "Registered scheduled task $TaskName (user=$User, Interactive, AtLogOn)"
 Get-ScheduledTask -TaskName $TaskName |
     Select-Object TaskName, State,
