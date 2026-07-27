@@ -59,12 +59,13 @@ function Start-BotTask {
     # hundreds of ticks. Verify rather than reporting a false success: the
     # heartbeat must still be advancing a few seconds later.
     Start-Sleep -Seconds 12
-    $probe = Join-Path $RepoRoot "venv\Scripts\python.exe"
+    $py = Join-Path $RepoRoot "venv\Scripts\python.exe"
+    $probeScript = Join-Path $PSScriptRoot "heartbeat_probe.py"
     $db = Join-Path $RepoRoot "data\trades.db"
-    if ((Test-Path $probe) -and (Test-Path $db)) {
-        $first = & $probe -c "import sqlite3;print(sqlite3.connect(r'$db').execute(`"select tick_count from watchdog_heartbeat where process_name='bot'`").fetchone()[0])" 2>$null
+    if ((Test-Path $py) -and (Test-Path $probeScript) -and (Test-Path $db)) {
+        $first = (& $py $probeScript $db 2>$null) -split ' ' | Select-Object -First 1
         Start-Sleep -Seconds 20
-        $second = & $probe -c "import sqlite3;print(sqlite3.connect(r'$db').execute(`"select tick_count from watchdog_heartbeat where process_name='bot'`").fetchone()[0])" 2>$null
+        $second = (& $py $probeScript $db 2>$null) -split ' ' | Select-Object -First 1
         if ($first -eq $second) {
             Write-Warning "$BotTask is NOT ticking (heartbeat stuck at $first)."
             Write-Warning "A shell-started interactive task often dies with the shell. The"
